@@ -323,6 +323,11 @@ const (
 	// NarrowUnsupported: the provider lists only the prefix its root names
 	// (registry.Factory.WithPrefix).
 	NarrowUnsupported = "provider_lists_root"
+	// NarrowDeclined: the provider cannot name the prefix in its root with
+	// the same meaning (registry.Factory.WithPrefix declined: an Azure
+	// root's SAS beside a '?' in the prefix, or a prefix that would read
+	// as a SAS), and lists the root's.
+	NarrowDeclined = "provider_declined_prefix"
 )
 
 // NarrowPrefix is the listed prefix the includes imply inside scope (the

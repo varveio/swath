@@ -81,7 +81,9 @@ not `--sequential`).
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
 billed project), `--s3-fetch-owner`, the schema and the part size are frozen. A resume whose environment or
 `--s3-profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
-was. Restore the original environment, or start over.
+was. Restore the original environment, or start over. An Azure Blob run with an `--include` that narrows
+the listing, interrupted under 0.4.0, is refused too: 0.4.0 listed the whole source URL, later releases the
+narrowed prefix. Finish it with 0.4.0, or start over.
 
 **Refused resumes** and what they mean:
 

@@ -176,6 +176,7 @@ swath: deadline: --max-duration reached (it cannot be resumed: run it again with
 |---|---|---|
 | exit 2, `--NAME is fixed for the run` | the option cannot change on resume | give only the options `swath resume --help` lists |
 | exit 2, identity mismatch | the environment or `--s3-profile` resolves another region or endpoint than the run's | restore the original environment, or start over with `swath list --overwrite` |
+| exit 2, `this swath narrows the listing to the --include's literal prefix` | an Azure Blob run with a narrowing `--include` was started by 0.4.0, which listed the whole source | finish it with 0.4.0, or start over with `swath list --overwrite` |
 | exit 2, `nothing to resume` | no interrupted run in the directory | start a fresh `swath list` |
 | exit 2, `an interrupted run written by swath 0.3` | the directory holds a 0.3.2 run's state (`.swath-state.json` or `.swath/checkpoint.sqlite`) | `swath list ... --overwrite` replaces it |
 | exit 1, another swath process owns this output directory | a process still holds the output lock: the stopped run has not exited yet, or a wrapper was killed and swath under it lives on | wait for that process to exit (stop a wrapper's whole process group), then resume |

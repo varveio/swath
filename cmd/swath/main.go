@@ -1037,6 +1037,9 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		sum.Profiles = prof.account() // the files' final status, for --report
 	}
 	err, out := term.classify(sum, err)
+	if resumed && narrowing == filter.Narrowed && narrowedSince(err, pf, given, root) {
+		err = &narrowedResume{err}
+	}
 	if err == nil && sum.Outcome.Complete && sum.Output.RowsFetched+sum.Output.RowsRetained == 0 && pf.KeyPrefix != nil {
 		// A mistyped prefix lists nothing, which is no failure: it says so,
 		// as swath du --from-dataset does.
@@ -1215,6 +1218,7 @@ func measured(v *int64, unit float64, format string) string {
 // packages' own messages name no flag.
 func explain(err error) error {
 	var mm *journal.MismatchError
+	var nr *narrowedResume
 	var ve *journal.VersionError
 	var le *totals.LimitError
 	var ce interface { // objhttp.CredentialError
@@ -1243,6 +1247,8 @@ func explain(err error) error {
 		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)
 	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrNotDataset):
 		return fmt.Errorf("-o: %w", err)
+	case errors.As(err, &nr):
+		return fmt.Errorf("%w (this swath narrows the listing to the --include's literal prefix, which the swath that started the run did not: finish the run with that swath, or start over with swath list --overwrite)", err)
 	case errors.As(err, &mm):
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
 	case errors.As(err, &ve):
@@ -1260,6 +1266,30 @@ func explain(err error) error {
 		return &credentialRefusal{error: err, line: line}
 	}
 	return err
+}
+
+// narrowedResume is a resume the identity check refused because this
+// build narrows, by the run's includes, the source the run's build listed
+// as given (narrowedSince).
+type narrowedResume struct{ error }
+
+func (e *narrowedResume) Unwrap() error { return e.error }
+
+// narrowedSince reports whether err is a resume's source mismatch that
+// narrowing alone explains: the journal recorded the source as given (its
+// prefix is given's), and this build lists that same source (account,
+// container, bucket: the provider's WithPrefix parses and rebuilds it)
+// under the prefix the includes narrowed it to (listed's).
+func narrowedSince(err error, pf registry.Factory, given, listed string) bool {
+	var mm *journal.MismatchError
+	if !errors.As(err, &mm) || mm.Field != "source" || pf.KeyPrefix == nil || pf.WithPrefix == nil {
+		return false
+	}
+	stored, requested := fmt.Sprint(mm.Stored), fmt.Sprint(mm.Requested)
+	sp, serr := pf.KeyPrefix(stored)
+	gp, gerr := pf.KeyPrefix(given)
+	np, nerr := pf.KeyPrefix(listed)
+	return serr == nil && gerr == nil && nerr == nil && sp == gp && len(np) > len(sp) && pf.WithPrefix(stored, np) == requested
 }
 
 // deadlineAdvice says what follows a run --max-duration stopped: a resume,
@@ -1437,7 +1467,8 @@ func (s *size) Set(v string) error {
 // imply (filter.Spec.NarrowPrefix), and the narrowing's engagement: the
 // same rows, fewer requests. A resume replays the same command, so it
 // narrows the same way. Only a provider that can name another prefix
-// (registry.Factory.WithPrefix) narrows.
+// (registry.Factory.WithPrefix) narrows, and only where it can name the
+// prefix (filter.NarrowDeclined otherwise).
 func narrowRoot(root string, f *filter.Spec) (string, string) {
 	pf, err := registry.Lookup(root)
 	if err != nil {
@@ -1456,5 +1487,8 @@ func narrowRoot(root string, f *filter.Spec) (string, string) {
 	case pf.WithPrefix == nil:
 		return root, filter.NarrowUnsupported
 	}
-	return pf.WithPrefix(root, n), why
+	if narrowed := pf.WithPrefix(root, n); narrowed != root {
+		return narrowed, why
+	}
+	return root, filter.NarrowDeclined
 }
