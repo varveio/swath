@@ -1355,6 +1355,30 @@ within the limit of 1,024 with nothing refused. At 1,024 workers the limit binds
 count refuses 75,417 directories and opens 70,679 from an ancestor, every one of the 99,892 opened, and takes
 +19.7 % [+9.9, +28.6] (15 rounds, the earlier build first in each; 0.406 to 0.467 s).
 
+### Library limits on the local walker (2026-11-17)
+
+**Synthetic, local, shared host** (the box above, load average 1 to 6, Go 1.27.4, `deep` as above). Paired
+and interleaved, the median of the per-round differences with a 95 % bootstrap interval, `2e63740c` against
+the change (every descriptor counted, checkpoints in the last quarter of the kept limit, the library options
+off), `swath diag count`, default workers (64):
+
+| | rounds | before | after | change |
+|---|---:|---:|---:|---:|
+| `deep` | 120 | 0.115 s | 0.113 s | −1.7 % [−4.9, +1.7] |
+| `deep`, `--metadata names` | 120 | 0.073 s | 0.072 s | +0.0 % [−4.2, +2.8] |
+| `deep`, hard descriptor limit 256 | 60 | 0.122 s | 0.124 s | +1.7 % [−0.9, +4.4] |
+
+A first 40-round run of the first row read +8.8 % [+1.3, +13.8] and did not repeat (+2.7 % [−4.2, +5.6] just
+after, then the row above) while the box's load rose. On `deep` a count keeps at most 203 descriptors and
+refuses none. At the limit of 256 (64 kept, 48 of them ordinary now) it refuses 13,617 directories and opens
+12,803 from an ancestor, at most 6 names down (the tree is 8 deep: no checkpoint), with at most 111
+descriptors open (`peak_open`, within the 64 plus two per worker). Ordinary directories now stop at 768 of
+the 1,024, so the 512-worker count of `realistic` above (885 kept) would refuse some. On a deep narrow tree
+past the limit (`TestRedescentBounded`: a 129-level spine with an empty sibling at each level, 258
+directories, a kept limit of 64, one worker reaching the deepest spine directory first) the checkpoints keep
+every redescent within 8 names: 820 names opened in all, 20 checkpoints, at most 60 descriptors open; with
+the checkpoint case removed the same walk opens 6,900 names.
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake
