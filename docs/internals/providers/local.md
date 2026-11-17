@@ -12,14 +12,15 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
-  `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir`, re-checking that an opened child directory is the one
-  that was listed. Its stat tier differs by platform: on macOS one `fstatat` per entry relative to the open
-  directory (every stat column and `created_at`; `os.DirEntry.Info` is an `lstat` of the full path, which
-  resolves the path again per entry), on Linux `os.DirEntry.Info` (that `lstat`, or the one `ReadDir` already
-  made for an entry the filesystem did not type, `DT_UNKNOWN`), and `fstatat` relative to the open directory
-  only where the full path is past PATH_MAX; both read a link's target with `readlinkat` relative to it. On
-  Windows the directory enumeration's own size, times and attributes (no call per entry; no `uid`, `gid`,
-  `nlink`, `inode`, `dev` or `allocated_bytes`).
+  `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir` on the directory opened as the getdents engine opens it
+  (descriptor-relative opens, below). On Linux and macOS its stat tier is one `fstatat` per entry relative
+  to the open directory (every stat column, and `created_at` on macOS; `os.DirEntry.Info` would be an `lstat`
+  of the full path, which resolves the path again per entry), and it reads a link's target with `readlinkat`
+  relative to it; `ReadDir` itself types an entry the filesystem leaves untyped (`DT_UNKNOWN`) with an
+  `fstatat` relative to the directory too. On Windows it opens a directory by its path, re-checking that it is
+  the one that was listed (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and takes the directory enumeration's
+  own size, times and attributes (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or
+  `allocated_bytes`).
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:
@@ -70,28 +71,41 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   symlinks), `statx` (full mask, adds `created_at`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
-- **Paths past PATH_MAX.** A directory is opened by its full path, one call; children are statted and their
-  links read relative to it. Only when the kernel refuses a path by its length (`ENAMETOOLONG`: 4,096 bytes on
-  Linux, 1,024 on macOS) does `openLong` open it again: the root by its path, as the full path's resolution
-  reaches it (a symbolic link root followed), then each name of the range's key prefix relative to the one
-  before with `openat(O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)`, intermediates `O_PATH` on Linux (no read permission
-  needed; read-only on macOS) and closed as the next opens, the last read-only and kept for the listing. A
-  path that fits costs nothing more. The root is opened again for each such directory rather than held for
-  the walk: the full-path opens resolve it afresh too, so both see the same root, and the provider holds no
-  descriptor beyond a listing; a worker holds at most two descriptors while it descends. The cost is one
-  `openat` per level for each directory past the limit. Ranges stay logical paths, so a queued range pins no
-  descriptor. The descent follows no symbolic link anywhere on the path, where the full-path open checks only
-  its last name (`O_NOFOLLOW`; the portable engine's `Lstat` and `SameFile`): a component replaced by a link
-  since its parent was listed fails as `symlink`; a directory replaced by another directory is a race of any
-  live walk and lists what is there. With `--one-file-system` each component opened is `fstat`ed and the
-  first on another device than the root's stops the descent: the directory is not walked and that is no
-  error, as at a mount point. A failure is counted and named as a failed open (`open_errors`, unreadable);
-  a single name past the filesystem's limit fails the same way (`name_too_long`), never retried. The report's
-  `long_paths` counts `attempts`, `opened`, `failed` by reason (`not_found`, `permission`, `not_directory`,
-  `symlink`, `name_too_long`, `other_device`, `other`), `max_depth` (names below the root) and `max_path_bytes`.
-  A root past the limit, and a single-file root there, are resolved name by name (`internal/longpath`: `New`,
-  output exclusion and the output's checks against the root; a file root statted and its link read relative
-  to its directory); such a root's filesystem space is not measured (`statfs` takes the path). Windows has no
+- **Descriptor-relative opens** (Linux, macOS; `dirfd_unix.go`). The root is opened by its path, as the run
+  resolved it (a symbolic link root followed). Every directory below it is opened with
+  `openat(parent, name, O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)` relative to its parent's open descriptor, never by
+  its path, so a directory replaced by a symbolic link after its parent was listed is not followed and the
+  walk does not leave the root through one. A directory moved within the tree after its parent was opened is
+  still reached through the parent's descriptor and lists as it is; a link in place of the directory is refused
+  (`unsafe_dirs`, unreadable), any other non-directory or nothing there fails as an open (`open_errors`).
+  Descriptors are reference-counted (`dirFD`): the directory's own listing, its chunks and the queued range of
+  each subdirectory hold one each, so a directory stays open until its last subdirectory is opened relative to
+  it, and the last reference closes it. A range releases its reference when its `Expand` returns, however it
+  ends, or when the order stage disposes it unexpanded (a cancelled or failed run, `source.Disposer`).
+  **Limit:** the walk keeps at most a quarter of the soft descriptor limit, at most 1,024 (`maxKept`), of
+  directory descriptors (`keptFDs`), the root always. Beyond them a worker holds at most two while it opens a
+  directory and one while it reads it. A directory opened past the limit is read through its descriptor, whole
+  by the worker that opened it (getdents: no chunks, so a large one is statted by that worker alone, and a
+  count reads its slabs one after another), so its descriptor closes when that worker is done and open
+  descriptors stay within the limit plus two per worker. It is not kept: its subdirectories are opened from
+  the nearest kept ancestor, one `openat` per name below it, intermediates `O_PATH` on Linux (no read
+  permission needed; read-only on macOS) each closed as the next opens, checking for a stop between names; a name replaced by a link on that way is
+  refused as above, its error sample naming the level. The cost is one `openat` per directory, as a path open
+  was, plus, past the limit, one per name between the ancestor and the directory. With `--one-file-system`
+  each directory opened below the root, and each intermediate on the way from an ancestor, is `fstat`ed
+  against the root's device; the first on another device is not walked and that is no error, as at a mount
+  point (`other_device_dirs`). The report's `dir_opens` counts `opened`,
+  `redescents` (opens from an ancestor), `refused` (directories not kept), `failed` by reason (`not_found`,
+  `permission`, `not_directory`, `symlink`, `name_too_long`, `other_device`, `other`), `peak_kept` and
+  `max_kept`.
+- **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on
+  macOS) is opened as any other, one name below its parent, so a tree of any depth lists; its children are
+  statted and their links read relative to it. A single name past the filesystem's limit fails as an open
+  (`name_too_long`). The report's `long_paths` counts the directories whose path passes the limit: `attempts`,
+  `opened`, `failed` by reason (as `dir_opens`), `max_depth` (names below the root) and `max_path_bytes`. A root
+  past the limit, and a single-file root there, are resolved name by name (`internal/longpath`: `New`, output
+  exclusion and the output's checks against the root; a file root statted and its link read relative to its
+  directory); such a root's filesystem space is not measured (`statfs` takes the path). Windows has no
   fallback: Go gives a long path its extended-length form there.
 - **Key cap: 32 KiB** (`maxKeyBytes`). A tree past PATH_MAX would otherwise have keys of any length; `emit`
   leaves out an entry whose key passes 32,768 bytes and counts it (`key_too_long`, unreadable, named in the
@@ -100,8 +114,8 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   ([Parquet output](../parquet-output.md#writer-choices)), which keeps a page of longer keys within that price. The
   manifest allowance (`dataset.ManifestLimits`) prices both bounds of every part at 4,096 bytes too, in
   aggregate: only many thousands of parts all bounded by keys past it would exceed it.
-- Symlinks are never followed (`O_NOFOLLOW`). Names are bytes: one that is not valid UTF-8 is listed with
-  its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
+- Symlinks below the root are never followed (`O_NOFOLLOW`, `AT_SYMLINK_NOFOLLOW`). Names are bytes: one that
+  is not valid UTF-8 is listed with its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on Windows), and `emit` keeps a `dir` row whose `dev` differs but hands on no child range for it
   (counter `other_device_dirs`); `Report` adds `one_file_system` to the coverage's filters, so a dataset says it
