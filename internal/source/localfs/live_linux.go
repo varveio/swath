@@ -6,6 +6,7 @@ package localfs
 import (
 	"context"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -15,11 +16,12 @@ import (
 var levelGetdents = unix.Getdents
 
 // readLevel calls add with each name the directory fd holds and whether it
-// is a directory, as getdents types it, until add fails. An entry the
-// filesystem leaves untyped is statted relative to fd without following a
-// link; one whose stat fails is no directory here, and its page gives it
-// an unknown kind (levelEntries), so one entry never fails the level.
-func readLevel(ctx context.Context, _ *os.File, fd int, add func(name string, dir bool) error) error {
+// is a directory, as getdents types it. The name is a view of the read
+// buffer, valid only during the call. An entry the filesystem leaves
+// untyped is statted relative to fd without following a link; one whose
+// stat fails is no directory here, and its page gives it an unknown kind
+// (levelEntries), so one entry never fails the level.
+func readLevel(ctx context.Context, _ *os.File, fd int, add func(name string, dir bool)) error {
 	buf := make([]byte, direntBuffer)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -36,17 +38,11 @@ func readLevel(ctx context.Context, _ *os.File, fd int, add func(name string, di
 			return nil
 		}
 
-		var addErr error
 		err = parseDirents(buf[:n], func(_ uint64, typ uint8, name []byte) {
-			if addErr == nil {
-				addErr = add(string(name), typ == unix.DT_DIR || typ == unix.DT_UNKNOWN && isDirAt(fd, name))
-			}
+			add(unsafe.String(unsafe.SliceData(name), len(name)), typ == unix.DT_DIR || typ == unix.DT_UNKNOWN && isDirAt(fd, name))
 		})
 		if err != nil {
 			return readError(err)
-		}
-		if addErr != nil {
-			return addErr
 		}
 	}
 }

@@ -154,9 +154,12 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   other errors `ErrUnavailable`, each message naming the level and the caller's prefix, never a name read. It
   reads the directory whole (Linux: `getdents64`, an untyped entry typed by `fstatat` relative to it and, when
   that stat fails, no directory; macOS: `os.File.ReadDir`, whose own `fstatat` of an untyped entry fails the
-  read when it fails, which APFS and HFS+, typing every entry, never ask), holds the names that sort after the
-  token's key, priced as `MaxHeldBytes` prices a count's (64 bytes plus the name; past the bound
-  `ErrTooWide`), sorts them with `/` on directories, keeps a name the read returned twice once, and stats only
+  read when it fails, which APFS and HFS+, typing every entry, never ask), and keeps only the names, with `/`
+  on directories, that may still be on the page: of those that sort after the token's key, at most twice the
+  page's `Limit`, cut back to the first `Limit`+1 when it passes that, a name sorting after the last of them
+  passed over from then on (`levelNames`), so that a page's memory follows its `Limit` and not the directory's
+  size (`TestLivePageBounded`: a page of 100 of 200,000 files allocates fewer than 10,000 times, where holding
+  and sorting the directory whole allocated once per name). A name the read returned twice is kept once. It stats only
   the page's non-directory entries relative to the directory, checking for a stop of the context before the
   first: one gone since is left out, one that is a directory now (its key sorts elsewhere) too, one whose stat
   fails is `unknown`. A child directory is a common prefix, not statted. The directory's own entry, from
@@ -164,7 +167,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   The store's token is the last key the page read, so the next page is the names after it: nothing is held
   between pages, and a directory changing between them repeats and skips nothing that stayed
   (`local/local_test.go`: the root's path replaced by a link, a link at and on the way to a prefix, a
-  directory replaced between pages, entries removed and added between pages, a directory past the bound,
+  directory replaced between pages, entries removed and added between pages,
   descriptors after every call, concurrent pages; `TestLiveOtherDevice` through the `lookupFstat` seam;
   `TestLiveUntyped` and `TestLiveCanceledAfterRead` through the `levelGetdents` seam).
 - **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on

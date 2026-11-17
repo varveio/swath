@@ -21,7 +21,7 @@ func TestUnsupported(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	if _, err := local.Open(root, local.Options{}); !errors.Is(err, listing.ErrUnsupported) {
+	if _, err := local.Open(root); !errors.Is(err, listing.ErrUnsupported) {
 		t.Errorf("%v, want ErrUnsupported", err)
 	}
 }

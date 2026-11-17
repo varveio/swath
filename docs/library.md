@@ -298,7 +298,7 @@ if err != nil {
 	log.Fatal(err)
 }
 defer root.Close() // after the source's Close
-src, err := local.Open(root, local.Options{})
+src, err := local.Open(root)
 if err != nil {
 	log.Fatal(err)
 }
@@ -341,11 +341,9 @@ library guarantees:
 - **Pages continue by key.** A token resumes the level after the last key it read, so a directory that changes
   between pages repeats no key, keeps byte order across pages and skips no name that stayed; a name added
   after the last key read comes in a later page, one removed does not. It is bound to the directory's device
-  and inode and to the prefix. A page reads its whole directory and sorts it to choose its entries:
-  `Options.MaxHeldBytes` (64 MiB by default, a name counting its length plus 64 bytes) bounds the names it
-  holds, and a directory past it fails the page with `local.ErrTooWide`, which also matches
-  `listing.ErrUnsupported`. Each page reads the directory again; the request's `MaxDuration` bounds that work,
-  its `MaxScanned` does not yet.
+  and inode and to the prefix. A page reads its whole directory, again for each page, but holds only the names
+  that may still be on it, so its memory follows the request's `Limit`, not the directory's size; its time
+  follows the directory's size. The request's `MaxDuration` bounds the reading, its `MaxScanned` does not yet.
 - **Failures in their class.** A prefix that is not there is `listing.ErrNotFound`; one naming something other
   than a directory, a symbolic link included, `listing.ErrNotDirectory`; one with a symbolic link on the way,
   which is not followed, `listing.ErrUnsupported`: not reached, never absent. A refusal is `listing.ErrAuth`, a

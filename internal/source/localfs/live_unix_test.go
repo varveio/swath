@@ -41,7 +41,7 @@ func TestLiveOtherDevice(t *testing.T) {
 		}
 		return err
 	}
-	st, err := OpenLive(holdDir(t, root), 1<<20)
+	st, err := OpenLive(holdDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestLiveLevelSelf(t *testing.T) {
 	root := t.TempDir()
 	mk(t, root, "d/a", false)
 	mk(t, root, "d/b/c", false)
-	st, err := OpenLive(holdDir(t, root), 1<<20)
+	st, err := OpenLive(holdDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestLiveLevelSelf(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if _, err := OpenLive(f, 1<<20); !errors.Is(err, listing.ErrNotDirectory) {
+	if _, err := OpenLive(f); !errors.Is(err, listing.ErrNotDirectory) {
 		t.Errorf("a file root: %v", err)
 	}
 }
