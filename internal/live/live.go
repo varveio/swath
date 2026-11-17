@@ -26,9 +26,11 @@ type Store interface {
 	Location() string
 	// List makes one delimiter listing: the keys that begin with prefix,
 	// those with a "/" after it rolled up into one common prefix each, at
-	// most max entries, continuing after the store's own token ("" starts
-	// the level). It checks what the store answered no further than its
-	// client does: the caller checks the level.
+	// most max children, continuing after the store's own token ("" starts
+	// the level). The entry at exactly prefix may come beside them, or
+	// among them where the store's own page size counts it. It checks what
+	// the store answered no further than its client does: the caller
+	// checks the level.
 	List(ctx context.Context, prefix []byte, token string, max int) (*Level, error)
 	// Lookup says what is at exactly key: present, absent, or unknown with
 	// the class of the failure that prevented an answer as its Reason. It

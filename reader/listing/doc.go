@@ -50,6 +50,17 @@
 // unsigned byte order of the keys (bytes.Compare), unless a Page names
 // another.
 //
+// A folder's prefix ends in "/". On an object store a prefix is taken
+// literally, so a page or walk of "a" holds "ab" and "a.txt" as well as
+// what is under "a/"; a local source, and an inventory of one, take "" or
+// a directory's key, and refuse a prefix without its "/". On an object
+// store a prefix exists if and only if some key begins with it: one with
+// none pages and walks empty, never ErrNotFound, and a Lookup of "a/" says
+// whether an object has exactly that key, not whether anything is under
+// it. A local directory is an entry of its own, present when empty; a
+// missing one is ErrNotFound, from an inventory only where it proves the
+// absence.
+//
 // # Evidence
 //
 // Every answer carries an Evidence: which backend answered, over what

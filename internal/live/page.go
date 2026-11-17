@@ -23,11 +23,15 @@ import (
 // and no request per child. The prefix is any key prefix, taken
 // literally: "a" holds both "ab" and the prefix "a/". A child prefix is a
 // KindPrefix entry; the object at exactly the prefix comes back once, as
-// the Self of the page that reads it, never as a child.
+// the Self of the page that reads it, never as a child. req.Limit bounds
+// the children; Self comes beside them. A store's listing of req.Limit
+// entries may count Self among them, so the page that holds Self may hold
+// one child fewer: a token bound to its request's page size cannot be
+// continued with another.
 //
 // Page checks every page before returning it, as package listing states:
 // a key outside the prefix, below one of its children, holding a NUL, not
-// UTF-8, or not after the key before it, across pages too, more entries
+// UTF-8, or not after the key before it, across pages too, more children
 // than asked for, and a truncated answer whose continuation token is
 // missing or repeats the one sent are ErrInvalidPage.
 //
@@ -95,16 +99,12 @@ func checkPage(req listing.PageRequest) error {
 
 // level checks one answer of the store against the level of prefix, after
 // the level's last key so far (nil before any), and makes it a page of at
-// most limit entries: the objects and common prefixes merged in byte
-// order, and the object at exactly prefix as Self. It returns the page and
-// the level's last key after it.
+// most limit children: the objects and common prefixes merged in byte
+// order, and the object at exactly prefix as Self, which a store may add
+// beyond them. It returns the page and the level's last key after it.
 func level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, error) {
 	page := listing.Page{Order: listing.OrderBytes}
 	objects, prefixes := lvl.Objects, lvl.Prefixes
-	if n := len(objects) + len(prefixes); n > limit {
-		return listing.Page{}, nil, badPage("%d entries, %d asked for", n, limit)
-	}
-
 	page.Entries = make([]listing.Entry, 0, len(objects)+len(prefixes))
 	for len(objects) > 0 || len(prefixes) > 0 {
 		var e listing.Entry
@@ -122,6 +122,9 @@ func level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, er
 			continue
 		}
 		page.Entries = append(page.Entries, e)
+	}
+	if len(page.Entries) > limit {
+		return listing.Page{}, nil, badPage("%d children, %d asked for", len(page.Entries), limit)
 	}
 	return page, last, nil
 }

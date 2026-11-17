@@ -39,7 +39,11 @@ type PageRequest struct {
 	// may change from page to page. Tokens are not signed; a caller that
 	// hands them to others signs its own.
 	Token string
-	// Limit is the most entries the page returns. It must be positive.
+	// Limit is the most children the page returns. It must be positive.
+	// The page's Self, the entry at exactly Prefix, is not a child and
+	// does not count. A page may hold fewer: a store's own answer may be
+	// short, and on an object store the page that holds Self may hold one
+	// child fewer, since the store's page size counts it.
 	Limit int
 	// MaxDuration bounds the time of a page. Reaching it stops the page
 	// with StopTimeBudget: it holds no entry, and its Next is the

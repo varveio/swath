@@ -80,7 +80,10 @@ A page is one delimiter listing of one level, by `/` only: one request, the clie
 request per child. Its entries come in byte order, so a prefix `a/` sorts after an object `a.txt`, and every page
 continues after the last key of the one before. A child prefix is an entry of kind `prefix`; it says nothing about an
 object whose key is exactly that prefix. Such an object comes back once, as the `Self` of the page that reads it,
-never as a child. A prefix is taken literally: `a` holds `a.txt`, `a0` and the prefix `a/`.
+never as a child. A prefix is taken literally: `a` holds `a.txt`, `a0` and the prefix `a/`, so ask for `a/` to list
+the folder `a`. A prefix exists only through the keys that begin with it: one with none pages empty, never
+`listing.ErrNotFound`. `Limit` bounds the children; `Self` comes beside them, though the page that holds it may hold
+one child fewer, since the store's own page size counts it.
 
 A page may be short, or empty, and still carry a token: only an empty `Next` ends the level. The token is opaque and
 bound to the bucket, the endpoint and region it is read through, and the prefix; given with another, it is refused
@@ -331,7 +334,7 @@ library guarantees:
   (`logs/2026/`); any other entry has its kind (`file`, `symlink`, `other` for a FIFO, socket or device, or
   `unknown` when its stat fails) and what `lstat` gives of it: size, space on disk, modification time,
   device, inode and link count. The prefix's own directory comes back as the `Self` of the level's first page,
-  and counts toward its `Limit`. A directory on another device is listed as a prefix like any other, and a page
+  beside its children: `Limit` bounds the children only. A directory on another device is listed as a prefix like any other, and a page
   of it fails with `listing.ErrOtherDevice`.
 - **Pages continue by key.** A token resumes the level after the last key it read, so a directory that changes
   between pages repeats no key, keeps byte order across pages and skips no name that stayed; a name added
