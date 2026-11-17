@@ -22,12 +22,15 @@ import (
 // swath.Source.
 type Source struct {
 	store Store
+	// utf8Keys: the store's keys are UTF-8, unless it is a ByteKeys.
+	utf8Keys bool
 }
 
 // NewSource is the Source over an opened store, which it owns from then
 // on: Close closes it.
 func NewSource(s Store) *Source {
-	return &Source{store: s}
+	_, raw := s.(ByteKeys)
+	return &Source{store: s, utf8Keys: !raw}
 }
 
 // Lookup says what is at exactly key: present with its entry, absent, or
@@ -40,7 +43,7 @@ func NewSource(s Store) *Source {
 // a key absent. Lookup returns an error only for a key of the
 // wrong form (ErrInvalidRequest) or once ctx has ended.
 func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
-	if err := checkKey(key); err != nil {
+	if err := s.checkKey(key); err != nil {
 		return listing.LookupResult{}, err
 	}
 
@@ -85,16 +88,23 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", listing.ErrInvalidRequest, fmt.Sprintf(format, args...))
 }
 
-// checkKey refuses a key of the wrong form: empty, holding a NUL, or not
-// UTF-8, which no object store's key is.
-func checkKey(key []byte) error {
-	switch {
-	case len(key) == 0:
+// checkKey refuses a key of the wrong form: empty, or as checkName
+// refuses it.
+func (s *Source) checkKey(key []byte) error {
+	if len(key) == 0 {
 		return invalid("the key is empty")
-	case bytes.IndexByte(key, 0) >= 0:
-		return invalid("the key holds a NUL byte")
-	case !utf8.Valid(key):
-		return invalid("the key is not UTF-8")
+	}
+	return s.checkName("key", key)
+}
+
+// checkName refuses a key or prefix, named what, that holds a NUL byte,
+// or that is not UTF-8 when the store's keys are.
+func (s *Source) checkName(what string, b []byte) error {
+	switch {
+	case bytes.IndexByte(b, 0) >= 0:
+		return invalid("the %s holds a NUL byte", what)
+	case s.utf8Keys && !utf8.Valid(b):
+		return invalid("the %s is not UTF-8", what)
 	}
 	return nil
 }

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"slices"
 	"time"
-	"unicode/utf8"
 
 	"github.com/varveio/swath/reader/listing"
 )
@@ -55,7 +54,7 @@ var (
 // or a lookup's failure is Summarize's error; when ctx ends, Summarize
 // returns its error.
 func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
-	counted, err := checkSummary(targets, opts)
+	counted, err := s.checkSummary(targets, opts)
 	if err != nil {
 		return nil, listing.Evidence{}, err
 	}
@@ -81,23 +80,18 @@ func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts l
 
 // checkSummary refuses targets and options of the wrong form, before any
 // request, and returns the kinds counted: counted[k] for each.
-func checkSummary(targets []listing.Target, opts listing.SummaryOptions) ([]bool, error) {
+func (s *Source) checkSummary(targets []listing.Target, opts listing.SummaryOptions) ([]bool, error) {
 	b := opts.Budget
 	if b.MaxEntries < 0 || b.MaxDuration < 0 {
 		return nil, invalid("a negative bound")
 	}
 	for _, t := range targets {
-		if !t.Subtree {
-			if err := checkKey(t.Key); err != nil {
-				return nil, err
-			}
-			continue
+		check := s.checkKey
+		if t.Subtree {
+			check = func(key []byte) error { return s.checkName("target's key", key) }
 		}
-		switch {
-		case bytes.IndexByte(t.Key, 0) >= 0:
-			return nil, invalid("a target's key holds a NUL byte")
-		case !utf8.Valid(t.Key):
-			return nil, invalid("a target's key is not UTF-8")
+		if err := check(t.Key); err != nil {
+			return nil, err
 		}
 	}
 

@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
@@ -62,7 +61,7 @@ var (
 // Walk returns its error, even when emit has accepted every batch. A panic
 // in the walk's workers is returned as an error of no class.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
-	if err := checkWalk(req, emit); err != nil {
+	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
 	}
 	walker, ok := s.store.(Walker)
@@ -109,15 +108,14 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 }
 
 // checkWalk refuses a request of the wrong form, before any request.
-func checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) error {
+func (s *Source) checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) error {
+	if err := s.checkName("prefix", req.Prefix); err != nil {
+		return err
+	}
 	b := req.Budget
 	switch {
 	case emit == nil:
 		return invalid("no emit callback")
-	case bytes.IndexByte(req.Prefix, 0) >= 0:
-		return invalid("the prefix holds a NUL byte")
-	case !utf8.Valid(req.Prefix):
-		return invalid("the prefix is not UTF-8")
 	case req.Workers < 0:
 		return invalid("a negative number of workers")
 	case b.MaxEntries < 0 || b.MaxDuration < 0:

@@ -40,9 +40,21 @@ type Store interface {
 	Close() error
 }
 
+// ByteKeys is a Store whose keys are any bytes but NUL, as a local
+// directory's names are. A Store without it has UTF-8 keys, as every
+// object store's are: the Source refuses a key or prefix that is not
+// UTF-8 before any request, and a listed key that is not as
+// listing.ErrInvalidPage.
+type ByteKeys interface {
+	ByteKeys()
+}
+
 // Level is one answer of a delimiter listing, as the store gave it.
 type Level struct {
-	// Objects are the objects, KindObject entries, in the store's order.
+	// Objects are the entries other than common prefixes, in the store's
+	// order: an object store's objects (KindObject); a local store's
+	// files, symbolic links and other entries, and its directories as
+	// KindDir entries with their metadata, each key a name and a "/".
 	Objects []listing.Entry
 	// Prefixes are the common prefixes, in the store's order.
 	Prefixes [][]byte

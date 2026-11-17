@@ -44,7 +44,7 @@ import (
 // holds no entry, its Next is req.Token, which asks again, and its
 // Evidence.Stop is StopTimeBudget.
 func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
-	if err := checkPage(req); err != nil {
+	if err := s.checkPage(req); err != nil {
 		return listing.Page{}, err
 	}
 	bind := binding(s.store.Location(), req.Prefix)
@@ -65,7 +65,7 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 		return listing.Page{}, failure(ctx, err)
 	}
 
-	page, last, err := level(req.Prefix, cur.last, lvl, req.Limit)
+	page, last, err := s.level(req.Prefix, cur.last, lvl, req.Limit)
 	if err != nil {
 		return listing.Page{}, objfile.RedactError(err) // it quotes the store's keys
 	}
@@ -81,12 +81,11 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 
 // checkPage refuses a request of the wrong form, or one asking for child
 // totals, before any request.
-func checkPage(req listing.PageRequest) error {
+func (s *Source) checkPage(req listing.PageRequest) error {
+	if err := s.checkName("prefix", req.Prefix); err != nil {
+		return err
+	}
 	switch {
-	case bytes.IndexByte(req.Prefix, 0) >= 0:
-		return invalid("the prefix holds a NUL byte")
-	case !utf8.Valid(req.Prefix):
-		return invalid("the prefix is not UTF-8")
 	case req.Limit < 1:
 		return invalid("a page's Limit is positive")
 	case req.MaxDuration < 0:
@@ -99,10 +98,10 @@ func checkPage(req listing.PageRequest) error {
 
 // level checks one answer of the store against the level of prefix, after
 // the level's last key so far (nil before any), and makes it a page of at
-// most limit children: the objects and common prefixes merged in byte
-// order, and the object at exactly prefix as Self, which a store may add
+// most limit children: the entries and common prefixes merged in byte
+// order, and the entry at exactly prefix as Self, which a store may add
 // beyond them. It returns the page and the level's last key after it.
-func level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, error) {
+func (s *Source) level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, error) {
 	page := listing.Page{Order: listing.OrderBytes}
 	objects, prefixes := lvl.Objects, lvl.Prefixes
 	page.Entries = make([]listing.Entry, 0, len(objects)+len(prefixes))
@@ -113,7 +112,7 @@ func level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, er
 		} else {
 			e, prefixes = listing.Entry{Key: prefixes[0], Kind: listing.KindPrefix}, prefixes[1:]
 		}
-		if err := checkEntry(prefix, last, e); err != nil {
+		if err := s.checkEntry(prefix, last, e); err != nil {
 			return listing.Page{}, nil, err
 		}
 		last = e.Key
@@ -130,24 +129,28 @@ func level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, er
 }
 
 // checkEntry refuses an entry that is not one child of prefix, or the
-// object at exactly it, sorting after last (nil before any key).
-func checkEntry(prefix, last []byte, e listing.Entry) error {
+// entry at exactly it, sorting after last (nil before any key). A child
+// directory or common prefix is one name and a "/", any other child one
+// name.
+func (s *Source) checkEntry(prefix, last []byte, e listing.Entry) error {
 	k := e.Key
 	if !bytes.HasPrefix(k, prefix) {
 		return badPage("a key outside the prefix: %q", k)
 	}
 	rest := k[len(prefix):]
+	dir := e.Kind == listing.KindPrefix || e.Kind == listing.KindDir
+	self := len(rest) == 0 && e.Kind != listing.KindPrefix
 	switch {
 	case bytes.IndexByte(k, 0) >= 0:
 		return badPage("a key holding a NUL byte: %q", k)
-	case !utf8.Valid(k):
+	case s.utf8Keys && !utf8.Valid(k):
 		return badPage("a key that is not UTF-8: %q", k)
 	case len(k) == 0:
 		return badPage("an empty key")
-	case e.Kind == listing.KindPrefix && (len(rest) == 0 || rest[len(rest)-1] != '/' || bytes.IndexByte(rest[:len(rest)-1], '/') >= 0):
-		return badPage("a common prefix that is not one child of the prefix: %q", k)
-	case e.Kind != listing.KindPrefix && bytes.IndexByte(rest, '/') >= 0:
-		return badPage("an object below a child of the prefix: %q", k)
+	case dir && !self && (len(rest) == 0 || rest[len(rest)-1] != '/' || bytes.IndexByte(rest[:len(rest)-1], '/') >= 0):
+		return badPage("a directory or common prefix that is not one child of the prefix: %q", k)
+	case !dir && bytes.IndexByte(rest, '/') >= 0:
+		return badPage("an entry below a child of the prefix: %q", k)
 	case last != nil && bytes.Compare(k, last) <= 0:
 		return badPage("a key that does not sort after the one before it: %q after %q", k, last)
 	}
