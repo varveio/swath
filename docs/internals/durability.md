@@ -62,7 +62,13 @@ before it has a ledger append of its own (so four seals are four appends for the
 points), and the torn-ledger test holds the frontier until its tear, so the part records it needs follow.
 `TestDurableRepeatedRecovery` interrupts a resume twice inside recovery, each schedule on its own copy of a
 damaged snapshot, with the truncation or the retirements' append lost where the schedule says so. Each
-then resumes to the uninterrupted dataset. In the real process the same seal gating is
+then resumes to the uninterrupted dataset. Its snapshots are built by barriers, not sampled. The
+request continuing after the bucket's first page (1,000 keys) is held, its retries too, until a ledger sync
+finds eight seal records or more. Killed there, every certificate lies above K. In the second snapshot the ledger
+is frozen at that sync and the hold released; the run is killed at the first recorded part whose K covers a kept
+certificate, lies inside another and leaves three or more uncovered, so recovery retires a covered certificate
+beside the missing one and replays one from inside. If K passes every point where that holds, the
+test fails at once, saying so; it does not sample again. The lost retirement append and the mid-replay pair run from both snapshots. In the real process the same seal gating is
 `SWATH_TEST_SERIAL_SEALS`, a test hook beside `SWATH_TEST_KILL_AT`: each seal waits until the earlier seals'
 records were appended by ledger cycles of their own, so `TestSIGKILLDurableSpill` reaches its fourth-cycle
 arms by construction. Its recovery arms seed their damaged ledger from a run whose first part's close is held
