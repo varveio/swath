@@ -63,8 +63,9 @@ func OpenDir(root *os.File, prefix string, opt Options) (*Opened, error) {
 	return &Opened{bound: b, p: p}, nil
 }
 
-// Lookup's system calls: the opens on the way, the device check of each,
-// and the stat of the key. Tests replace them to fail as a disk does.
+// Lookup's and a live level's system calls (resolve, openLevel): the
+// opens on the way, the device check of each, and the stat of the key.
+// Tests replace them to fail as a disk does.
 var (
 	lookupOpenat = unix.Openat
 	lookupFstat  = unix.Fstat
@@ -96,32 +97,14 @@ func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 		return LookupResult{}, errors.New("localfs: a lookup needs a key below the root")
 	}
 
-	dir := p.held.fd
-	defer func() {
-		if dir != p.held.fd {
-			unix.Close(dir)
-		}
-	}()
-	for i, name := range names[:len(names)-1] {
-		if err := ctx.Err(); err != nil {
-			return LookupResult{}, err
-		}
-		fd, err := lookupOpenat(dir, name, longpath.Search|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if err != nil {
-			return lookupAncestor(dir, name, i+1, err), nil
-		}
-		if dir != p.held.fd {
-			unix.Close(dir)
-		}
-		dir = fd
-		var s unix.Stat_t
-		if err := lookupFstat(fd, &s); err != nil {
-			return lookupUnknown(unreadClass(err), err), nil
-		}
-		if int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
-			return lookupUnknown(listing.UnreadOtherDevice, fmt.Errorf("level %d below the root: %w", i+1, errOtherDevice)), nil
-		}
+	dir, stop, err := p.resolve(ctx, names[:len(names)-1])
+	switch {
+	case err != nil:
+		return LookupResult{}, err
+	case stop != nil:
+		return *stop, nil
 	}
+	defer p.closeResolved(dir)
 	if err := ctx.Err(); err != nil {
 		return LookupResult{}, err
 	}
@@ -147,6 +130,54 @@ func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 		}
 	}
 	return LookupResult{State: listing.LookupPresent, Row: row}, nil
+}
+
+// resolve opens the directories names below the held root, each relative
+// to the one before, only to resolve names in it (longpath.Search) and with
+// O_NOFOLLOW, and checks each against the root's device; a stop of ctx is
+// checked for before each. It returns the last one's descriptor, the held
+// root's own for no names, which the caller passes to closeResolved. When
+// one is not reached it returns instead the lookup's answer, absent or
+// unknown (lookupAncestor), having closed what it opened. It holds at most
+// two descriptors at once.
+func (p *Provider) resolve(ctx context.Context, names []string) (int, *LookupResult, error) {
+	dir := p.held.fd
+	for i, name := range names {
+		if err := ctx.Err(); err != nil {
+			p.closeResolved(dir)
+			return -1, nil, err
+		}
+		fd, err := lookupOpenat(dir, name, longpath.Search|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			r := lookupAncestor(dir, name, i+1, err)
+			p.closeResolved(dir)
+			return -1, &r, nil
+		}
+		p.closeResolved(dir)
+		dir = fd
+
+		var s unix.Stat_t
+		var r LookupResult
+		switch err := lookupFstat(fd, &s); {
+		case err != nil:
+			r = lookupUnknown(unreadClass(err), err)
+		case int64(s.Dev) != p.dev: //nolint:unconvert // Dev's type differs by platform
+			r = lookupUnknown(listing.UnreadOtherDevice, fmt.Errorf("level %d below the root: %w", i+1, errOtherDevice))
+		default:
+			continue
+		}
+		unix.Close(fd)
+		return -1, &r, nil
+	}
+	return dir, nil, nil
+}
+
+// closeResolved closes dir, a descriptor resolve returned, unless it is
+// the held root's own.
+func (p *Provider) closeResolved(dir int) {
+	if dir != p.held.fd {
+		unix.Close(dir)
+	}
 }
 
 // lookupAncestor answers a lookup whose directory at level below the root,

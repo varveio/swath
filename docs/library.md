@@ -305,3 +305,81 @@ otherwise come from Application Default Credentials, as for the command
 - A token is bound to the bucket and the endpoint it is read through; the billed project is not part of it.
 - The observer sees a lookup's `objects.get` and `buckets.get` as metadata requests, the bucket's with an empty
   name.
+
+## A local directory
+
+`github.com/varveio/swath/local` opens a directory as a `Source`, on Linux and macOS. The program opens the
+directory itself, without following a symbolic link, and hands swath the open file: swath never resolves the
+directory by its path, so what it reads is the directory the program opened, even once that path names
+something else.
+
+```go
+ctx := context.Background()
+root, err := os.OpenFile("/srv/data", os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+if err != nil {
+	log.Fatal(err)
+}
+defer root.Close() // after the source's Close
+src, err := local.Open(root, local.Options{})
+if err != nil {
+	log.Fatal(err)
+}
+defer src.Close()
+
+req := listing.PageRequest{Prefix: []byte("logs/"), Limit: 100}
+for {
+	page, err := src.Page(ctx, req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, e := range page.Entries {
+		fmt.Println(e.Kind, string(e.Key))
+	}
+	if page.Next == "" {
+		break
+	}
+	req.Token = page.Next
+}
+```
+
+The same program is the package's [`Example`](../local/example_test.go), which the tests compile.
+
+The program owns the directory: it keeps it open until the source's `Close` returns, and `Close` does not close
+it. Keys are relative to it. A page's prefix is `""` for the directory itself or a directory's key, such as
+`logs/2026/`, which ends in `/`; a lookup's key names an entry of any kind, `logs/a.gz` or `logs`. What the
+library guarantees:
+
+- **Descriptor-relative, never followed.** Each page and lookup opens what it reads relative to the program's
+  directory, one name at a time, never following a symbolic link, and checks each directory it opens against
+  the device of the program's directory. A symbolic link is listed as an entry of kind `symlink`. A call holds
+  at most two descriptors at once and none once it returns; a source keeps nothing open between calls and is
+  safe for concurrent use.
+- **A page is one directory level, in byte order of keys.** A subdirectory is an entry of kind `prefix`
+  (`logs/2026/`); any other entry has its kind (`file`, `symlink`, `other` for a FIFO, socket or device, or
+  `unknown` when its stat fails) and what `lstat` gives of it: size, space on disk, modification time,
+  device, inode and link count. The prefix's own directory comes back as the `Self` of the level's first page,
+  and counts toward its `Limit`. A directory on another device is listed as a prefix like any other, and a page
+  of it fails with `listing.ErrOtherDevice`.
+- **Pages continue by key.** A token resumes the level after the last key it read, so a directory that changes
+  between pages repeats no key, keeps byte order across pages and skips no name that stayed; a name added
+  after the last key read comes in a later page, one removed does not. It is bound to the directory's device
+  and inode and to the prefix. A page reads its whole directory and sorts it to choose its entries:
+  `Options.MaxHeldBytes` (64 MiB by default, a name counting its length plus 64 bytes) bounds the names it
+  holds, and a directory past it fails the page with `local.ErrTooWide`, which also matches
+  `listing.ErrUnsupported`. Each page reads the directory again; the request's `MaxDuration` bounds that work,
+  its `MaxScanned` does not yet.
+- **Failures in their class.** A prefix that is not there is `listing.ErrNotFound`; one naming something other
+  than a directory, a symbolic link included, `listing.ErrNotDirectory`; one with a symbolic link on the way,
+  which is not followed, `listing.ErrUnsupported`: not reached, never absent. A refusal is `listing.ErrAuth`, a
+  name too long for the system `listing.ErrUnsupported`, an I/O error `listing.ErrUnavailable`. A message
+  names where a call failed by its depth below the directory and by the program's own key, never by more of a
+  path.
+- **A lookup is absent only when shown.** `ENOENT` or `ENOTDIR` at the key, or at a directory on the way that is
+  no symbolic link, is absent; a symbolic link at the key is present, as itself; a key naming a directory
+  answers with its directory key (`logs` with `logs/`). A symbolic link or another device on the way, a refusal,
+  a name too long and an I/O error leave the key unknown: it was not reached.
+- **Names are bytes, keys UTF-8 for now.** A `Source` refuses a key that is not valid UTF-8, so a page of a
+  directory holding such a name fails with `listing.ErrInvalidPage`, and such an entry cannot be looked up.
+
+To count or trace a call's work, an `objfile.Observer` on its context is told of each page as one list request
+and each lookup as one metadata request, named by the program's key.

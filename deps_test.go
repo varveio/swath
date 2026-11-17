@@ -174,3 +174,32 @@ func TestAzblobImports(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalImports: the local source links none of the command (no flags,
+// registry, run pipeline or writer), no cloud SDK, and parquet-go only
+// through SeekParquet's reader, which the local schema reaches.
+func TestLocalImports(t *testing.T) {
+	d := deps(t, mod+"/local")
+	for _, c := range command {
+		if _, ok := d[c]; ok {
+			t.Errorf("%s/local links %s", mod, c)
+		}
+	}
+	for path, imports := range d {
+		if slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
+			t.Errorf("%s/local links %s", mod, path)
+		}
+		if strings.HasPrefix(path, "github.com/parquet-go/") || slices.Contains(readerEdge, path) {
+			continue
+		}
+		for _, imp := range imports {
+			if strings.HasPrefix(imp, "github.com/parquet-go/") {
+				t.Errorf("%s/local links %s through %s, not through SeekParquet's reader", mod, imp, path)
+			}
+		}
+	}
+	// The walk sees what it looks for where it is linked (not vacuous).
+	if _, ok := d[mod+"/internal/source/localfs"]; !ok {
+		t.Error("the walk does not see the local provider in the local package")
+	}
+}
