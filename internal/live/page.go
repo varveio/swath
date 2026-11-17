@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package swath
+package live
 
 import (
 	"bytes"
@@ -14,7 +14,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
 )
@@ -99,7 +98,7 @@ func checkPage(req listing.PageRequest) error {
 // most limit entries: the objects and common prefixes merged in byte
 // order, and the object at exactly prefix as Self. It returns the page and
 // the level's last key after it.
-func level(prefix, last []byte, lvl *live.Level, limit int) (listing.Page, []byte, error) {
+func level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, error) {
 	page := listing.Page{Order: listing.OrderBytes}
 	objects, prefixes := lvl.Objects, lvl.Prefixes
 	if n := len(objects) + len(prefixes); n > limit {

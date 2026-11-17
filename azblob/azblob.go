@@ -106,5 +106,5 @@ func Open(ctx context.Context, container string, opts Options) (*swath.Source, e
 		}
 		return nil, objfile.RedactError(err)
 	}
-	return live.NewSource(st).(*swath.Source), nil
+	return live.NewSource(st), nil
 }

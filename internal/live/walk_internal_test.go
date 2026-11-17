@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package swath
+package live
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/reader/listing"
 )
 
@@ -19,8 +18,8 @@ type unreading struct{ n int }
 
 func (unreading) Location() string { return "unreading" }
 
-func (unreading) List(context.Context, []byte, string, int) (*live.Level, error) {
-	return &live.Level{}, nil
+func (unreading) List(context.Context, []byte, string, int) (*Level, error) {
+	return &Level{}, nil
 }
 
 func (unreading) Lookup(context.Context, []byte) (listing.LookupResult, error) {
@@ -29,7 +28,7 @@ func (unreading) Lookup(context.Context, []byte) (listing.LookupResult, error) {
 
 func (unreading) Close() error { return nil }
 
-func (u unreading) Walk(_ context.Context, w live.Walk, sink live.Sink) error {
+func (u unreading) Walk(_ context.Context, w Walk, sink Sink) error {
 	for i := range u.n {
 		sink.Unread(listing.Unread{Key: fmt.Appendf(nil, "%sx%08d", w.Prefix, i), Scope: listing.UnreadSubtree, Class: listing.UnreadPermission})
 	}

@@ -1,12 +1,11 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package live joins the public live Source (package swath, at the module
-// root) to the provider packages that open one, such as
-// github.com/varveio/swath/s3: what an opened object store does for each
-// operation (Store), and the constructor that wraps one as a *swath.Source
-// (NewSource). It is internal, so no code outside swath adds a kind of
-// storage.
+// Package live is the live Source that package swath, at the module
+// root, exposes as swath.Source, and what a provider package such as
+// github.com/varveio/swath/s3 builds one over: an opened store (Store),
+// whose Source NewSource makes. It is internal, so no code outside swath
+// adds a kind of storage.
 package live
 
 import (
@@ -50,9 +49,3 @@ type Level struct {
 	// Next is the store's token for the rest of the level.
 	Next string
 }
-
-// NewSource wraps a store as a *swath.Source, as an any because this
-// package cannot name package swath's type. Package swath sets it when it
-// is initialized: a provider package imports swath, so swath is
-// initialized, and NewSource set, before any code of the provider runs.
-var NewSource func(Store) any
