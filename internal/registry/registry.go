@@ -108,7 +108,11 @@ type Factory struct {
 	CheckFilter func(options any, f *filter.Spec) error
 	// WithPrefix, if set, returns root naming the key prefix prefix
 	// instead of its own (KeyPrefix): an anchored --include narrows the
-	// listed prefix through it. Without it the root is listed as given.
+	// listed prefix through it. prefix extends root's own, so a narrowed
+	// root is never root itself: returning root unchanged declines, for a
+	// root that does not parse or cannot name prefix with the same
+	// meaning and credentials (filter.NarrowDeclined), and root is listed
+	// as given. Without it the root is listed as given.
 	WithPrefix func(root, prefix string) string
 	// Schemas are the bound schemas of the rows the provider writes (its
 	// current rows', and its versions' with --all-versions), by which a

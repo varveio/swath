@@ -61,15 +61,9 @@ Secrets are never recorded: a run started with `--azure-sas-token` (or a SAS in 
 `--s3-bearer-token-command` must be given it again.
 
 A resume of a dataset that is already complete has nothing to do and exits 0, so a supervisor may resume until
-exit 0. A dataset committed with partial coverage (a `swath diag list --max-keys` sample) is a finalized
-partial sample: nothing continues it, and its resume exits 3 (class `incomplete`), saying so:
-
-```text
-swath: sample is a finalized sample, partial: --max-keys reached: it cannot be resumed
-```
-
-A dataset that left out entries it could not read is final too, and its resume exits 3 likewise; the report keeps
-the count (`outcome.unreadable`).
+exit 0. A dataset committed with partial coverage, one that left out entries it could not read, is final:
+nothing continues it, and its resume exits 3 (class `incomplete`); the report keeps the count
+(`outcome.unreadable`).
 
 Local trees and text output keep no journal; resume refuses them, and they are run again. DIR is
 judged by what is on disk, not by its name: a directory named `rows.tsv/` that holds an interrupted dataset run
@@ -87,7 +81,9 @@ not `--sequential`).
 **Identity check.** The source, the route (endpoint, addressing, signing region; for GCS the API base and the
 billed project), `--s3-fetch-owner`, the schema and the part size are frozen. A resume whose environment or
 `--s3-profile` resolves another region or endpoint is refused (exit 2, `refused`) and the directory is left as it
-was. Restore the original environment, or start over.
+was. Restore the original environment, or start over. An Azure Blob run with an `--include` that narrows
+the listing, interrupted under 0.4.0, is refused too: 0.4.0 listed the whole source URL, later releases the
+narrowed prefix. Finish it with 0.4.0, or start over.
 
 **Refused resumes** and what they mean:
 

@@ -22,7 +22,7 @@ import (
 )
 
 func init() {
-	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, VersionSchema.Info}, Classify: objhttp.Label, Scheme: "az", KeyPrefix: keyPrefix,
+	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, VersionSchema.Info}, Classify: objhttp.Label, Scheme: "az", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
 		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open, Redact: RedactRoot,
 		Secrets: []registry.Secret{{Flag: "azure-sas-token", Env: EnvSAS}},
 		FromURL: fromURL, Title: "Azure Blob", Example: "az://account/container", Usage: "az://account/container[/prefix] (or https://account.blob.core.windows.net/container[/prefix])"})
@@ -218,4 +218,26 @@ var (
 func keyPrefix(root string) (string, error) {
 	_, _, prefix, _, err := ParseURL(root)
 	return prefix, err
+}
+
+// withPrefix is root naming prefix instead, its SAS kept byte for byte
+// (registry.Factory.WithPrefix). An az:// root is not an escaped URL: '%'
+// and '+' are a name's own bytes, and '?' belongs to the prefix unless the
+// query names a SAS parameter (ParseURL). So the new root is taken only
+// if it parses back to the same account, container and SAS and to prefix
+// itself; a prefix it cannot carry (a '?' beside a SAS, or text after a
+// '?' that would read as a SAS) is declined: root comes back as it was.
+func withPrefix(root, prefix string) string {
+	account, container, _, sas, err := ParseURL(root)
+	if err != nil {
+		return root
+	}
+	narrowed := "az://" + account + "/" + container + "/" + prefix
+	if sas != "" {
+		narrowed += "?" + sas
+	}
+	if a, c, p, s, err := ParseURL(narrowed); err != nil || a != account || c != container || p != prefix || s != sas {
+		return root
+	}
+	return narrowed
 }

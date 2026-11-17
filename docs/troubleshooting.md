@@ -7,7 +7,7 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 |---|---|
 | 1 | [credentials](#credentials-could-not-be-loaded), [access denied](#access-denied), [the bucket or container does not exist](#the-bucket-or-container-does-not-exist), [the bucket is in another region](#the-bucket-is-in-another-region), [the resume is refused](#the-resume-is-refused), [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 2 | [unknown flag](#unknown-flag), [the output directory is refused](#the-output-directory-is-refused), [`-o` names a format swath does not write](#-o-names-a-format-swath-does-not-write), [the resume is refused](#the-resume-is-refused) |
-| 3 | [entries could not be read](#entries-could-not-be-read), or `--max-keys` stopped a diagnostic listing; the dataset's [coverage](results.md#coverage-and-unreadable-entries) says which |
+| 3 | [entries could not be read](#entries-could-not-be-read); the dataset's [coverage](results.md#coverage-and-unreadable-entries) counts them |
 | 74 | [the disk filled](#the-disk-filled-exit-74) |
 | 75 | [the run stops as stuck](#the-run-stops-as-stuck-exit-75), or `unresolved` under [a dataset in a bucket fails](#a-dataset-in-a-bucket-fails) |
 | 124, 129, 130, 143 | [the run was interrupted](#the-run-was-interrupted) |
@@ -176,6 +176,7 @@ swath: deadline: --max-duration reached (it cannot be resumed: run it again with
 |---|---|---|
 | exit 2, `--NAME is fixed for the run` | the option cannot change on resume | give only the options `swath resume --help` lists |
 | exit 2, identity mismatch | the environment or `--s3-profile` resolves another region or endpoint than the run's | restore the original environment, or start over with `swath list --overwrite` |
+| exit 2, `this swath narrows the listing to the --include's literal prefix` | an Azure Blob run with a narrowing `--include` was started by 0.4.0, which listed the whole source | finish it with 0.4.0, or start over with `swath list --overwrite` |
 | exit 2, `nothing to resume` | no interrupted run in the directory | start a fresh `swath list` |
 | exit 2, `an interrupted run written by swath 0.3` | the directory holds a 0.3.2 run's state (`.swath-state.json` or `.swath/checkpoint.sqlite`) | `swath list ... --overwrite` replaces it |
 | exit 1, another swath process owns this output directory | a process still holds the output lock: the stopped run has not exited yet, or a wrapper was killed and swath under it lives on | wait for that process to exit (stop a wrapper's whole process group), then resume |
@@ -364,7 +365,8 @@ The limits of this build, and what has not been measured:
   [#577](https://github.com/varveio/swath/issues/577).
 - **Memory:** `--sort-buffer` bounds rows in flight, not resident memory ([Size a run](size-a-run.md#memory)).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
-  of 1.09 billion objects at 256 and 1,024 workers. Production listings of public buckets of billions of
+  of 1.09 billion objects at 256 and 1,024 workers on a build before the release and at 1,024 and 2,048 on
+  0.4.0. Production listings of public buckets of billions of
   objects (35 completed, 50.6 billion objects in all) are individual runs, not a benchmark
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
   other gaps are in [measurements](internals/measurements.md#known-gaps).

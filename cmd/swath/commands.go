@@ -305,7 +305,9 @@ func showFlags(f *pflag.FlagSet, raw *bool) []*pflag.Flag {
 }
 
 // show prints what an output directory holds: a committed dataset or an
-// interrupted run; --journal dumps the journal's records as JSON lines.
+// interrupted run; -v adds the dataset's format id and the run's journal
+// version and frozen identity; --journal dumps the journal's records as
+// JSON lines.
 func show(args []string, stdout io.Writer) error {
 	f := pflag.NewFlagSet("show", pflag.ContinueOnError)
 	f.SetOutput(io.Discard)
@@ -384,7 +386,7 @@ func show(args []string, stdout io.Writer) error {
 		if err := json.Unmarshal(b, &m); err != nil {
 			return fmt.Errorf("manifest: %w", err)
 		}
-		writeSummary(stdout, name, &m, stdoutWidth())
+		writeSummary(stdout, name, &m, stdoutWidth(), t.verbose > 0)
 		if commit != "" {
 			fmt.Fprintln(stdout, commit)
 		}
@@ -406,14 +408,15 @@ func show(args []string, stdout io.Writer) error {
 	}
 	h := st.Header
 	fmt.Fprintf(stdout, "%s: interrupted run\n", dir)
-	label(stdout, "started", localTime(h.Created.Time)+" (journal version "+strconv.Itoa(h.Version)+")")
-	label(stdout, "command", "swath "+shellLine(redactArgv(h.Argv)))
-	id := h.Identity.Redacted()
-	ident := fmt.Sprintf("provider %s, schema %s, writer %s, part size %s", id.Provider, id.SchemaID, id.Writer, textout.Size(id.PartSize))
-	for _, f := range id.Source {
-		ident += ", " + f.Name + " " + f.Value
+	started := localTime(h.Created.Time)
+	if t.verbose > 0 {
+		started += " (journal version " + strconv.Itoa(h.Version) + ")"
 	}
-	label(stdout, "identity", ident)
+	label(stdout, "started", started)
+	label(stdout, "command", "swath "+shellLine(redactArgv(h.Argv)))
+	if t.verbose > 0 {
+		label(stdout, "identity", identityLine(h.Identity.Redacted()))
+	}
 	if u := st.Unresumable; u != nil {
 		label(stdout, "refused", fmt.Sprintf("marked unresumable (%s) at %s: %s; swath resume refuses it, swath list --overwrite starts over", u.Cause, localTime(u.At.Time), u.Reason))
 	}
@@ -436,12 +439,34 @@ func show(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// identityLine is a run's frozen identity (what its resume must match) for
+// people: each setting and its value, a setting without one left out.
+func identityLine(id journal.Identity) string {
+	var fields []string
+	add := func(name, value string) {
+		if value != "" {
+			fields = append(fields, name+" "+value)
+		}
+	}
+	add("provider", id.Provider)
+	add("schema", id.SchemaID)
+	add("writer", id.Writer)
+	if id.PartSize > 0 {
+		add("part size", textout.Size(id.PartSize))
+	}
+	for _, f := range id.Source {
+		add(f.Name, f.Value)
+	}
+	return strings.Join(fields, ", ")
+}
+
 // writeSummary prints a committed dataset's summary for people, in
 // reading order under labels: the verdict on its coverage, the source,
 // when it was listed, what it holds (its rows, the object bytes, the key
 // range, clipped to width when that is not 0 and left out where it cannot
-// fit), the coverage's account and the storage last.
-func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int) {
+// fit), the coverage's account and the storage last: the Parquet parts and
+// the schema, and with verbose the SeekParquet format id too.
+func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int, verbose bool) {
 	c := &m.Coverage
 	fmt.Fprintf(w, "%s: %s\n", escapeControl(name), coverageVerdict(c.Complete, c.StopReason, c.Unreadable))
 	src := registry.Redact(m.Source.URI)
@@ -492,12 +517,16 @@ func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int) {
 		cov = append(cov, "no exclusions")
 	}
 	label(w, "coverage", escapeControl(strings.Join(cov, "; ")))
-	format := "SeekParquet format " + strconv.Itoa(m.FormatVersion)
-	if m.DraftRevision > 0 {
-		format += " draft " + strconv.Itoa(m.DraftRevision)
+	format := ""
+	if verbose {
+		format = "SeekParquet format " + strconv.Itoa(m.FormatVersion)
+		if m.DraftRevision > 0 {
+			format += " draft " + strconv.Itoa(m.DraftRevision)
+		}
+		format += ", "
 	}
 	parts := int64(len(m.Parts))
-	label(w, "storage", fmt.Sprintf("%s %s, %s of Parquet (%s, schema %s)", count(parts), plural(parts, "part", "parts"), textout.Size(t.Bytes), format, m.SchemaID))
+	label(w, "storage", fmt.Sprintf("%s %s, %s of Parquet (%sschema %s)", count(parts), plural(parts, "part", "parts"), textout.Size(t.Bytes), format, m.SchemaID))
 }
 
 // labelWidth is the room a summary's labels take: the longest, contents,

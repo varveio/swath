@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/internal/totals"
 )
@@ -105,7 +106,7 @@ func tableCells(line string) []string {
 // to a time's width.
 func duTimeHeading() string {
 	zone, _ := time.Now().Zone()
-	return fmt.Sprintf("%-*s", len(time.DateTime), "last_modified ("+zone+")")
+	return fmt.Sprintf("%-*s", len(time.DateTime), "newest ("+zone+")")
 }
 
 // linksOnce is the links_once a local tree's rows carry by default: every
@@ -359,7 +360,7 @@ func TestDuJSONL(t *testing.T) {
 	out.Reset()
 	stderr := captureStderr(t)
 	if err := runDu(context.Background(), append(src, "--depth", "1", "--format", "table", "--no-stats"), &out); err != nil || strings.Contains(stderr.String(), "on disk") ||
-		!regexp.MustCompile(`^ *size  objects  last_modified \([^)]+\)  prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
+		!regexp.MustCompile(`^ *size  objects  newest \([^)]+\) +prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
 		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \d{4}-\d\d-\d\d \d\d:\d\d:\d\d  s3://bkt \(total\)\n$`).MatchString(out.String()) {
 		t.Fatalf("%v %q", err, out.String())
 	}
@@ -368,14 +369,20 @@ func TestDuJSONL(t *testing.T) {
 // TestDuOrigin: depth counts from the prefix the source names, up to its
 // last '/', and the rows keep the keys' spelling; the total's prefix is
 // the one the source names whole; an --include that narrows the listed
-// prefix does not move them.
+// prefix does not move them, on S3 and on Azure Blob, nor the table's
+// total label.
 func TestDuOrigin(t *testing.T) {
 	keys := []string{"logs/2026/01/a", "logs/2026/01/b/c", "logs/2026/02/d", "logs/2026/top", "logs/2027/x", "other/y"}
 	end := s3test.Bucket(t, keys)
+	az := azEndpoint(azblobtest.Serve(t, keys))
 	du := func(args ...string) string {
 		t.Helper()
+		ep := end
+		if strings.HasPrefix(args[0], "az://") {
+			ep = az
+		}
 		var out bytes.Buffer
-		if err := runDu(context.Background(), append(args, "--endpoint-url", end, "--anonymous", "--format", "tsv", "--no-stats"), &out); err != nil {
+		if err := runDu(context.Background(), append(args, "--endpoint-url", ep, "--anonymous", "--format", "tsv", "--no-stats"), &out); err != nil {
 			t.Fatal(err)
 		}
 		var rows []string
@@ -393,11 +400,18 @@ func TestDuOrigin(t *testing.T) {
 		{[]string{"s3://bkt/logs/2026/0", "-d", "1"}, "0:logs/2026/0 3,1:logs/2026/01/ 2,1:logs/2026/02/ 1"},
 		{[]string{"s3://bkt/logs", "-d", "1"}, "0:logs 5,1:logs/ 5"},
 		{[]string{"s3://bkt/logs/", "-d", "1", "--include", "2026/**"}, "0:logs/ 4,1:logs/2026/ 4"},
+		{[]string{"az://replay/corpus/logs/", "-d", "1", "--include", "2026/**"}, "0:logs/ 4,1:logs/2026/ 4"},
+		{[]string{"az://replay/corpus", "-d", "2", "--include", "logs/2026/0*/**"}, "0: 3,1:logs/ 3,2:logs/2026/ 3"},
 		{[]string{"s3://bkt", "-d", "2"}, "0: 6,1:logs/ 5,2:logs/2026/ 4,2:logs/2027/ 1,1:other/ 1"},
 	} {
 		if got := du(tc.args...); got != tc.want {
 			t.Errorf("%v: %q, want %q", tc.args, got, tc.want)
 		}
+	}
+	var out bytes.Buffer
+	if err := runDu(context.Background(), []string{"az://replay/corpus/logs/", "--include", "2026/**", "--endpoint-url", az, "--anonymous", "--format", "table", "--no-stats"}, &out); err != nil ||
+		!strings.HasSuffix(out.String(), "  az://replay/corpus/logs/ (total)\n") {
+		t.Fatalf("%v %q", err, out.String())
 	}
 }
 
