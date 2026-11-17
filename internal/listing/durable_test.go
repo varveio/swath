@@ -68,13 +68,14 @@ func slowFrontier(t *testing.T, slow string) (string, *s3mem.Backend, *reqLog) {
 				log.mu.Unlock()
 			}
 			if h := frontierHold.Load(); h != nil && q.Get("continuation-token") == "" && h.holds(start) {
-				// The held request waits for the hold's release, or its
-				// run's cancellation. A keyed hold never expires (its test's
-				// barriers and deadline bound it); the other expires after
-				// 20 s, marked late.
+				// The held request waits for the hold's release, or its own
+				// end (its run cancelled, or the client's attempt timed out:
+				// a keyed hold holds the retry too). A keyed hold never
+				// expires (its test's barriers bound it); the other expires
+				// after 20 s, marked late.
 				var expire <-chan time.Time
 				if h.engaged != nil {
-					close(h.engaged)
+					h.engage.Do(func() { close(h.engaged) })
 				} else {
 					expire = time.After(20 * time.Second)
 				}
@@ -151,28 +152,31 @@ func (g *sealGate) at(p string) {
 	g.seals++
 }
 
-// hold holds the frontier's first request until release is closed: only
-// that request, so the ranges ahead (seed tiles, children split off it)
-// keep listing, spilling and sealing.
+// hold holds the frontier's request until release is closed: only that
+// request, so the ranges ahead (seed tiles, children split off it) keep
+// listing, spilling and sealing.
 type hold struct {
 	release chan struct{}
-	after   string        // keyed: the request held is the first to start after it
-	engaged chan struct{} // keyed: closed once that request is held
+	after   string        // keyed: the requests held are those starting after it
+	engaged chan struct{} // keyed: closed once such a request is held
+	engage  sync.Once
 	seen    atomic.Int64
 	late    atomic.Bool
 }
 
-// keyedHold holds the first request starting after after.
+// keyedHold holds every request starting after after, retries included
+// (the client abandons an attempt after its request timeout, 30 s), until
+// released.
 func keyedHold(after string) *hold {
 	return &hold{release: make(chan struct{}), after: after, engaged: make(chan struct{})}
 }
 
-// holds reports whether the request starting after start is the one held:
-// the first after h.after when keyed, else the second request from the
-// start of the bucket.
+// holds reports whether the request starting after start is held: every
+// one after h.after when keyed, else the second request from the start of
+// the bucket.
 func (h *hold) holds(start string) bool {
 	if h.after != "" {
-		return start == h.after && h.seen.Add(1) == 1
+		return start == h.after
 	}
 	return start == "" && h.seen.Add(1) == 2
 }
@@ -489,14 +493,22 @@ func heldSnapshot(t *testing.T, url string, advance bool) string {
 			// damagedSnapshot removes the first one's file and loses the
 			// last two records.
 			kept = s[1 : len(s)-2]
+			// The kill below is reached because each kept certificate is
+			// one listed page of 1,000 keys, more than any part's rows: a
+			// part ends strictly inside each.
+			for _, c := range kept {
+				lo, _ := slices.BinarySearch(keys, c.cs+"\x00") // the first key above cs
+				hi, found := slices.BinarySearch(keys, c.ce)
+				if c.open || !found || hi+1-lo != 1000 {
+					why.Store(fmt.Sprintf("kept certificate (%q, %q] (open %v) is not one page of 1,000 keys", c.cs, c.ce, c.open))
+					killed.Store(true)
+					return faults.ErrCrash
+				}
+			}
 			lifted.Store(true)
 			release()
 		case p == "spill-ledger-dirsync" && lifted.Load():
-			select {
-			case <-dead:
-			case <-time.After(60 * time.Second):
-				why.Store("no recorded part's K covered a kept certificate and straddled another within 60 s")
-			}
+			<-dead // the kill is certain (above); a hang is the test binary's timeout
 			return faults.ErrCrash
 		case p == "recorded" && lifted.Load() && !killed.Load():
 			k, err := recordedK(out)
