@@ -83,7 +83,7 @@ parallel listing finishes ranges in roughly key-uniform order, so most rows wait
 until the leftmost range ends, and are then replayed in order. `timings.provider_finished_at` is when the provider
 finished; `listing_finished_at` when the order stage ended; `drain.tail_ns` the interval between, the part of the
 run in which only the drain was left. In it idle workers read and decode spilled frames ahead of the drainer
-(`drain.read_ahead`) and more encoders are admitted ([encoders](../size-a-run.md#resources-and-their-flags)). What
+(`drain.read_ahead`) and more encoders are admitted ([encoders](../size-a-run.md#encoders)). What
 the drainer did: `replay_read_ns` and `ahead_wait_ns` (the spill), `order_check_ns`, `sink_write_ns` (the encoders,
 with `encoder_wait_ns`), over the whole run, not the tail alone; and in the tail, the workers'
 `worker_idle_after_provider_finished_ns`. A tail that is most of the run with `sink_write_ns` most of the drainer's
