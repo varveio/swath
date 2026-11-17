@@ -70,7 +70,7 @@ func (inv *Inventory) Close() error {
 // Open returns the inventory of d. It reads nothing. A dataset of versions
 // is refused with listing.ErrUnsupported, as is one whose manifest records
 // no scope; a manifest whose key is not the schema's unique key column is
-// a *reader.SemanticError.
+// listing.ErrInvalidPage, with the *reader.SemanticError wrapped.
 func Open(d *reader.Dataset) (*Inventory, error) {
 	m := d.Metadata()
 	spec, ok := reader.Schema(m.SchemaID)
@@ -81,8 +81,8 @@ func Open(d *reader.Dataset) (*Inventory, error) {
 		return nil, fmt.Errorf("%w: %s lists versions, whose keys repeat", listing.ErrUnsupported, spec.ID)
 	}
 	if key := m.Manifest.Key; key.Column != spec.Key.Name || !key.Unique {
-		return nil, &reader.SemanticError{Kind: reader.KindSchema, Column: key.Column,
-			Err: fmt.Errorf("the manifest's key; %s's is the unique column %s", spec.ID, spec.Key.Name)}
+		return nil, fmt.Errorf("%w: %w", listing.ErrInvalidPage, &reader.SemanticError{Kind: reader.KindSchema, Column: key.Column,
+			Err: fmt.Errorf("the manifest's key; %s's is the unique column %s", spec.ID, spec.Key.Name)})
 	}
 	scope, ok := scopeOf(m)
 	if !ok {
