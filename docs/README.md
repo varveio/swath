@@ -34,7 +34,7 @@ Parquet inventories. Releases are published on the [releases page](https://githu
 **Read the output**
 
 - [Query an inventory](query.md): DuckDB, pandas and Spark, checking that an inventory is complete, verifying it.
-- [The swath dataset format](dataset.md): its files, schemas,
+- [Dataset format](dataset.md): its files, schemas,
   manifest and coverage. From Go, the [`reader`](../reader/README.md) module.
 
 **Reference**
