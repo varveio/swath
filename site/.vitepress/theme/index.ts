@@ -23,7 +23,8 @@ type Session = [command: string, output: string][]
 
 // The lead example: real output of `swath du` on a public bucket, run once on a 100x30 terminal with TZ=UTC and
 // main at a07cba64 (docs/internals/measurements.md, "The home page's lead view"). Escape codes are stripped
-// (Terminal draws swath's colors again); nothing else is changed.
+// (Terminal draws swath's colors again); nothing else is changed. The repository README shows it as an image,
+// site/readme/hero.png: after changing it or the terminal's styles, run site/readme/render.sh and commit the PNG.
 const HERO = {
   caption: [
     'Where 697 TiB sits in a public genomics bucket: 477,714 objects totalled in 3.5 seconds on a 4-vCPU cloud VM. ',
