@@ -461,7 +461,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore does not block on the row budget while the disk budget
   and reserve admit its frames (the waits above); this is what the slow-frontier shape needs.
-- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, the temp directory; a dry run never spills).
+- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, `swath-ATTEMPT-RANDOM/spill/spill-*/` in the temp directory; a dry run never spills). The scratch directory is created exclusively and named for the file and the attempt (`listing.textScratch`), so two attempts writing sibling files, the same file, or streams never share or remove each other's (`TestTextScratchPerAttempt`); a killed attempt leaves its own, with the file's `.NAME.*.tmp`, for the user to delete.
   Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
   payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
   uncompressed (`--no-spill-compress`), `Z` and `R` plain rows, compressed and not

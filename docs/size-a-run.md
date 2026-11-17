@@ -17,7 +17,8 @@ Four measured runs, each run once, on the stated machine and day: observations, 
 | 1.09 billion | count (`swath du`) | none | none | 1.3 GB | 32 vCPU, 62 GiB | 1,024 | 188 s |
 
 - **37 million objects:** the public bucket `s3://noaa-gestofs-pds` (AWS us-east-1), listed anonymously on
-  2026-11-15 from a cloud VM shared with other work; on average 52 of the 64 requests were in flight
+  2026-11-15 with a build of that day, before the release, from a cloud VM shared with other work; on average
+  52 of the 64 requests were in flight. The count is `swath du -d 1 --sort size`
   ([measurements](internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)).
 - **1.09 billion objects:** the public bucket `s3://sentinel-cogs` (AWS us-west-2), listed anonymously on
   2026-11-17 with the 0.4.0 release from a VM in another cloud with a 400 GB disk. At its peak the sorted run
@@ -26,13 +27,44 @@ Four measured runs, each run once, on the stated machine and day: observations, 
 - **Other sizes:** not measured. Size the disk with the rule below, and take memory and time from a
   representative prefix of your own bucket.
 
-A count (`swath du`) writes nothing to disk and holds no rows, only the pages in flight and the ranges waiting
-for a worker. A sorted run's memory depends on the machine (the default `--sort-buffer` is a share of its
-memory), on `--workers` and on the encoders: read the peak (`peak RSS` in the `--stats` lines,
-`process.peak_rss_bytes` in the report) on a representative run, and size the host from that.
+A count (`swath du`) writes nothing to disk and holds no rows, only the requests in flight and the parts of
+the key space waiting for a worker. A sorted run's memory depends on the machine (the default `--sort-buffer`
+is a share of its memory), on `--workers` and on the encoders: read its peak resident memory (RSS) on a
+representative run, and size the host from that.
 
 On cores, the measurements give no rule beyond these runs: a sorted run on one core completes, bound by the
 core and the disk, and how cores and workers go together is under [Workers](#workers).
+
+### Measure a prefix of your own
+
+List a prefix that is typical of the bucket into a dataset, with a report, and read three figures from it:
+the peak resident memory, the dataset's bytes per row and the peak spill. On the public prefix used throughout
+these pages (give your own bucket's prefix and credentials instead):
+
+```bash
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -o sample --anonymous --s3-region us-east-1 \
+  --report sample.json --stats
+jq '{peak_rss_bytes: .process.peak_rss_bytes,
+     bytes_per_row: (.output.output_bytes / .output.rows_committed),
+     spill_peak_bytes: .diagnostics.resources.spill.peak_bytes}' sample.json
+```
+
+```text
+  complete: 5,252 objects, 383 GiB in 1.0s → sample (1 part, 121 KiB)
+  next: swath show sample · swath du --from-dataset sample
+  32 API calls · in flight avg 3.07 · peak 11
+  <$0.001 (est. @ $0.005/1k LIST)
+  peak RSS 61.7 MiB
+{
+  "peak_rss_bytes": 64708608,
+  "bytes_per_row": 23.62966488956588,
+  "spill_peak_bytes": 0
+}
+```
+
+Without `jq`, the same fields are in `sample.json`: `process.peak_rss_bytes`, `output.output_bytes` over
+`output.rows_committed`, and `diagnostics.resources.spill.peak_bytes`. A small prefix may never spill, as
+this one did not: a spill peak of 0 says nothing about the whole bucket, so size its spill with the rule below.
 
 ## Disk sizing
 
@@ -43,28 +75,35 @@ measured S3 buckets:
 - **The dataset:** 23 to 30 bytes an object at the default part size: 865,491,977 bytes for 37,064,981
   objects, and 32.6 GB for 1.09 billion. Keys and columns of another shape give another figure: measure your
   own from a representative prefix, the report's `output.output_bytes` over `output.rows_committed`.
-- **Spill per row:** 18 to 30 bytes: 18 to 22 on 35 buckets of a billion objects and more
+- **Spill per row:** 18 to 30 bytes: 18 to 22 in 35 production listings of 50.6 billion objects in all,
+  with 0.4.0-rc.2 writing the dataset to a bucket
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)), 30 on
-  the 1.09-billion-object bucket above. A benchmark of keys that end in random identifiers, with real ETags,
-  reached 53 bytes ([measurements](internals/measurements.md#delta-coded-spill-frames)).
-- **Rows in spill at once:** on buckets of a billion objects and more, 96 to 99 % of the rows at the peak. On
-  lists of 20 to 150 million keys through a test service (builds of 2026-11-07), a median 71 % at 64 workers
+  the 1.09-billion-object bucket above. A benchmark of production keys that end in random identifiers, with
+  random (synthetic) MD5 ETags, reached 53.2 bytes ([measurements](internals/measurements.md#delta-coded-spill-frames)).
+- **Rows ahead of the output at the peak** (listed and not yet written, in memory or spilled; past the sort
+  buffer they are spilled): 96 to 99 % in the same 35 listings. On lists of 20 to 150 million keys through a
+  test service (builds of 2026-11-07), a median 71 % at 64 workers
   ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms))
   and 94 % at 256 ([measurements](internals/measurements.md#workers-one-core-and-the-study-harness-through-the-fake)).
 
-Peak spill is the rows, times that share, times the spill bytes per row. By default spill may use half the
-free space left after a reserve, as the dataset needs the rest; the reserve is 1 GiB, or one part (64 MiB by
-default) per encoder when more than 16 start. So a dataset on the local disk needs free space of about the
+Peak spill is at most the rows, times that share, times the spill bytes per row. By default spill may use half
+the free space left after a reserve, as the dataset needs the rest; the reserve is 1 GiB, or one part (64 MiB
+by default) per encoder when more than 16 encoders start (the report's
+`diagnostics.resources.spill.reserve_bytes`). So a dataset on the local disk needs free space of about the
 dataset, plus twice the peak spill, plus the reserve.
 
 ### Example: 200 million objects
 
-- The dataset: 200 million × 30 bytes = 6 GB.
-- Peak spill: 0.7 × 200 million × 30 bytes = 4.2 GB, if the run holds the median share at the live buckets'
-  bytes per row; 200 million × 53 bytes = 10.6 GB if it holds every row at the benchmark's.
-- Free space: 6 + 2 × 4.2 + 1.1 (the reserve) ≈ 15 GB, up to 6 + 2 × 10.6 + 1.1 ≈ 28 GB.
+- The dataset: 200,000,000 × 30 B = 6.0 GB.
+- Peak spill, low: 71 % of the rows ahead at 30 B, 0.71 × 200,000,000 × 30 B = 4.26 GB. High: every row at
+  53.2 B, 200,000,000 × 53.2 B = 10.64 GB.
+- The reserve: 1 GiB = 1.07 GB, with at most 16 encoders at the start.
+- Free space: 6.0 + 2 × 4.26 + 1.07 = 15.59 GB, up to 6.0 + 2 × 10.64 + 1.07 = 28.35 GB: about 16 to 29 GB.
 
-Both inputs are assumptions until a representative prefix measures them. With less disk, listing slows to the
+The low end assumes the median 71 %: at 94 % and 30 B the same formula needs 6.0 + 2 × 5.64 + 1.07 =
+18.35 GB. A machine that starts 32 encoders has a 2 GiB (2.15 GB) reserve, which makes the top 29.43 GB.
+Round up and leave headroom: the formula is a planning rule, and both inputs are assumptions until a
+representative prefix measures them. With less disk, listing slows to the
 output's pace: a run a little short of disk still completes, and a run far short of it may not finish in any
 useful time. It says so after 2 minutes, and `--spill-wait-timeout` stops it
 ([disk](watch-a-run.md#disk)). Set `--spill-budget` when you know the room ([Disk](#disk)).
@@ -72,10 +111,12 @@ useful time. It says so after 2 minutes, and `--spill-wait-timeout` stops it
 ### Other cases
 
 - **A repeat listing seeded from the previous dataset** (`--seed-from` with the dataset, or a cut file with
-  counts) holds at most about 8 million rows ahead of the output instead of the whole bucket, so it spills a
-  small fraction of a first listing ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). That
-  is not a bound on disk: a part of the bucket that grew since the previous dataset, keys added after its last
-  key, and the spill files a run keeps for a resume until their rows are published still spill. Size the disk
+  counts) aims to keep about 8 million rows ahead of the output instead of the whole bucket, so it usually
+  spills a small fraction of a first listing ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)).
+  That is a target, not a bound on rows or disk: a part of the key space already being listed keeps listing
+  whatever it holds, so coarse parts of the previous dataset, a part of the bucket that grew since it, keys
+  added after its last key, and the spill files a run keeps for a resume until their rows are published can
+  all go past it. Size the disk
   for the dataset and that growth, and take the spill a seeded run needs from its report's
   `diagnostics.resources.spill.peak_bytes`. A cut file without counts spills as a first listing does.
 - **A bucket of unknown size:** nothing reports the object count before the listing, so the first listing is
@@ -83,11 +124,11 @@ useful time. It says so after 2 minutes, and `--spill-wait-timeout` stops it
   default spill cap follows it), bound it with `--max-duration`, and size later runs from its manifest's row
   count.
 - **A dataset in a bucket** (`-o` a bucket prefix, with `--work-dir`): the work directory holds no part. It
-  needs room for the spill, a 1 GiB reserve, and the run's records, which grow with the parts: a claim receipt
-  of under 1 KiB and a journal record per part, and a manifest of about 1 KiB a part (at most about 1.1 GiB at
-  the 100,000-part limit with keys of 4 KiB). Spill may use all its free space after the reserve: on a disk
-  that can be grown while the run goes on, start modest and grow it if spill fills it. On the example above,
-  that is 4.2 to 10.6 GB of spill plus the reserve and the records.
+  needs room for the spill, a 1 GiB reserve, and the run's records, which grow with the number of parts and
+  the length of the keys (each part's records hold its first and last key): read their size in a
+  representative run's work directory. Spill may use all its free space after the reserve: on a disk that can
+  be grown while the run goes on, start modest and grow it if spill fills it. On the example above, that is
+  4.26 to 10.64 GB of spill plus the reserve and the records.
 
 ## Workers
 
@@ -181,12 +222,14 @@ disk for a listing that waits on the output: measure a representative run's
 
 **If it is wrong.** Past the cap, or at the reserve, listing waits instead of failing and slows to the output's
 pace; after 2 minutes swath says so, and `--spill-wait-timeout` stops it (exit 74; a dataset run of an object
-store resumes). A dataset that outgrows the disk stops the run with exit 74, resumable once there is space.
+store resumes). That holds for rows spill cannot take; another spill write that fails, such as a full disk
+that cannot be undone or the end of a range's spill file, stops the run (a dataset run of an object store
+resumes; other runs start again). A dataset that outgrows the disk stops the run with exit 74, resumable once there is space.
 What you see and what to do: [disk](watch-a-run.md#disk).
 
 ## Encoders
 
-**Default:** one Parquet writer per CPU, fewer when they do not fit an allowance of 1/16 of the memory found
+**Default:** one Parquet writer per CPU (`GOMAXPROCS`), fewer when they do not fit an allowance of 1/16 of the memory found
 (at most 1 GiB, whatever `--sort-buffer` says) or the open-file limit; more may start once listing ends.
 Writing to a bucket, each also holds one upload buffer (8 MiB by default). For a `.zst` text file,
 `--encoders` is the number of compression jobs.
@@ -198,9 +241,10 @@ given, never raised, with a warning when the machine cannot carry it. How many s
 ## Part size
 
 **Default:** `--part-size 64MiB`, no row cap. Smaller parts suit readers that load whole parts; larger ones mean
-fewer files. `--part-max-rows N` also closes a part at N rows. A dataset holds at most 100,000 parts, about
-200 billion objects at the defaults: a small part size on a very large listing can reach that (exit 1, `cause`
-`part_limit`; start over with a larger `--part-size`).
+fewer files. `--part-max-rows N` also closes a part at N rows. A dataset holds at most 100,000 parts. At 64 MiB
+parts and about 30 bytes a row that is about 200 billion objects, but parts closed early by the 30-second time
+cut (`--part-interval`), larger rows or a small part size reach it sooner (exit 1, `cause` `part_limit`; start
+over with a larger `--part-size`).
 
 ## Cost
 
