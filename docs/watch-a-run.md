@@ -14,18 +14,18 @@ public bucket stops itself after five seconds:
 swath list s3://noaa-gestofs-pds/ --anonymous --s3-region us-east-1 -o noaa-all --max-duration 5s
 ```
 
-At three seconds the line read:
+At three seconds, on a terminal 150 columns wide, the line read:
 
 ```text
-  listing · 2,189,002 objects · 73.6 TiB · 3.0s elapsed · 901,176 keys/s (avg 729,667) · 0 parts · 64 in flight · 2,258 API calls · ~$0.011 (est. @ $0.005/1k LIST)
+  listing · 2,026,002 objects · 69.2 TiB · 3.0s elapsed · 832,641 keys/s (avg 675,334) · 0 parts · 64 in flight · 2,095 API calls
 ```
 
 From the left: what the run is doing (`listing`; `verifying` while a resume checks the parts it keeps), the
 objects listed so far (a local directory's are `entries`; a resume adds `(+N recovered)`), their total size,
 the time elapsed, keys a second now and on average, the parts published, requests in flight, API calls made,
 and an estimate of their cost where the provider's list price is known (not for Azure Blob or a custom
-endpoint). A narrow terminal drops fields from the right. There is no percentage: swath cannot know how many
-objects are left.
+endpoint), which this terminal was too narrow to show: a narrow terminal drops whole fields from the right.
+There is no percentage: swath cannot know how many objects are left.
 
 A run is making progress while the objects and API calls rise. The parts can stay at 0 for a long time, as
 here: `swath list` writes its rows in key order, so the output waits until the start of the key space has been
@@ -55,11 +55,11 @@ jq '{state, rows_fetched, object_bytes, parts_written, part_age_ms, advance, thr
 ```json
 {
   "state": "listing",
-  "rows_fetched": 2189002,
-  "object_bytes": 80890956524487,
+  "rows_fetched": 2026002,
+  "object_bytes": 76044354827022,
   "parts_written": 0,
   "part_age_ms": 3000,
-  "advance": 2247006,
+  "advance": 2078006,
   "throttles": 0,
   "inflight": 64,
   "limit": 64
@@ -82,31 +82,29 @@ holds a resumable run; delete it when you are done (`rm -r noaa-all`).
 
 ## When the run ends
 
-swath prints its closing lines on stderr. With `--stats` it adds the run's statistics:
+swath prints its closing lines on stderr:
 
 ```bash
-swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 -o stofs --stats
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 -o stofs
 ```
 
 ```text
   complete: 5,252 objects, 383 GiB in 1.0s → stofs (1 part, 121 KiB)
   next: swath show stofs · swath du --from-dataset stofs
-  32 API calls · in flight avg 3.15 · peak 11
-  <$0.001 (est. @ $0.005/1k LIST)
-  peak RSS 61.7 MiB
 ```
 
 The first line is the verdict, what was listed and its size, the time (and from 2 s the rate), and the output
 written. `next:` is what to run next: `swath show` and `swath du --from-dataset` for a committed dataset,
-`swath resume DIR` for a run that can resume. The statistics are the requests with the mean and peak in flight,
-`throttled N · retried N` when there were any, the cost estimate, and the process's peak memory. The closing
-lines print without `--stats` for runs over 1.5 s, runs that write output and runs that do not complete;
-`--no-stats` and `-q` drop them.
+`swath resume DIR` for a run that can resume. The closing lines print for runs over 1.5 s, runs that write
+output and runs that do not complete; `--no-stats` and `-q` drop them. `--stats` prints them always and adds
+the run's statistics: the requests with the mean and peak in flight, `throttled N · retried N` when there were
+any, the cost estimate where the list price is known, and the process's peak memory
+([a sample](#throttling)).
 
 The five-second run above ended this way:
 
 ```text
-  stopped: --max-duration reached; 0 saved, 3,897,746 listed in 5.0s · 778,926 keys/s → noaa-all
+  stopped: --max-duration reached; 0 saved, 3,603,746 listed in 5.0s · 720,605 keys/s → noaa-all
   next: swath resume noaa-all
 swath: deadline: --max-duration reached (swath resume noaa-all --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)
 ```
@@ -144,8 +142,8 @@ jq '{class: .outcome.class, complete: .outcome.complete, rows: .output.rows_comm
   "rows": 5252,
   "requests": 32,
   "throttles": 0,
-  "peak_rss": 64704512,
-  "wall_ms": 952
+  "peak_rss": 63320064,
+  "wall_ms": 968
 }
 ```
 
