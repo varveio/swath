@@ -301,7 +301,7 @@ frontier: workers wait at the window holding no range, the tiles held stay withi
 released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
 `TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`, `TestWindowShrinksToTheSpillCap`; `keyrange` `TestPlanTilesAsTilePrior`,
 `TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `inventory` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
-too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `cmd/swath`
+too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `command`
 `TestSIGKILLAtEveryPoint` (`s3-planned`).
 
 ## The waits
@@ -438,7 +438,7 @@ avoid.
 
 ### Drawing the view
 
-What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `cmd/swath`
+What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `command`
 `duview.go`, `textout.WriteView`); the user's account is [the view](../totals.md#the-view). The view takes the
 terminal's height less the lines printed after it (the line of totals, the unreadable and lowered-depth lines,
 the closing line, the `hint:` lines and the prompt, each counted as it wraps at the terminal's width:
@@ -843,7 +843,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   `spill-replay-frame` before each certified frame a segment reads, so the recovery points keep their meaning
   on either path. `TestSegmentsReplayCertificates` (a certificate straddling K, part and segment boundaries in
   certified frames, no certificate drained or retired while K moves at every part; the uninterrupted run's
-  parts), `TestSegmentsCertificateScanFails`, `cmd/swath` `TestSegmentsReplayDurableFiles` (resumes engaged
+  parts), `TestSegmentsCertificateScanFails`, `command` `TestSegmentsReplayDurableFiles` (resumes engaged
   and killed in their tail at `faults.SegmentPoints`, `spill-replay` and `spill-replay-frame`) and `inventory`
   `TestVersionsSegmentsReadDurableFiles` (a versions resume) cover it. The report counts the segments' share:
   `certificates_read`, `certified_rows` and `certificate_scan_ns`, beside the resume's `replayed_certificates`.

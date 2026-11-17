@@ -49,7 +49,7 @@ race tests); `publish`
 needs every leg. One unsharded run took 19.5 to 25.5 of the about 28 minutes from a tag push to
 the approval prompt, `internal/inventory` alone 1,044 to 1,369 s; the slowest shard sets that wait
 now, `cmd` at about 10 minutes in a rehearsal of the job ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
-The cost: no leg runs all the tests of `internal/inventory` or of `cmd/swath`, the two split
+The cost: no leg runs all the tests of `internal/inventory` or of `command`, the two split
 packages, in one process under the race detector, so state leaking from one of their tests into a
 test of another shard is caught only by nightly's unsharded amd64 `go-race-nightly`. The release
 does not check it: its checklist requires a successful `go-race-nightly` job on the commit being
@@ -226,7 +226,7 @@ test is selected by exactly one of its rows; whole-package rows are checked for 
 so a row whose packages have no tests passes and runs nothing. `--self-test` checks the table logic
 against synthetic package lists without Go.
 
-The heavy shards (`internal/inventory` and `cmd/swath`, split by their crash, durable, remote-crash
+The heavy shards (`internal/inventory` and `command`, split by their crash, durable, remote-crash
 and kill matrices) race on `ubuntu-24.04-arm`. Its weaker memory model makes it the better race target, and
 the same suite took about 30 % less time there (`internal/inventory` 490 s against 700 s). The
 `rest*` shards stay on amd64: that gain was measured on `internal/inventory` only, and the Parquet
@@ -246,7 +246,7 @@ splitting a package by `-run` is the lever, and `--check` keeps the split comple
 A row may also name another row's build cache. The shards of `internal/inventory` build the same
 test binary with the same flags on the same runner, and their tests build nothing else, so they
 share one cache (`go-race-inventory-rest`) instead of growing four copies; `--check` refuses a shared
-cache between rows of different packages or runners. The two `cmd/swath` shards share one too
+cache between rows of different packages or runners. The two `command` shards share one too
 (`go-race-cmd`): both build the race test binary and the swath binary with the `swathtest` tag,
 and `cmd` also builds it without the tag, a few entries it rebuilds when `cmd-kill` saved first.
 
@@ -259,7 +259,7 @@ command to rerun the shard locally.
 ### Cross-OS
 
 Ordinary PRs retain arm64 coverage for packages raced on amd64, using the complement of the shard
-table. They do not repeat `internal/inventory` and `cmd/swath` there. Full platform validation runs
+table. They do not repeat `internal/inventory` and `command` there. Full platform validation runs
 on main and dispatch, and on PRs selected by platform/dependency inputs or `ci:full`. Cross-builds
 remain on PRs. The selected-module and platform-skip details belong to
 [Go testing](../../internals/testing.md#cross-os).
@@ -270,11 +270,11 @@ beside the other packages on four vCPUs). Its full run is therefore split into l
 shards: a second table in `go-race-shards.sh` names the shards of each leg, the leg runs one
 `go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. Three
 legs of several long shards each made the slowest leg the critical path of every `main` push
-(17.6 minutes median, once 26.5 of its 30-minute limit), so each `internal/inventory` and `cmd/swath`
+(17.6 minutes median, once 26.5 of its 30-minute limit), so each `internal/inventory` and `command`
 shard is now a leg of its own (`remote-crash` takes about five minutes there, too long to ride with
 another), and the three `rest*` shards share one leg. The leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
 cache, which the stress Windows runs restore; the other legs use the build cache of their shards
-(the four `internal/inventory` legs share one, the two `cmd/swath` legs another). The nightly `go-xos-windows` runs the main module in
+(the four `internal/inventory` legs share one, the two `command` legs another). The nightly `go-xos-windows` runs the main module in
 the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
@@ -357,7 +357,7 @@ to the step summary, so a pull request shows what `main` would save. The cost: a
 did not build is not in the next run's cache, and is built again when a run needs it.
 
 Jobs that build the same packages with the same flags on one runner share a build-cache key
-rather than each saving a copy: the `internal/inventory` race shards and the `cmd/swath` race shards
+rather than each saving a copy: the `internal/inventory` race shards and the `command` race shards
 on arm64, and likewise their Windows legs, as the shard table names them. They race to save one key
 per commit; the first save wins and the others log a warning. That works because each of them
 would save the same trimmed entries, or nearly (`cmd` also builds the swath binary without the

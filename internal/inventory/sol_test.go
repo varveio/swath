@@ -76,7 +76,7 @@ func TestWatchdogWriteInFlightAtRelease(t *testing.T) {
 	var once atomic.Bool
 	restore := faults.Set(func(p string) error {
 		if p == "manifest" && once.CompareAndSwap(false, true) {
-			go pr.Owned(func() { // the watchdog's tick, as cmd/swath's supervisor writes
+			go pr.Owned(func() { // the watchdog's tick, as command's supervisor writes
 				close(entered)
 				<-finish
 				l, err := journal.TakeLock(out)

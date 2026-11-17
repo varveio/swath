@@ -99,7 +99,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
   replaces every URL flag declared by the shared flag groups (`registry.FlagGroup.URLs`, currently
   `--endpoint-url`) with `[redacted]` when it cannot parse or contains user information, `?` or `#`,
   in either argument spelling. Clean values are kept for resume. This also protects failure reports
-  and recorded arguments supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`,
+  and recorded arguments supplied to listing (`command` `TestEndpointUserinfoReports`,
   `TestEndpointQuerySecrecy`; `registry` `TestRedactEndpointArgv`). User information, queries and
   fragments in a root authority are refused before provider dispatch and redacted even on refusal. Clean roots, buckets and endpoints
   remain in diagnostics. Provider parse errors use `source.RedactRoot` to hide an unsafe authority;

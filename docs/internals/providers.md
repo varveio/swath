@@ -103,7 +103,7 @@ no flag package.
 The command imports no provider: it imports `internal/cli`, whose `init` registers them, and passes the options
 value for the root's scheme as `inventory.Config.Source.Options`, opaque to the pipeline; a test that opens a
 provider by its scheme imports `internal/cli` the same way. The command names no provider, scheme or provider flag
-(`TestImportBoundary`; `TestCommandNamesNoProvider` in `cmd/swath` is a tripwire on such spellings in its source: each constant string expression the type checker evaluates there, not values built at run time, [testing.md](testing.md)). `Open` validates the root without
+(`TestImportBoundary`; `TestCommandNamesNoProvider` in `command` is a tripwire on such spellings in its source: each constant string expression the type checker evaluates there, not values built at run time, [testing.md](testing.md)). `Open` validates the root without
 touching the output. An object store's factory also gives `KeyPrefix(root)`, the key prefix the root names
 (the provider's `KeyPrefix`, from its `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
 `logs/2026/`), taken from the root as given, before an `--include` narrows it; without one (local paths) keys
@@ -193,7 +193,7 @@ These integrations still require work outside the provider directory:
 | `reader/schema.go` | A public dataset schema specification, including version roles when applicable. A directly declared producer schema can list without reader support. |
 | `reader/rows.go` | Current-object projection in `objectColumns` and any new typed row decoder. |
 | `dataset_schema.py`, `verify.py` | Independent schema and verifier support. |
-| `cmd/swath/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
+| `command/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
 | `internal/cli/registered_test.go` | Central registration, interface, restart, locator and client-reporting coverage. |
 | `internal/inventory/producerschema_test.go` | Producer schema golden coverage (`testdata/producer-schema-*.golden`). |
 | `internal/inventory/reader_fixtures_test.go`, `scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py` | When adding conformance support: produce the schema's fixture in `TestSeekParquetFixtures`, select it in the shell runner and declare projected columns in Python's `COLUMNS`. The scripts live at the repository root. |

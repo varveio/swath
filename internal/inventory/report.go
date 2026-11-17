@@ -98,7 +98,7 @@ func (r *Report) Live() source.Requests { return r.live }
 // Profiles is the development profiles a run writes (SWATH_CPUPROFILE,
 // SWATH_MEMPROFILE), split at the end of listing so the listing and the
 // drain's tail after it are profiled apart. Diagnostics only: the caller
-// (cmd/swath) fills it.
+// (command) fills it.
 type Profiles struct {
 	// PhaseBoundaryAt is the logical boundary between the phases: the
 	// event timings.provider_finished_at records (the provider finished), taken

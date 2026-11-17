@@ -34,7 +34,9 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 
 | Path | What it is |
 |---|---|
-| `cmd/swath` | the command |
+| `cmd/swath` | the swath binary, which runs `command` |
+| `command` | the command line, as a function another Go program can call ([library](../library.md#run-the-command-line)) |
+| `*.go`, `s3/` | the experimental Go library: a live `Source` and its S3 provider ([library](../library.md)) |
 | `cmd/swath-replay` | the replay server ([swath-replay.md](swath-replay.md)) |
 | `internal/` | the lister's packages ([architecture](architecture.md#packages)) |
 | `reader/`, `objfile/` | nested modules, importable on their own ([`reader`](../../reader/README.md), [`objfile`](../../objfile/README.md)) |

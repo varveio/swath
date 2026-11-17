@@ -353,6 +353,7 @@ export default defineConfig({
             { text: 'Exit codes', link: '/docs/reference/exit-codes' },
             { text: 'Run report', link: '/docs/reference/run-report' },
             { text: 'Log events', link: '/docs/reference/log-events' },
+            { text: 'Go library', link: '/docs/library' },
           ],
         },
         {

@@ -51,7 +51,7 @@ package client
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
 //     (TestRedactedRefusal). The SDK's own log, which quotes failed
 //     requests' URLs, is not swath's: the command turns it off at startup
-//     (cmd/swath), whatever AZURE_SDK_GO_LOGGING says.
+//     (package command), whatever AZURE_SDK_GO_LOGGING says.
 //   - merge: the SDK returns a hierarchy page's blobs and prefixes as two
 //     arrays; the provider's byte-order adapter needs them as one sequence
 //     in wire (UTF-16 code-unit) order. Both arrays are in that order and

@@ -43,6 +43,26 @@ Notable changes per release. The human summary of the current release is in the
   evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
   nothing in it was unreadable, and never at or under a local entry of unknown kind
   ([reader guide](reader/README.md#the-inventory-view)).
+- `reader/listing`: `Evidence.Manifest` names its algorithm (`sha256:` and the hex digest of the manifest's
+  bytes), and `Evidence.Started` and `Finished` are each nil when the source does not know them.
+- The root package `github.com/varveio/swath` (experimental) answers `Page` and `Lookup` live: `s3.Open` opens a
+  bucket of S3 or an S3-compatible store as a `Source`, whose pages list one level by `/` with opaque tokens and
+  whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
+  `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
+  ([library guide](docs/library.md)).
+- `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
+  a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
+- `command` (experimental) is the swath command line as a function: `Main(ctx, args, stdin, stdout, stderr)` runs
+  one command line and returns its exit code, `Exit` exits with it as the binary does, and `Host` names the program
+  that embeds it, which `--version` then states. `cmd/swath` is `command.Exit(command.Main(...))`. The process-wide
+  policy is set when `Main` is called, never at import, and terminal detection follows the streams it is given
+  ([library guide](docs/library.md#run-the-command-line)).
+- In a program that embeds swath, the build that `--version`, the run report, the journal, Parquet `created_by`
+  and the User-Agent name is swath's version among the host's dependencies (`devel` for a local replacement or a
+  workspace module), not the host's version and revision.
+- The local provider can walk a directory its caller opened (`OpenDir`, Linux and macOS), bounded in depth,
+  descriptors and held names, the groundwork for a local `Source`. No command option uses it; the command lists
+  as before.
 
 ### Release
 
