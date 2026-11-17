@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The durable spill campaign over production key lists (cmd/swath's TestDurableCorpus): each list's
+# The durable spill campaign over production key lists (command's TestDurableCorpus): each list's
 # first MAX_KEYS keys (default 3,000,000) are served by a static listing fake at a 5 ms delay, and
 # the campaign's kill schedule runs against it, one list at a time.
 #
@@ -39,7 +39,7 @@ for f in "${LISTS[@]}"; do
   # shellcheck disable=SC2086
   SWATH_CORPUS_ENDPOINT=http://127.0.0.1:$PORT SWATH_CORPUS_NAME=$name SWATH_CAMPAIGN_RESULTS=$RESULTS \
     SWATH_CAMPAIGN_KEYS=$slice \
-    go test -p 1 -count=1 -timeout 3h ${GOTEST_FLAGS:-} ./cmd/swath -run '^TestDurableCorpus$' -v > "${RESULTS%.*}-$name.log" 2>&1 || rc=$?
+    go test -p 1 -count=1 -timeout 3h ${GOTEST_FLAGS:-} ./command -run '^TestDurableCorpus$' -v > "${RESULTS%.*}-$name.log" 2>&1 || rc=$?
   grep -E '^(--- FAIL|ok|FAIL)|durable_campaign_test' "${RESULTS%.*}-$name.log" || true
   [ "$rc" = 0 ] || failed=1
   kill "$kf" 2>/dev/null
