@@ -40,7 +40,7 @@ func noCredentials(t *testing.T) {
 // open opens the container at endpoint, unsigned, until the test ends.
 func open(t *testing.T, endpoint string) *swath.Source {
 	t.Helper()
-	src, err := azblob.Open(context.Background(), account+"/"+container, azblob.Options{Endpoint: endpoint, Anonymous: true})
+	src, err := azblob.Open(context.Background(), account, container, azblob.Options{Endpoint: endpoint, Anonymous: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestLookup(t *testing.T) {
 		t.Errorf("a missing key's requests %q, want %q", got, want)
 	}
 
-	nocontainer, err := azblob.Open(ctx, account+"/nocontainer", azblob.Options{Endpoint: endpoint, Anonymous: true})
+	nocontainer, err := azblob.Open(ctx, account, "nocontainer", azblob.Options{Endpoint: endpoint, Anonymous: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,15 +553,15 @@ func TestInvalidRequests(t *testing.T) {
 			t.Errorf("lookup %q: %v", key, err)
 		}
 	}
-	for _, location := range []string{"", account, account + "/", "Account/c", "ab/c", account + "/c/d"} {
-		if _, err := azblob.Open(ctx, location, azblob.Options{Anonymous: true}); !errors.Is(err, listing.ErrInvalidRequest) {
+	for _, location := range [][2]string{{"", "c"}, {account, ""}, {"Account", "c"}, {"ab", "c"}, {account, "c/d"}, {account, "c\x00"}} {
+		if _, err := azblob.Open(ctx, location[0], location[1], azblob.Options{Anonymous: true}); !errors.Is(err, listing.ErrInvalidRequest) {
 			t.Errorf("open %q: %v", location, err)
 		}
 	}
-	if _, err := azblob.Open(ctx, account+"/c", azblob.Options{Anonymous: true, MaxRequests: -1}); !errors.Is(err, listing.ErrInvalidRequest) {
+	if _, err := azblob.Open(ctx, account, "c", azblob.Options{Anonymous: true, MaxRequests: -1}); !errors.Is(err, listing.ErrInvalidRequest) {
 		t.Errorf("open with a negative bound: %v", err)
 	}
-	if _, err := azblob.Open(ctx, account+"/c", azblob.Options{Anonymous: true, Endpoint: "ftp://x"}); !errors.Is(err, listing.ErrUnsupported) {
+	if _, err := azblob.Open(ctx, account, "c", azblob.Options{Anonymous: true, Endpoint: "ftp://x"}); !errors.Is(err, listing.ErrUnsupported) {
 		t.Errorf("open with an ftp endpoint: %v", err)
 	}
 	if got := sent.list(); len(got) != 0 {
@@ -581,11 +581,11 @@ func TestRedaction(t *testing.T) {
 		t.Errorf("a page: %v, want ErrInvalidPage without the credentials", err)
 	}
 
-	_, err = azblob.Open(context.Background(), secret, azblob.Options{Anonymous: true})
+	_, err = azblob.Open(context.Background(), account, secret, azblob.Options{Anonymous: true})
 	if !errors.Is(err, listing.ErrInvalidRequest) || strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("open: %v, want ErrInvalidRequest without the credentials", err)
 	}
-	_, err = azblob.Open(context.Background(), account+"/c", azblob.Options{Anonymous: true, Endpoint: secret})
+	_, err = azblob.Open(context.Background(), account, "c", azblob.Options{Anonymous: true, Endpoint: secret})
 	if !errors.Is(err, listing.ErrUnsupported) || strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("open an endpoint: %v, want ErrUnsupported without the credentials", err)
 	}

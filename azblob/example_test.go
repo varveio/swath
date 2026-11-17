@@ -18,7 +18,7 @@ import (
 // never absent.
 func Example() {
 	ctx := context.Background()
-	src, err := azblob.Open(ctx, "exampleaccount/logs", azblob.Options{})
+	src, err := azblob.Open(ctx, "exampleaccount", "logs", azblob.Options{})
 	if err != nil {
 		log.Fatal(err)
 	}

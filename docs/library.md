@@ -213,10 +213,10 @@ request and a lookup's HeadObject and HeadBucket as metadata requests.
 
 ## Azure Blob Storage
 
-`azblob.Open` takes the account and the container as `ACCOUNT/CONTAINER`:
+`azblob.Open` takes the account and the container:
 
 ```go
-src, err := azblob.Open(ctx, "exampleaccount/logs", azblob.Options{})
+src, err := azblob.Open(ctx, "exampleaccount", "logs", azblob.Options{})
 if err != nil {
 	log.Fatal(err)
 }
