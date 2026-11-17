@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
@@ -21,7 +22,7 @@ import (
 )
 
 // The list commands as typed (command.name), which a flag's table entry
-// names in source.Flag.Commands.
+// names in cli.Flag.Commands.
 const (
 	cmdList      = "list"
 	cmdDu        = "du"
@@ -38,7 +39,7 @@ var partFlags = []string{"part-size", "part-interval", "part-max-rows"}
 
 // appendTo is a repeatable flag's value: each value given is added to *p.
 func appendTo(p *[]string) pflag.Value {
-	return source.Func(func(v string) error { *p = append(*p, v); return nil })
+	return cli.Func(func(v string) error { *p = append(*p, v); return nil })
 }
 
 // newFlags is the flag set of swath list (diag false) or swath diag list
@@ -65,138 +66,138 @@ func newFlags(o *options, diag bool) *pflag.FlagSet {
 // spelling too (undoFlags).
 func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	f.SortFlags = false
-	def := func(fl source.Flag) { source.Define(f, fl) }
+	def := func(fl cli.Flag) { cli.Define(f, fl) }
 
 	o.depth, o.maxPrefixes, o.maxInodes = 0, totals.DefaultMaxPrefixes, totals.DefaultMaxInodes
-	def(source.Flag{Name: "depth", Short: "d", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
+	def(cli.Flag{Name: "depth", Short: "d", Value: cli.Count(&o.depth, 0), Metavar: "N", Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "also total each prefix down to N levels below SOURCE (0: the total)",
 		Long:  "A prefix ends at a '/'; each includes what is below it, as du. --max-depth N, GNU du's spelling, is the same. Without it, a terminal shows the view instead: the largest prefixes and objects at any depth."})
 	// GNU du's --max-depth limits the rows printed, as --depth does: a
 	// second spelling, kept out of the help.
-	source.Define(f, source.Flag{Name: "max-depth", Value: source.Count(&o.depth, 0), Metavar: "N", Group: source.GroupTotals, Commands: []string{cmdDu},
+	cli.Define(f, cli.Flag{Name: "max-depth", Value: cli.Count(&o.depth, 0), Metavar: "N", Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "the same as --depth"}).Hidden = true
-	def(source.Flag{Name: "allocated", Value: source.Switch(&o.allocated), Group: source.GroupTotals, Commands: []string{cmdDu},
+	def(cli.Flag{Name: "allocated", Value: cli.Switch(&o.allocated), Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: show and --sort size by the files' allocated bytes (on disk)",
 		Long: "The files' st_blocks x 512: the table's one figure, the line under it giving the lengths; TSV and JSONL rows carry both either way. " +
 			"A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count."})
-	def(source.Flag{Name: "apparent-size", Value: source.Switch(&o.apparentSize), Group: source.GroupTotals, Commands: []string{cmdDu},
+	def(cli.Flag{Name: "apparent-size", Value: cli.Switch(&o.apparentSize), Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "show and --sort size by the lengths (the default)",
 		Long:  "Not with --allocated."})
-	def(source.Flag{Name: "count-links", Short: "l", Value: source.Switch(&o.countLinks), Group: source.GroupTotals, Commands: []string{cmdDu},
+	def(cli.Flag{Name: "count-links", Short: "l", Value: cli.Switch(&o.countLinks), Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links under each of its names",
 		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and Windows, read no links: every name counts there."})
 	o.sortBy = sortName
-	def(source.Flag{Name: "sort", Value: source.Text(&o.sortBy), Metavar: "name|size", Default: sortName, Group: source.GroupTotals, Commands: []string{cmdDu},
+	def(cli.Flag{Name: "sort", Value: cli.Text(&o.sortBy), Metavar: "name|size", Default: sortName, Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "order prefixes by name, or by size, largest first",
 		Long:  "By size the prefixes below each parent are ordered, each still above its own; the total keeps its place (last in the table, first in TSV and JSONL), and a prefix of unknown size comes last."})
-	def(source.Flag{Name: "max-prefixes", Value: source.Count(&o.maxPrefixes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxPrefixes),
-		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "fail rather than hold more than N distinct prefixes",
+	def(cli.Flag{Name: "max-prefixes", Value: cli.Count(&o.maxPrefixes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxPrefixes),
+		Group: cli.GroupTotals, Commands: []string{cmdDu}, Usage: "fail rather than hold more than N distinct prefixes",
 		Long: "Raise it for a deep --depth over a wide tree when memory allows (about 150 bytes a prefix); it bounds memory, never the objects counted."})
-	def(source.Flag{Name: "max-inodes", Value: source.Count(&o.maxInodes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxInodes),
-		Group: source.GroupTotals, Commands: []string{cmdDu}, Usage: "local: the most hard-linked files to remember",
+	def(cli.Flag{Name: "max-inodes", Value: cli.Count(&o.maxInodes, 1), Metavar: "N", Default: strconv.Itoa(totals.DefaultMaxInodes),
+		Group: cli.GroupTotals, Commands: []string{cmdDu}, Usage: "local: the most hard-linked files to remember",
 		Long: "Unless --count-links. Raise it for a tree of more hard-linked files when memory allows (about 100 bytes each)."})
-	def(source.Flag{Name: "from-dataset", Value: source.Text(&o.fromDataset), Metavar: "DIR", Shown: source.ShownURL, Group: source.GroupTotals, Commands: []string{cmdDu},
+	def(cli.Flag{Name: "from-dataset", Value: cli.Text(&o.fromDataset), Metavar: "DIR", Shown: cli.ShownURL, Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "total the dataset saved in DIR (swath list -o DIR) instead of listing",
 		Long: "An optional SOURCE, the dataset's source as listed or a path or URL below it, restricts the totals to it, sought rather than scanned. DIR is a local dataset directory; " +
 			"without this option swath du DIR totals DIR's own files. Options that shape a listing are refused. Stderr names the dataset's source, " +
 			"when it was listed and what its listing covered."})
 
-	def(source.Flag{Name: "output", Short: "o", Shown: source.ShownURL, Value: source.Text(&o.out), Metavar: "PATH", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "output", Short: "o", Shown: cli.ShownURL, Value: cli.Text(&o.out), Metavar: "PATH", Group: cli.GroupOutput, Commands: writing,
 		Usage: "a dataset DIR, a .tsv or .jsonl file (.gz, .zst), or - (stdout)",
 		Long:  "A name ending in .parquet is refused unless it ends in / (an explicit directory). A file's name says its format; a --format that agrees with it is accepted."})
-	def(source.Flag{Name: "format", Value: source.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: source.GroupOutput,
+	def(cli.Flag{Name: "format", Value: cli.Text(&o.format), Metavar: "auto|table|tsv|jsonl", Group: cli.GroupOutput,
 		Commands: []string{cmdList, cmdDu, cmdDiagList}, Usage: "on stdout: auto is the table on a terminal, TSV otherwise"})
-	def(source.Flag{Name: "no-header", Value: source.Switch(&o.noHeader), Group: source.GroupOutput, Commands: []string{cmdList, cmdDu, cmdDiagList},
+	def(cli.Flag{Name: "no-header", Value: cli.Switch(&o.noHeader), Group: cli.GroupOutput, Commands: []string{cmdList, cmdDu, cmdDiagList},
 		Usage: "TSV: leave out the header line of column names",
 		Long:  "Not with the table, JSONL or a dataset; on a terminal the rows are then TSV."})
-	def(source.Flag{Name: "columns", Metavar: "NAME[,NAME...]", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "columns", Metavar: "NAME[,NAME...]", Group: cli.GroupOutput, Commands: writing,
 		Usage: "TSV and JSONL: these columns, in order (repeatable)",
 		Long:  "By the dataset's column names; a name the source's schema lacks is refused, listing its columns. Not with the table or a dataset; on a terminal the rows are then TSV.",
-		Value: source.Func(names(&o.columns))})
-	def(source.Flag{Name: "overwrite", Familiar: []string{"force", "restart"}, Value: source.Switch(&o.overwrite), Group: source.GroupOutput, Commands: writing,
+		Value: cli.Func(names(&o.columns))})
+	def(cli.Flag{Name: "overwrite", Familiar: []string{"force", "restart"}, Value: cli.Switch(&o.overwrite), Group: cli.GroupOutput, Commands: writing,
 		Usage: "replace a previous dataset in -o"})
-	def(source.Flag{Name: "work-dir", Value: source.Text(&o.workDir), Metavar: "DIR", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "work-dir", Value: cli.Text(&o.workDir), Metavar: "DIR", Group: cli.GroupOutput, Commands: writing,
 		Usage: "with a bucket -o: the local work directory (lock, journal, spill)",
 		Long:  "Required when -o is a bucket prefix (GCS, S3 or Azure Blob), and only then. It holds what a resume needs, never a part: swath resume DIR continues the run. Size it for the spill budget, the journal and receipts, and a reserve."})
-	def(source.Flag{Name: "output-gcs-credentials-file", Value: source.Text(&o.outputCreds), Metavar: "FILE", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "output-gcs-credentials-file", Value: cli.Text(&o.outputCreds), Metavar: "FILE", Group: cli.GroupOutput, Commands: writing,
 		Usage: "credentials for a GCS -o (default: Application Default Credentials)",
 		Long:  "A service account key or authorized-user JSON, with the read-write scope. The destination's own: the source's credentials and --anonymous never apply to it. It may change on resume."})
-	def(source.Flag{Name: "output-s3-region", Familiar: []string{"output-region"}, Value: source.Text(&o.outputRegion), Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "output-s3-region", Familiar: []string{"output-region"}, Value: cli.Text(&o.outputRegion), Metavar: "NAME", Group: cli.GroupOutput, Commands: writing,
 		Usage: "the region of an S3 -o",
 		Long:  "Default: AWS_REGION, AWS_DEFAULT_REGION, the --output-s3-profile's, else us-east-1. The region resolved is fixed for the run."})
-	def(source.Flag{Name: "output-s3-profile", Familiar: []string{"output-profile"}, Value: source.Text(&o.outputProfile), Metavar: "NAME", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "output-s3-profile", Familiar: []string{"output-profile"}, Value: cli.Text(&o.outputProfile), Metavar: "NAME", Group: cli.GroupOutput, Commands: writing,
 		Usage: "the shared config profile an S3 -o takes credentials (and region) from",
 		Long:  "Default: the AWS SDK chain (environment, AWS_PROFILE or default, SSO, web identity, IMDS). The destination's own: the source's credentials and --anonymous never apply to it, and its requests are always signed. It may change on resume."})
-	def(source.Flag{Name: "output-azure-sas-token", Shown: source.ShownNever, Value: source.Text(&o.outputSAS), Metavar: "TOKEN", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "output-azure-sas-token", Shown: cli.ShownNever, Value: cli.Text(&o.outputSAS), Metavar: "TOKEN", Group: cli.GroupOutput, Commands: writing,
 		Usage: "a shared access signature for an Azure -o; never recorded",
 		Long:  "Default: Entra ID (DefaultAzureCredential). The destination's own: the source's SAS, key and --anonymous never apply to it. Give it again to swath resume; it may change there."})
-	def(source.Flag{Name: "output-endpoint-url", Shown: source.ShownURL, Value: source.Text(&o.outputEndpoint), Metavar: "URL", Group: source.GroupOutput, Commands: writing,
+	def(cli.Flag{Name: "output-endpoint-url", Shown: cli.ShownURL, Value: cli.Text(&o.outputEndpoint), Metavar: "URL", Group: cli.GroupOutput, Commands: writing,
 		Usage: "the endpoint of a bucket -o (default: the provider's)",
 		Long:  "GCS's JSON API base, an S3-compatible endpoint URL, or an Azure blob service base. GCS: as the SDK takes it (https://storage.googleapis.com/storage/v1/). S3: addressed path-style; AWS_ENDPOINT_URL and AWS_ENDPOINT_URL_S3 are never applied to the destination. Azure: the account is its first path segment, as for an emulator (http://127.0.0.1:10000 serves ENDPOINT/ACCOUNT/CONTAINER). Fixed for the run."})
 
-	def(source.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: source.GroupFilters,
+	def(cli.Flag{Name: "include", Value: appendTo(&o.filter.Include), Metavar: "GLOB", Group: cli.GroupFilters,
 		Usage: "keep keys this glob matches (repeatable: any of them)",
 		Long: "Matched against the key below SOURCE: with a '/' from SOURCE's root (logs/*.gz), without one the last segment at any depth (*.gz). " +
 			"* and ? stay within a segment, ** is whole segments, [a-z], [!a-z], {a,b}, \\c. Includes sharing a literal prefix narrow the listed prefix. Filters select rows; recursive excludes can also prune local traversal."})
-	def(source.Flag{Name: "exclude", Value: appendTo(&o.filter.Exclude), Metavar: "GLOB", Group: source.GroupFilters,
+	def(cli.Flag{Name: "exclude", Value: appendTo(&o.filter.Exclude), Metavar: "GLOB", Group: cli.GroupFilters,
 		Usage: "drop keys this glob matches (repeatable; beats any include)",
 		Long:  "Matched as --include is. dir/ drops a directory's own row, dir/** the rows below it. Local trees skip traversal below directories covered by a terminal /**; other excludes only filter rows."})
-	def(source.Flag{Name: "include-regex", Value: appendTo(&o.filter.IncludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
+	def(cli.Flag{Name: "include-regex", Value: appendTo(&o.filter.IncludeRegex), Metavar: "REGEX", Group: cli.GroupFilters,
 		Usage: "keep keys this RE2 regex matches anywhere in the key (repeatable)",
 		Long:  "Matched against the key below SOURCE, as a glob is, on every source: ^b/ is SOURCE's b/. Any include, glob or regex, keeps a key. ^ with a literal prefix narrows the listed prefix as a glob's does."})
-	def(source.Flag{Name: "exclude-regex", Value: appendTo(&o.filter.ExcludeRegex), Metavar: "REGEX", Group: source.GroupFilters,
+	def(cli.Flag{Name: "exclude-regex", Value: appendTo(&o.filter.ExcludeRegex), Metavar: "REGEX", Group: cli.GroupFilters,
 		Usage: "drop keys this RE2 regex matches anywhere in the key (repeatable)"})
-	def(source.Flag{Name: "min-size", Value: source.Text(&o.filter.MinSize), Metavar: "SIZE", Group: source.GroupFilters,
+	def(cli.Flag{Name: "min-size", Value: cli.Text(&o.filter.MinSize), Metavar: "SIZE", Group: cli.GroupFilters,
 		Usage: "keep objects (local: entries) of at least this size (1K, 1.5GiB)",
 		Long:  "Every SIZE: bytes, or K, M, G, T and KiB, MiB, GiB, TiB (binary) or KB, MB, GB, TB (decimal), any case."})
-	def(source.Flag{Name: "max-size", Value: source.Text(&o.filter.MaxSize), Metavar: "SIZE", Group: source.GroupFilters,
+	def(cli.Flag{Name: "max-size", Value: cli.Text(&o.filter.MaxSize), Metavar: "SIZE", Group: cli.GroupFilters,
 		Usage: "keep objects or entries of at most this size"})
-	def(source.Flag{Name: "modified-since", Value: source.Text(&o.filter.Since), Metavar: "TIME", Group: source.GroupFilters,
+	def(cli.Flag{Name: "modified-since", Value: cli.Text(&o.filter.Since), Metavar: "TIME", Group: cli.GroupFilters,
 		Usage: "keep objects or entries modified at or after TIME (2026-01-01, 7d)",
 		Long:  "2026-01-01, 2026-01-01T12:00 or 2026-01-01 12:00:00 is local time (TZ), as the tables print it; with Z or an offset, that zone. A duration (7d, 12h) is that long before the run started. Either is recorded as the UTC time it names."})
-	def(source.Flag{Name: "modified-until", Value: source.Text(&o.filter.Until), Metavar: "TIME", Group: source.GroupFilters,
+	def(cli.Flag{Name: "modified-until", Value: cli.Text(&o.filter.Until), Metavar: "TIME", Group: cli.GroupFilters,
 		Usage: "keep objects or entries modified at or before this time"})
-	def(source.Flag{Name: "storage-class", Metavar: "NAME[,NAME...]", Group: source.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
+	def(cli.Flag{Name: "storage-class", Metavar: "NAME[,NAME...]", Group: cli.GroupFilters, Usage: "keep objects in these storage classes (STANDARD,GLACIER; repeatable)",
 		Long:  "In any case; an object without one is in none. Azure Blob: the access tier (Hot, Cool, Cold, Archive).",
-		Value: source.Func(names(&o.filter.StorageClasses))})
+		Value: cli.Func(names(&o.filter.StorageClasses))})
 
 	o.partSize, o.partInterval, o.stall = listing.DefaultPartSize, listing.DefaultPartInterval, 10*time.Minute
-	def(source.Flag{Name: "workers", Familiar: []string{"concurrency"}, Short: "j", Value: source.Count(&o.workers, 1), Metavar: "N", Group: source.GroupPerformance,
+	def(cli.Flag{Name: "workers", Familiar: []string{"concurrency"}, Short: "j", Value: cli.Count(&o.workers, 1), Metavar: "N", Group: cli.GroupPerformance,
 		Usage: "listing workers (default 64; a local tree: 4 per CPU, at most 64)",
 		Long:  "Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default."})
-	def(source.Flag{Name: "encoders", Value: source.Count(&o.encoders, 1), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
+	def(cli.Flag{Name: "encoders", Value: cli.Count(&o.encoders, 1), Metavar: "N", Group: cli.GroupPerformance, Commands: writing,
 		Usage: "Parquet encoders, or a .zst file's compression jobs (default: CPUs)",
 		Long:  "Lower it to leave cores to other work; the default follows GOMAXPROCS, the descriptor limit and an encoder allowance of 1/16 of memory (as the default sort buffer, whatever --sort-buffer says; at most 1GiB). An explicit count is kept, with a warning when they cannot carry it."})
-	def(source.Flag{Name: "sort-buffer", Value: &o.rowBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
+	def(cli.Flag{Name: "sort-buffer", Value: &o.rowBudget, Metavar: "SIZE", Group: cli.GroupPerformance, Commands: writing,
 		Usage: "bytes buffered for sorted output; not a total-memory limit",
 		Long:  "Rows listed ahead of the output, the output queues and the scheduler's metadata. Past it rows spill to disk; with no spill space listing waits. Request pages, directory reads, writers, compression and the Go runtime are extra, and the tail after listing holds about one more; encoders are admitted against an allowance of their own, so this sizes rows only. Default: 1/16 of the least of detected physical memory, the cgroup's limit and GOMEMLIMIT, at most 1GiB (128MiB when none is detected; the report's diagnostics.sort_buffer says which). Raise it when spill is heavy and memory is free; to use less memory lower it with --workers and --encoders."})
-	def(source.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: source.GroupPerformance, Commands: writing,
+	def(cli.Flag{Name: "spill-budget", Value: &o.spillBudget, Metavar: "SIZE", Group: cli.GroupPerformance, Commands: writing,
 		Usage: "fixed cap on spill (default: follows the spill disk's free space)",
 		Long:  "By default spill may use the spill filesystem's free space after a reserve (half of it unless the dataset is in a bucket, as the output shares it), re-read while it holds listing back, so a disk grown under a live run is used. Set it when the filesystem is shared with other work. Past it, or at the reserve, listing waits instead of spilling."})
-	def(source.Flag{Name: "part-size", Familiar: []string{"parquet-part-size"}, Value: &o.partSize, Metavar: "SIZE", Default: sizeText(listing.DefaultPartSize), Group: source.GroupPerformance, Commands: writing,
+	def(cli.Flag{Name: "part-size", Familiar: []string{"parquet-part-size"}, Value: &o.partSize, Metavar: "SIZE", Default: sizeText(listing.DefaultPartSize), Group: cli.GroupPerformance, Commands: writing,
 		Usage: "target size of a Parquet part",
 		Long:  "Smaller parts for readers that load whole parts, larger for fewer files on a very large listing."})
-	def(source.Flag{Name: "part-interval", Familiar: []string{"part-rotation-interval"}, Value: source.Duration(&o.partInterval), Metavar: "DURATION", Default: source.FormatDuration(listing.DefaultPartInterval),
-		Group: source.GroupPerformance, Commands: writing, Usage: "close a part with rows after this long, full or not",
+	def(cli.Flag{Name: "part-interval", Familiar: []string{"part-rotation-interval"}, Value: cli.Duration(&o.partInterval), Metavar: "DURATION", Default: source.FormatDuration(listing.DefaultPartInterval),
+		Group: cli.GroupPerformance, Commands: writing, Usage: "close a part with rows after this long, full or not",
 		Long: "0: by size only. Lower it to close parts sooner on a slow listing (it bounds how long rows wait in an open part, not how much a resume repeats: a closed part still publishes in order); 0 for part boundaries independent of timing."})
-	def(source.Flag{Name: "part-max-rows", Familiar: []string{"part-rotation-max-rows"}, Value: source.Count64(&o.partMaxRows, 0), Metavar: "N", Group: source.GroupPerformance, Commands: writing,
+	def(cli.Flag{Name: "part-max-rows", Familiar: []string{"part-rotation-max-rows"}, Value: cli.Count64(&o.partMaxRows, 0), Metavar: "N", Group: cli.GroupPerformance, Commands: writing,
 		Usage: "also close a part at N rows (0: by size and --part-interval only)",
 		Long:  "Set it when readers want parts of a bounded row count; it is fixed for the run."})
-	def(source.Flag{Name: "seed-from", Value: source.Text(&o.seedFrom), Metavar: "PATH", Group: source.GroupPerformance,
+	def(cli.Flag{Name: "seed-from", Value: cli.Text(&o.seedFrom), Metavar: "PATH", Group: cli.GroupPerformance,
 		Usage: "object stores: start from a previous listing's key distribution",
 		Long:  "A committed dataset of the same source and scope (its cuts.txt, else its parts' key page index), or a cut file (one key per line, ascending bytewise, optionally TAB and the keys expected since the previous cut; a bucket dataset's cuts.txt is one); the engine still splits adaptively."})
 
-	def(source.Flag{Name: "max-duration", Value: source.Duration(&o.maxDuration), Metavar: "DURATION", Group: source.GroupLimits,
+	def(cli.Flag{Name: "max-duration", Value: cli.Duration(&o.maxDuration), Metavar: "DURATION", Group: cli.GroupLimits,
 		Usage: "stop the run after this long (exit 124); 0: no limit",
 		Long:  "Give every unattended run one. Only a dataset run of an object store (one with a journal) resumes where it stopped; text output and swath du run again."})
-	def(source.Flag{Name: "stall-timeout", Familiar: []string{"idle-timeout", "no-progress-timeout"}, Value: source.Duration(&o.stall), Metavar: "DURATION", Default: source.FormatDuration(o.stall), Group: source.GroupLimits,
+	def(cli.Flag{Name: "stall-timeout", Familiar: []string{"idle-timeout", "no-progress-timeout"}, Value: cli.Duration(&o.stall), Metavar: "DURATION", Default: source.FormatDuration(o.stall), Group: cli.GroupLimits,
 		Usage: "stop as stuck after this long without progress (exit 75)",
 		Long:  "0: never. Raise it for a service that is slow to answer for minutes at a time. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
-	def(source.Flag{Name: "spill-wait-timeout", Value: source.Duration(&o.spillWait), Metavar: "DURATION", Group: source.GroupLimits, Commands: writing,
+	def(cli.Flag{Name: "spill-wait-timeout", Value: cli.Duration(&o.spillWait), Metavar: "DURATION", Group: cli.GroupLimits, Commands: writing,
 		Usage: "stop after waiting this long on a full spill cap (exit 74); 0: wait",
 		Long:  "Listing waits on the output while spill is refused, which on a large bucket can be close to a stall; after 2 minutes swath says so. Set it on an unattended run to stop instead (cause spill_budget), then resume with more disk or a larger --spill-budget. Only a dataset run of an object store (one with a journal) resumes where it stopped."})
 
-	def(source.Flag{Name: "report", Value: source.Text(&o.report), Metavar: "FILE", Group: source.GroupReporting,
+	def(cli.Flag{Name: "report", Value: cli.Text(&o.report), Metavar: "FILE", Group: cli.GroupReporting,
 		Usage: "write the run report (JSON) to FILE, or - for stdout, at the end",
 		Long: "Written on failure too, with the outcome and the attempt id; not for a command line that does not parse (an unknown flag, a bad value). " +
 			"A directory, or a name whose directory does not exist, is refused before listing; a report that cannot be written at the end fails the command (exit 1). - is refused where stdout carries rows."})
@@ -206,15 +207,15 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	if diag {
 		// The spill frame format is a runtime choice (and on resume: spill
 		// is disposable, so a resume's frames never meet the crashed run's).
-		def(source.Flag{Name: "no-spill-compress", Value: source.Off(&o.spillCompress), Commands: []string{cmdDiagList},
+		def(cli.Flag{Name: "no-spill-compress", Value: cli.Off(&o.spillCompress), Commands: []string{cmdDiagList},
 			Usage: "write spill frames uncompressed (not zstd level 1)"})
-		def(source.Flag{Name: "spill-plain", Value: source.Switch(&o.spillPlain), Commands: []string{cmdDiagList},
+		def(cli.Flag{Name: "spill-plain", Value: cli.Switch(&o.spillPlain), Commands: []string{cmdDiagList},
 			Usage: "write spill frames without delta coding (a comparison arm)"})
-		def(source.Flag{Name: "no-journal", Value: source.Switch(&o.noJournal), Commands: []string{cmdDiagList},
+		def(cli.Flag{Name: "no-journal", Value: cli.Switch(&o.noJournal), Commands: []string{cmdDiagList},
 			Usage: "publish parts only at the end, without the journal resume needs"})
-		def(source.Flag{Name: "no-spill", Value: source.Switch(&o.noSpill), Commands: []string{cmdDiagList},
+		def(cli.Flag{Name: "no-spill", Value: cli.Switch(&o.noSpill), Commands: []string{cmdDiagList},
 			Usage: "wait on the sort buffer instead of spilling rows to disk"})
-		def(source.Flag{Name: "spill-reserve", Value: &o.spillReserve, Metavar: "SIZE", Commands: []string{cmdDiagList},
+		def(cli.Flag{Name: "spill-reserve", Value: &o.spillReserve, Metavar: "SIZE", Commands: []string{cmdDiagList},
 			Usage: "free space spill leaves on its filesystem (0: derived)",
 			Long:  "Derived: one part per encoder, at least 1 GiB."})
 	}
@@ -245,16 +246,16 @@ func registerProviders(f *pflag.FlagSet, o *options, diag bool) {
 		})
 		return flags
 	}
-	shared, groupFlags := source.SharedValues{}, map[*source.FlagGroup][]*pflag.Flag{}
+	shared, groupFlags := registry.SharedValues{}, map[*registry.FlagGroup][]*pflag.Flag{}
 	for _, g := range registry.Groups() {
 		groupFlags[g] = added(func() { shared[g] = g.Flags(f, diag) })
 		for _, fl := range groupFlags[g] {
-			source.SetGroup(fl, source.GroupStores)
+			cli.SetGroup(fl, cli.GroupStores)
 		}
 	}
-	o.allVersions = f.Lookup(source.AllVersionsFlag) // the terminal's nouns (rowNouns)
+	o.allVersions = f.Lookup(cli.AllVersionsFlag) // the terminal's nouns (rowNouns)
 	for _, p := range registry.Factories() {
-		named := source.SharedValues{}
+		named := registry.SharedValues{}
 		for _, g := range p.Shared {
 			named[g] = shared[g]
 			for _, fl := range groupFlags[g] {
@@ -263,7 +264,7 @@ func registerProviders(f *pflag.FlagSet, o *options, diag bool) {
 		}
 		for _, fl := range added(func() { o.sources[p.Scheme] = p.Flags(f, diag, named) }) {
 			o.owners[fl.Name] = append(o.owners[fl.Name], p.Scheme)
-			source.SetGroup(fl, p.Title)
+			cli.SetGroup(fl, p.Title)
 		}
 	}
 	// The totals' du flags read columns only the local schema has
@@ -296,8 +297,8 @@ func undoFlags(f *pflag.FlagSet, o *options) {
 		if fl == nil || fl.Value.Type() != "bool" || f.Lookup(undoName(n)) != nil {
 			continue
 		}
-		d := source.Described(fl)
-		u := source.Define(f, source.Flag{Name: undoName(n), Value: inverse{fl.Value}, Group: d.Group, Commands: d.Commands,
+		d := cli.Described(fl)
+		u := cli.Define(f, cli.Flag{Name: undoName(n), Value: inverse{fl.Value}, Group: d.Group, Commands: d.Commands,
 			Usage: "undo a recorded --" + n})
 		u.Hidden = true
 		if own, ok := o.owners[n]; ok {
@@ -466,7 +467,7 @@ func parseFlags(f *pflag.FlagSet, cmd string, args []string, accept func(*pflag.
 		}
 		return p, usage(errors.New("unknown flag " + typed + suggestFlag(f, cmd, ne.GetSpecifiedName())))
 	case errors.As(err, &ve):
-		return p, usage(fmt.Errorf("--%s needs a value (%s)", ve.GetFlag().Name, source.Described(ve.GetFlag()).Metavar))
+		return p, usage(fmt.Errorf("--%s needs a value (%s)", ve.GetFlag().Name, cli.Described(ve.GetFlag()).Metavar))
 	case errors.As(err, &ie):
 		return p, usage(fmt.Errorf("--%s %q: %w", ie.GetFlag().Name, shownValue(ie.GetFlag(), ie.GetValue()), errors.Unwrap(ie)))
 	}
@@ -559,12 +560,12 @@ func askedFormat(flags []argFlag) string {
 }
 
 // shownValue is fl's value as a recorded or reported command line, or an
-// error, shows it: by its table entry (source.Flag.Shown).
+// error, shows it: by its table entry (cli.Flag.Shown).
 func shownValue(fl *pflag.Flag, value string) string {
-	switch source.Described(fl).Shown {
-	case source.ShownNever:
+	switch cli.Described(fl).Shown {
+	case cli.ShownNever:
 		return redacted
-	case source.ShownURL:
+	case cli.ShownURL:
 		return registry.RedactPlace(value)
 	}
 	return value
@@ -572,7 +573,7 @@ func shownValue(fl *pflag.Flag, value string) string {
 
 // duSpellings are GNU du's spellings that swath du takes another way: what
 // an unknown-flag error on swath du says in their place. A plain synonym
-// is the flag's source.Flag.Familiar instead.
+// is the flag's cli.Flag.Familiar instead.
 var duSpellings = map[string]string{
 	"s":         "the total alone is the default: --depth 0",
 	"summarize": "the total alone is the default: --depth 0",
@@ -590,7 +591,7 @@ var oldSpellings = map[string]string{
 // suggestFlag is the " (did you mean --x?)" of an unknown flag name on
 // command cmd: what swath du takes for a GNU du spelling (duSpellings, on
 // swath du only), what a 0.3 flag became (oldSpellings), a flag that names
-// it as another tool's spelling (source.Flag.Familiar), else the visible
+// it as another tool's spelling (cli.Flag.Familiar), else the visible
 // flag nearest it within two edits; "" for none.
 func suggestFlag(f *pflag.FlagSet, cmd, name string) string {
 	if s, ok := duSpellings[name]; ok && cmd == cmdDu {
@@ -604,7 +605,7 @@ func suggestFlag(f *pflag.FlagSet, cmd, name string) string {
 		if fl.Hidden {
 			return
 		}
-		if slices.Contains(source.Described(fl).Familiar, name) {
+		if slices.Contains(cli.Described(fl).Familiar, name) {
 			best, dist = fl.Name, -1
 		}
 		if d := editDistance(name, fl.Name); d < dist {

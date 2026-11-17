@@ -15,8 +15,8 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/source"
 )
 
 // helpStyle is how help is printed: its width, bold headings and flag
@@ -101,7 +101,7 @@ const nameColumn = 30
 // flagNames is fl's left column: its short form, its long name and its
 // value's placeholder, and the column's width without styling.
 func flagNames(fl *pflag.Flag, s helpStyle) (string, int) {
-	d := source.Described(fl)
+	d := cli.Described(fl)
 	short := "    "
 	if fl.Shorthand != "" {
 		short = s.strong("-"+fl.Shorthand) + ", "
@@ -123,7 +123,7 @@ func flagNames(fl *pflag.Flag, s helpStyle) (string, int) {
 // under the description.
 func writeFlags(b *strings.Builder, flags []*pflag.Flag, s helpStyle, col int) {
 	for _, fl := range flags {
-		d := source.Described(fl)
+		d := cli.Described(fl)
 		names, n := flagNames(fl, s)
 		desc := d.Usage
 		if d.Default != "" {
@@ -166,28 +166,28 @@ func column(flags []*pflag.Flag) int {
 // Azure Blob, and the local tree last), then performance, limits,
 // reporting and the diagnostics.
 func groupOrder() []string {
-	order := []string{source.GroupTotals, source.GroupOutput, source.GroupFilters, source.GroupStores}
+	order := []string{cli.GroupTotals, cli.GroupOutput, cli.GroupFilters, cli.GroupStores}
 	fs := registry.Factories()
 	for i := len(fs) - 1; i >= 0; i-- {
 		order = append(order, fs[i].Title)
 	}
-	return append(order, source.GroupPerformance, source.GroupLimits, source.GroupReporting, source.GroupDiagnostics)
+	return append(order, cli.GroupPerformance, cli.GroupLimits, cli.GroupReporting, cli.GroupDiagnostics)
 }
 
 // groupOf is fl's help group: the diagnostics for a flag only swath diag
 // takes, else its table entry's.
 func groupOf(fl *pflag.Flag) string {
 	if diagOnly()[fl.Name] {
-		return source.GroupDiagnostics
+		return cli.GroupDiagnostics
 	}
-	return source.Described(fl).Group
+	return cli.Described(fl).Group
 }
 
 // shown reports whether cmd's help lists fl: a flag the command takes;
 // swath diag list shows its diagnostic flags only (swath list --help has
 // the rest), swath diag count every flag it takes.
 func shown(fl *pflag.Flag, cmd command) bool {
-	cmds := source.Described(fl).Commands
+	cmds := cli.Described(fl).Commands
 	switch {
 	case fl.Hidden, cmds != nil && !slices.Contains(cmds, cmd.name()):
 		return false
@@ -311,7 +311,7 @@ func helpOf(cmd command) commandHelp {
 
 // shortGroups are the groups a list command's short help (-h) shows; the
 // rest wait for --help (shortTail).
-var shortGroups = []string{source.GroupTotals, source.GroupOutput, source.GroupFilters, source.GroupStores}
+var shortGroups = []string{cli.GroupTotals, cli.GroupOutput, cli.GroupFilters, cli.GroupStores}
 
 // shortTail closes a list command's short help.
 const shortTail = "Provider, performance, limit and reporting options: swath %s --help\n"
@@ -387,8 +387,8 @@ func rootHelp(w io.Writer, s helpStyle) {
 	var t termOptions
 	t.register(f)
 	var help, version bool
-	source.Define(f, source.Flag{Name: "help", Short: "h", Value: source.Switch(&help), Usage: "print help (-h: the short form)"})
-	source.Define(f, source.Flag{Name: "version", Short: "V", Value: source.Switch(&version), Usage: "print the version"})
+	cli.Define(f, cli.Flag{Name: "help", Short: "h", Value: cli.Switch(&help), Usage: "print help (-h: the short form)"})
+	cli.Define(f, cli.Flag{Name: "version", Short: "V", Value: cli.Switch(&version), Usage: "print the version"})
 	var keep []*pflag.Flag
 	f.VisitAll(func(fl *pflag.Flag) {
 		if slices.Contains(globalFlags, fl.Name) || fl.Name == "help" || fl.Name == "version" {
@@ -431,7 +431,7 @@ var diagOnly = sync.OnceValue(func() map[string]bool {
 // the flag too), a diagnostic flag on swath list or swath du.
 func placement(f *pflag.FlagSet, cmd command) (err error) {
 	f.Visit(func(fl *pflag.Flag) {
-		cmds := source.Described(fl).Commands
+		cmds := cli.Described(fl).Commands
 		taken := cmds == nil || slices.Contains(cmds, cmd.name())
 		switch {
 		case err != nil:
@@ -471,7 +471,7 @@ var metavars = []string{"N", "SIZE", "DURATION", "TIME", "PATH", "FILE", "DIR", 
 func checkHelpGroups(f *pflag.FlagSet) error {
 	var problems []string
 	f.VisitAll(func(fl *pflag.Flag) {
-		d := source.Described(fl)
+		d := cli.Described(fl)
 		if !slices.Contains(groupOrder(), groupOf(fl)) {
 			problems = append(problems, fmt.Sprintf("--%s is in no help group (%q)", fl.Name, groupOf(fl)))
 		}

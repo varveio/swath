@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// TestParseDuration: Go's durations with d and w besides, and every
-// duration flag reads them.
+// TestParseDuration: Go's durations with d and w besides.
 func TestParseDuration(t *testing.T) {
 	const day = 24 * time.Hour
 	for in, want := range map[string]time.Duration{"90s": 90 * time.Second, "1h30m": 90 * time.Minute, "2d": 2 * day, "1w": 7 * day, "1d12h": 36 * time.Hour,
@@ -22,12 +21,5 @@ func TestParseDuration(t *testing.T) {
 		if got, err := ParseDuration(bad); err == nil {
 			t.Errorf("%q accepted: %v", bad, got)
 		}
-	}
-	var d time.Duration
-	if err := Duration(&d).Set("2d"); err != nil || d != 2*day {
-		t.Errorf("--max-duration 2d: %v %v", d, err)
-	}
-	if err := Duration(&d).Set("-1h"); err == nil {
-		t.Error("a negative duration accepted")
 	}
 }

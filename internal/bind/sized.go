@@ -1,14 +1,31 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package registry
+package bind
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
+
+// Sizes is the object bytes a listing emitted. Measured says the schema
+// has a size column (Prepare sets it before listing); Unknown counts the
+// objects whose size was null (the names metadata tier), which leave Bytes
+// short.
+type Sizes struct {
+	Bytes    atomic.Int64
+	Unknown  atomic.Int64
+	Measured atomic.Bool
+}
+
+// Known is the bytes summed, false when the schema has no size column or
+// an object's size was unknown.
+func (s *Sizes) Known() (int64, bool) {
+	return s.Bytes.Load(), s.Measured.Load() && s.Unknown.Load() == 0
+}
 
 // sized sums the object sizes of the rows the order stage accepts from a
 // provider (after the filters, which it wraps), one atomic add per page.

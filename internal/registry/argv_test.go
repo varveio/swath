@@ -1,27 +1,28 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package registry
+package registry_test
 
 import (
 	"slices"
 	"testing"
 
-	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/cli"
+	"github.com/varveio/swath/internal/registry"
 )
 
 // TestRedactEndpointArgv: the URL flags of the registered providers'
-// shared groups (source.FlagGroup.URLs, the store group's --endpoint-url) are
+// shared groups (FlagGroup.URLs, the store group's --endpoint-url) are
 // redacted when they carry userinfo, a query or fragment, or do not parse; kept as given
 // otherwise.
 func TestRedactEndpointArgv(t *testing.T) {
-	if _, err := Lookup("argvtest://x"); err != nil { // registered once per process (-count)
-		Register(Factory{Scheme: "argvtest", Shared: []*source.FlagGroup{source.StoreGroup}})
+	if _, err := registry.Lookup("argvtest://x"); err != nil { // registered once per process (-count)
+		registry.Register(registry.Factory{Scheme: "argvtest", Shared: []*registry.FlagGroup{cli.StoreGroup}})
 	}
-	if len(source.StoreGroup.URLs) == 0 {
+	if len(cli.StoreGroup.URLs) == 0 {
 		t.Fatal("the store group declares no URL flag")
 	}
-	for _, flag := range source.StoreGroup.URLs {
+	for _, flag := range cli.StoreGroup.URLs {
 		for _, endpoint := range []string{
 			"https://user:password@host/base/", "https://user@host/",
 			"https://user:password@[broken", "https://user:pass%ZZ@host/",
@@ -33,8 +34,8 @@ func TestRedactEndpointArgv(t *testing.T) {
 			} {
 				original := slices.Clone(argv)
 				want := []string{"list", "--" + flag + "=[redacted]", "--anonymous"}
-				got := RedactArgv(argv)
-				if !slices.Equal(got, want) || !slices.Equal(argv, original) || !slices.Equal(RedactArgv(got), want) {
+				got := registry.RedactArgv(argv)
+				if !slices.Equal(got, want) || !slices.Equal(argv, original) || !slices.Equal(registry.RedactArgv(got), want) {
 					t.Errorf("%q: got %q, want %q; input %q", original, got, want, argv)
 				}
 			}
@@ -44,7 +45,7 @@ func TestRedactEndpointArgv(t *testing.T) {
 			{"list", "--" + flag, "https://host/proxy%2Ftenant/"},
 			{"list", "--" + flag + "=https://host/proxy%2Ftenant/"},
 		} {
-			if got := RedactArgv(argv); !slices.Equal(got, argv) {
+			if got := registry.RedactArgv(argv); !slices.Equal(got, argv) {
 				t.Errorf("clean endpoint changed: %q -> %q", argv, got)
 			}
 		}
@@ -54,13 +55,13 @@ func TestRedactEndpointArgv(t *testing.T) {
 // TestRedactOutputSecretArgv: an output's secret flag (OutputSecretFlags)
 // is hidden whatever its value, in either spelling.
 func TestRedactOutputSecretArgv(t *testing.T) {
-	for _, flag := range OutputSecretFlags {
+	for _, flag := range registry.OutputSecretFlags {
 		for _, argv := range [][]string{
 			{"list", "--" + flag, "sv=1&sig=SECRET", "--anonymous"},
 			{"list", "--" + flag + "=sv=1&sig=SECRET", "--anonymous"},
 		} {
 			want := []string{"list", "--" + flag + "=[redacted]", "--anonymous"}
-			if got := RedactArgv(argv); !slices.Equal(got, want) {
+			if got := registry.RedactArgv(argv); !slices.Equal(got, want) {
 				t.Errorf("%q: got %q, want %q", argv, got, want)
 			}
 		}

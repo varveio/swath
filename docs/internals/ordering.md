@@ -61,7 +61,7 @@ across a seam would be a part ending inside its group, and is refused. The one b
 segment 0's first row after the drainer's last (the open part's group, continued), which segment 0's row guard
 checks as `send` does: inside a segment equality is accepted only in group mode, across one group's consecutive
 rows in provider order, never against `Options.After`. Segments count their distinct keys into
-`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
+`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (bind's `versionSegmenter`).
 `order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
 `TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `listing`
 `TestVersionsTailSeamsAtKeyChanges` (the serial tail), `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
@@ -373,7 +373,7 @@ between the children). The report says so: `features.order` false, `spill` absen
 
 `order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
 must neither keep nor change the rows: the versions counts, and `swath du`'s per-prefix totals
-(`registry` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
+(`bind` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
 one entry per run of equal prefix at each level (rows of a range ascend, so consecutive rows share them), then
 merges into the shared tally under one lock, copying a prefix only when it first enters. Addition and maximum
 commute, so the result is the same whatever the ranges' interleaving (`TestTallyMatchesBruteForce`, shuffled
@@ -388,7 +388,7 @@ children in key order, so in an ordered count a run is a contiguous stretch of t
 emits `(lo, c]` and only then the children that split `(c, hi]` (splits are owner-side, a range's children are
 claimable only once its `Expand` returns, [range engine](range-engine.md)); a local directory emits each
 subdirectory as a child right after its own row, which ends the run there. `swath du`'s adaptive view
-(`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
+(`totals.ViewRun`, the `bind` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
 before its last is complete, so it is kept only among the 100 largest complete ones of its depth and is
 otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
 across runs. A `RangeSink`'s run that is an `order.CoveredRun` is also told, in an ordered count whose provider
@@ -882,7 +882,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   declared only at a bound the provider accepts or at K, never below K; the seed and resume wrapper ranges
   and the sequential chain declare nothing. The adapters between provider and order stage (`source.Erase`,
   the filters, the object-size counter) forward both calls, `Fences` and `Replay`
-  (`registry` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
+  (`bind` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
   spill engages only then. Fences are not items: the emitter keeps, for its unpublished list, the index of the
   first fence in it and the latest fence (O(1)), so a wholly filtered page costs nothing and fences never
   accumulate (`TestDurableZeroRowCertificate` allocates nothing per fence). A fence after a child certifies

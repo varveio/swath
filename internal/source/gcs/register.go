@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
@@ -22,7 +23,7 @@ import (
 
 func init() {
 	registry.Register(registry.Factory{EncoderBytes: parquetout.EncoderBytes(&Schema), Schemas: []schema.Info{Schema.Info, GenerationSchema.Info}, Classify: objhttp.Label, Scheme: "gs", KeyPrefix: keyPrefix, WithPrefix: withPrefix, Suggest: suggest,
-		Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+		Flags: flags, Shared: []*registry.FlagGroup{cli.StoreGroup, cli.EngineGroup}, Defaults: defaults, Open: open,
 		Operational: []string{"gcs-credentials-file"},
 		Title:       "GCS", Example: "gs://bucket", Usage: "gs://bucket[/prefix]"})
 }
@@ -69,12 +70,12 @@ func defaults() any { return &flagged{} }
 
 // flags registers the GCS flag group beside the shared groups' values.
 // The GCS flags are prefixed: one flag set serves every provider.
-func flags(f *pflag.FlagSet, diag bool, shared source.SharedValues) any {
-	o := &flagged{store: source.Shared[source.Store](shared, source.StoreGroup), common: source.Shared[keyrange.Common](shared, keyrange.Group)}
-	source.Define(f, source.Flag{Name: "gcs-credentials-file", Familiar: []string{"gcs-credentials"}, Value: source.Text(&o.CredentialsFile), Metavar: "FILE",
+func flags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any {
+	o := &flagged{store: registry.Shared[source.Store](shared, cli.StoreGroup), common: registry.Shared[keyrange.Common](shared, cli.EngineGroup)}
+	cli.Define(f, cli.Flag{Name: "gcs-credentials-file", Familiar: []string{"gcs-credentials"}, Value: cli.Text(&o.CredentialsFile), Metavar: "FILE",
 		Usage: "a service-account or authorized-user JSON file (default: ADC)",
 		Long:  "Without it, Application Default Credentials."})
-	source.Define(f, source.Flag{Name: "gcs-billing-project", Familiar: []string{"gcs-user-project"}, Value: source.Text(&o.UserProject), Metavar: "NAME",
+	cli.Define(f, cli.Flag{Name: "gcs-billing-project", Familiar: []string{"gcs-user-project"}, Value: cli.Text(&o.UserProject), Metavar: "NAME",
 		Usage: "bill a requester-pays bucket's requests to this project"})
 	return o
 }

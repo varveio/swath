@@ -1,62 +1,26 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package source
+// Package cli is what the command line composes providers with: the flag
+// table (Flag, Define, Described and the flag values), the help groups, and
+// the flag groups the providers share (StoreGroup, EngineGroup), which
+// fill the plain configuration of package source and of the range engine.
+// A provider's registration (its register.go) defines its own flags with
+// it and names the groups it takes in its registry.Factory; the command
+// registers each group once. Nothing a provider is built from imports it
+// (TestProviderImportBoundary).
+package cli
 
 import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
+
+	"github.com/varveio/swath/internal/source"
 )
-
-// DefaultRequestTimeout bounds one object-store request attempt.
-const DefaultRequestTimeout = 30 * time.Second
-
-// A FlagGroup is a flag group several providers share (the store's, the
-// range engine's): the command registers it once and passes its value to
-// every provider that names it (registry.Factory.Shared), so the flags are
-// spelled the same for every provider and owned by each of them. A group
-// is identified by its address: providers name the one declared value
-// (StoreGroup, keyrange.Group), so two groups never alias by name.
-type FlagGroup struct {
-	// Name names the group in messages.
-	Name string
-	// Flags registers the group's flags on fs (Define) and returns the
-	// value they fill when fs is parsed; diag adds its diagnostic flags
-	// (swath diag list only).
-	Flags func(fs *pflag.FlagSet, diag bool) any
-	// Operational are the group's flags a resume may change: how requests
-	// are authenticated, timed and admitted, which no identity holds.
-	Operational []string
-	// URLs are the group's flags whose value is a URL: a recorded command
-	// line redacts one that carries userinfo, or does not parse
-	// (registry.RedactArgv).
-	URLs []string
-}
-
-// SharedValues are the values of the shared groups a provider names, by
-// group, as its flags receive them (registry.Factory.Flags).
-type SharedValues map[*FlagGroup]any
-
-// Shared is group g's value in values, the *T its Flags returned. A
-// provider asking for a group it does not name, or for another type than
-// the group's, is a programming error, so Shared panics rather than
-// dropping the group's flags silently.
-func Shared[T any](values SharedValues, g *FlagGroup) *T {
-	v, ok := values[g]
-	if !ok {
-		panic(fmt.Sprintf("source: flag group %q is not among the groups the factory names (registry.Factory.Shared)", g.Name))
-	}
-	t, ok := v.(*T)
-	if !ok {
-		panic(fmt.Sprintf("source: flag group %q holds %T, not %T", g.Name, v, t))
-	}
-	return t
-}
 
 // The help groups a flag is shown under (Flag.Group), in the help's order
 // apart from the providers' own, which follow GroupStores.
@@ -197,8 +161,8 @@ func (t *textValue) Set(v string) error { *t = textValue(v); return nil }
 func (t *textValue) String() string     { return string(*t) }
 func (t *textValue) Type() string       { return "string" }
 
-// Duration is a duration flag value (ParseDuration), never negative (zero
-// keeps each flag's documented meaning).
+// Duration is a duration flag value (source.ParseDuration), never
+// negative (zero keeps each flag's documented meaning).
 func Duration(p *time.Duration) pflag.Value { return (*durationValue)(p) }
 
 type durationValue time.Duration
@@ -206,59 +170,8 @@ type durationValue time.Duration
 // errDuration is a duration flag's refusal of a value it cannot read.
 var errDuration = errors.New("want a duration such as 90s, 1h30m, 2d")
 
-// Days and weeks, the units ParseDuration adds to Go's.
-const (
-	day  = 24 * time.Hour
-	week = 7 * day
-)
-
-// ParseDuration is Go's duration syntax (90s, 1h30m) with d (24h) and w
-// (7d) besides: 2d, 1w, 1d12h, 1.5d.
-func ParseDuration(v string) (time.Duration, error) {
-	if !strings.ContainsAny(v, "dw") {
-		return time.ParseDuration(v)
-	}
-	var total time.Duration
-	for rest := v; rest != ""; {
-		i := strings.IndexFunc(rest, func(r rune) bool { return r != '.' && (r < '0' || r > '9') })
-		if i <= 0 {
-			return 0, fmt.Errorf("invalid duration %q", v)
-		}
-		j := i + strings.IndexFunc(rest[i:], func(r rune) bool { return r == '.' || r >= '0' && r <= '9' })
-		if j < i {
-			j = len(rest)
-		}
-		num, unit := rest[:i], rest[i:j]
-		var d time.Duration
-		switch unit {
-		case "d", "w":
-			u := day
-			if unit == "w" {
-				u = week
-			}
-			f, err := strconv.ParseFloat(num, 64)
-			x := f * float64(u)
-			if err != nil || x >= 1<<63 {
-				return 0, fmt.Errorf("invalid duration %q", v)
-			}
-			d = time.Duration(x)
-		default:
-			var err error
-			if d, err = time.ParseDuration(num + unit); err != nil {
-				return 0, fmt.Errorf("invalid duration %q", v)
-			}
-		}
-		if total+d < total {
-			return 0, fmt.Errorf("invalid duration %q", v)
-		}
-		total += d
-		rest = rest[j:]
-	}
-	return total, nil
-}
-
 func (d *durationValue) Set(v string) error {
-	x, err := ParseDuration(v)
+	x, err := source.ParseDuration(v)
 	switch {
 	case err != nil:
 		return errDuration
@@ -268,23 +181,8 @@ func (d *durationValue) Set(v string) error {
 	*d = durationValue(x)
 	return nil
 }
-func (d *durationValue) String() string { return FormatDuration(time.Duration(*d)) }
+func (d *durationValue) String() string { return source.FormatDuration(time.Duration(*d)) }
 func (d *durationValue) Type() string   { return "duration" }
-
-// FormatDuration is d as a user would type it: 10m, 1h30m, 30s, 0.
-func FormatDuration(d time.Duration) string {
-	s := d.String()
-	if strings.HasSuffix(s, "m0s") {
-		s = s[:len(s)-2]
-	}
-	if strings.HasSuffix(s, "h0m") {
-		s = s[:len(s)-2]
-	}
-	if s == "0s" {
-		return "0"
-	}
-	return s
-}
 
 // Count is a whole-number flag value of at least min (0 where 0 is
 // documented, 1 for a count that must be positive).
@@ -358,64 +256,3 @@ type funcValue func(string) error
 func (f funcValue) Set(v string) error { return f(v) }
 func (f funcValue) String() string     { return "" }
 func (f funcValue) Type() string       { return "string" }
-
-// Store is the store group's value: what every object store takes alike.
-// Each provider reads it into its own options.
-type Store struct {
-	// Endpoint replaces the provider's own service (an emulator, a
-	// compatible store); "" is the service itself.
-	Endpoint string
-	// Timeout bounds each request; one that exceeds it is retried.
-	Timeout time.Duration
-	// Anonymous sends no credentials: the one way an object store is
-	// listed unauthenticated. Without it a source with no usable
-	// credentials fails (class auth) before any listing request.
-	Anonymous bool
-	// Trust is how the service's TLS certificate is verified.
-	Trust Trust
-}
-
-// The store group's flag names.
-const (
-	endpointFlag       = "endpoint-url"
-	requestTimeoutFlag = "request-timeout"
-	anonymousFlag      = "anonymous"
-	caBundleFlag       = "ca-bundle"
-	noVerifyFlag       = "no-verify-ssl"
-)
-
-// StoreGroup is the flag group every object store provider names: one
-// --endpoint-url, --request-timeout, --anonymous, --ca-bundle and
-// --no-verify-ssl, whichever provider owns the root. --endpoint-url is part
-// of each provider's identity (a resume refuses another); the timeout,
-// anonymity and TLS trust are operational.
-var StoreGroup = &FlagGroup{
-	Name: "store",
-	Flags: func(fs *pflag.FlagSet, _ bool) any {
-		s := &Store{Timeout: DefaultRequestTimeout}
-		Define(fs, Flag{Name: anonymousFlag, Familiar: []string{"no-sign-request"}, Value: Switch(&s.Anonymous), Usage: "send no credentials (a public bucket or container)",
-			Long: "Ignores any configured. Without it a source with no usable credentials fails (auth) before listing."})
-		Define(fs, Flag{Name: endpointFlag, Familiar: []string{"endpoint"}, Shown: ShownURL, Value: Text(&s.Endpoint), Metavar: "URL", Usage: "the service URL in place of the provider's own (emulators, MinIO)",
-			Long: "S3: path-style addressing unless --no-s3-path-style; default AWS_ENDPOINT_URL_S3, else AWS_ENDPOINT_URL. GCS: the JSON API base URL (fake-gcs-server). Azure Blob: the blob service URL, the account then its first path segment (Azurite). User information, a query and a fragment are refused. Part of the resume identity."})
-		Define(fs, Flag{Name: caBundleFlag, Value: Text(&s.Trust.CABundle), Metavar: "FILE", Usage: "trust the certificates in this PEM file besides the system's",
-			Long: "For a service behind a private certificate authority. S3: default AWS_CA_BUNDLE."})
-		Define(fs, Flag{Name: noVerifyFlag, Value: Switch(&s.Trust.NoVerify), Usage: "do not verify the service's TLS certificate (warns)",
-			Long: "For a test endpoint only. A resume replays it, and warns again."})
-		Define(fs, Flag{Name: requestTimeoutFlag, Value: Duration(&s.Timeout), Metavar: "DURATION", Usage: "per-request timeout; a request over it is retried",
-			Default: FormatDuration(DefaultRequestTimeout), Group: GroupLimits,
-			Long: "Raise it for a slow endpoint or emulator whose pages take longer to answer."})
-		return s
-	},
-	Operational: []string{anonymousFlag, requestTimeoutFlag, caBundleFlag, noVerifyFlag},
-	URLs:        []string{endpointFlag},
-}
-
-// AllVersionsFlag names the range engine's switch that lists every version
-// of every key. The command reads it by name for the terminal's nouns (a
-// versions run counts rows, not keys) without importing the engine.
-const AllVersionsFlag = "all-versions"
-
-// TraceFlag names the range engine's diagnostic --trace FILE, the run
-// trace: the engine's flag group takes it, so only its providers do, and
-// the command reads the path by name to check, open and close the file.
-const TraceFlag = "trace"

@@ -94,7 +94,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
   GCS and Azure size their pools by workers and rotate their SDK services.
 - **Secret-safe diagnostics.** [Endpoint validation](#endpoint-validation) refuses credential-bearing
   endpoint URLs before they can be recorded. `registry.RedactArgv`, shared by the command and listing,
-  replaces every URL flag declared by the shared flag groups (`source.FlagGroup.URLs`, currently
+  replaces every URL flag declared by the shared flag groups (`registry.FlagGroup.URLs`, currently
   `--endpoint-url`) with `[redacted]` when it cannot parse or contains user information, `?` or `#`,
   in either argument spelling. Clean values are kept for resume. This also protects failure reports
   and recorded arguments supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`,

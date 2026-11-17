@@ -23,10 +23,10 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/listing"
-	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -334,7 +334,7 @@ func TestSecrecyRunOutputs(t *testing.T) {
 
 // TestSecretValuesNeverEchoed: a credential in a value that can carry
 // one, a SOURCE's SAS or userinfo and each flag the table marks
-// (source.Flag.Shown: --azure-sas-token, --s3-bearer-token-command,
+// (cli.Flag.Shown: --azure-sas-token, --s3-bearer-token-command,
 // --endpoint-url, a URL given to -o), in every spelling (--name=V,
 // --name V, -xV, -x V), is nowhere: not in the recorded command (what the
 // journal records), and not when the run gets as far as using it and
@@ -350,7 +350,7 @@ func TestSecretValuesNeverEchoed(t *testing.T) {
 	runs := []run{{"", "az://acct/c?sv=1&sig=TESTSECRET", nil}, {"", "s3://user:TESTSECRET@bkt", nil}}
 	var o options
 	newFlags(&o, true).VisitAll(func(fl *pflag.Flag) {
-		if source.Described(fl).Shown == "" {
+		if cli.Described(fl).Shown == "" {
 			return
 		}
 		root := roots["s3"]

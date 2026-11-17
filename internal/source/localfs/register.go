@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/cli"
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/longpath"
@@ -81,13 +82,13 @@ func (f *Fields) Set(s string) error {
 
 func (f *Fields) Type() string { return "string" }
 
-func flags(f *pflag.FlagSet, _ bool, _ source.SharedValues) any {
+func flags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
 	o := &Options{LinkTarget: true}
-	source.Define(f, source.Flag{Name: "metadata", Value: &o.Fields, Metavar: "names|stat|statx", Default: o.Fields.String(),
+	cli.Define(f, cli.Flag{Name: "metadata", Value: &o.Fields, Metavar: "names|stat|statx", Default: o.Fields.String(),
 		Usage: "what is read per entry (statx adds created_at; Linux)"})
-	source.Define(f, source.Flag{Name: "no-dirs", Value: source.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
-	source.Define(f, source.Flag{Name: "no-link-target", Value: source.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
-	source.Define(f, source.Flag{Name: "one-file-system", Short: "x", Familiar: []string{"one-filesystem"}, Value: source.Switch(&o.OneFilesystem),
+	cli.Define(f, cli.Flag{Name: "no-dirs", Value: cli.Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
+	cli.Define(f, cli.Flag{Name: "no-link-target", Value: cli.Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
+	cli.Define(f, cli.Flag{Name: "one-file-system", Short: "x", Familiar: []string{"one-filesystem"}, Value: cli.Switch(&o.OneFilesystem),
 		Usage: "do not walk into a mount point below the root, as du -x"})
 	return o
 }

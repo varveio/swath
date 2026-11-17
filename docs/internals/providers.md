@@ -67,32 +67,35 @@ factory, for one:
 
 ```go
 registry.Register(registry.Factory{Scheme: "s3", KeyPrefix: keyPrefix, WithPrefix: withPrefix,
-	Flags: flags, Shared: []*source.FlagGroup{source.StoreGroup, keyrange.Group}, Defaults: defaults, Open: open,
+	Flags: flags, Shared: []*registry.FlagGroup{cli.StoreGroup, cli.EngineGroup}, Defaults: defaults, Open: open,
 	Secrets:     []registry.Secret{{Flag: "s3-bearer-token-command"}},
 	Operational: []string{"profile", "s3-bearer-token-refresh-interval"},
 	Hints: []source.Hint{{Flag: "region"}, {Flag: "path-style"}, {Flag: "profile"}, ...},
 	Usage: "s3://bucket[/prefix]", ...})
 ```
 
-**Shared flag groups.** Flags several providers take alike are a `source.FlagGroup` the providers name in
+**Shared flag groups.** Flags several providers take alike are a `registry.FlagGroup` the providers name in
 `Shared`: the command registers each group once (`registry.Groups`, in the order the factories by scheme first
-name them), passes its value to every provider that names it (`source.SharedValues`, keyed by the group's
-address, so two groups never alias by name; a provider reads it with `source.Shared[T]`, which panics on a group
+name them), passes its value to every provider that names it (`registry.SharedValues`, keyed by the group's
+address, so two groups never alias by name; a provider reads it with `registry.Shared[T]`, which panics on a group
 it did not name or a value of another type: a programming error, not a dropped flag), and records each of its flags as
 owned by those providers, so it is accepted for any of their roots and refused for any other (a local tree).
 A group declares its own `Operational` flags, `Hints` and `URLs` (flags whose value a recorded command line
 redacts when it carries user information, `registry.RedactArgv`) once, not per provider. Two groups exist.
-The store group (`source.StoreGroup`, value `*source.Store`), named by S3, GCS and Azure Blob, supplies `--endpoint-url`
+The store group (`cli.StoreGroup`, value `*source.Store`), named by S3, GCS and Azure Blob, supplies `--endpoint-url`
 (the provider's own service replaced; part of each provider's resume identity, `endpoint` with its canonical
 route), `--request-timeout` and `--anonymous` (the only way a request goes unauthenticated); the
 last two are operational.
 
-The range engine's group (`keyrange.Group`, value `*keyrange.Common`) holds a `keyrange.Policy`,
-an `objhttp.Admission` and version-mode selection. `keyrange.Flags` registers the policy comparisons and
+The range engine's group (`cli.EngineGroup`, value `*keyrange.Common`) holds a `keyrange.Policy`,
+an `objhttp.Admission` and version-mode selection. It registers the policy comparisons and
 slow start only when `diag` is true; the ordinary help shows the supported controls. The generated CLI
 help ([commands/](../commands/swath.md)) owns option syntax and defaults. A provider's own flags keep its prefix (`--gcs-credentials-file`, `--azure-sas-token`; S3's
 are unprefixed, the Java tool's names). Each provider's `Open` reads the group values into its options. A test
 or a benchmark registers one provider with its groups on a flag set of its own (`Factory.RegisterFlags`).
+The flags are written in package `cli`'s flag table (`cli.Flag`, `cli.Define` and its values: `cli.Switch`,
+`cli.Text`, ...), which also holds the two groups; `internal/source` and `keyrange` keep only the plain
+configuration the groups fill (`source.Store`, `keyrange.Common`) and import no flag package.
 
 The command imports providers only for that registration and passes the options value for the root's scheme as
 `listing.Config.Source.Options`, opaque to the pipeline; it names no provider, scheme or provider flag
@@ -111,7 +114,9 @@ filters on values its options do not read (sizes and times with `--metadata name
 A `registry.Source` is the provider bound to its schema (`registry.Bind[R, P]`: the range type erased by
 `source.Erase`, ranges boxed once each, rows untouched; `Run` instantiates the order stage and the part router
 for `P`), its schema `Info`, its `Locator` (kind, root, container, local path) and `Listed` (rows emitted, checked
-against the rows ordered). Optional interfaces, each found by a type assertion:
+against the rows ordered). The binding is `bind.Bound`, which chooses no sink: `registry.Bound` makes the
+run's (the part router, a text stream, or none for a count) once `bind.Bound.Prepare` has checked the run's
+settings against the schema, and a caller of `bind` lists the provider into its own sink (`Count`, unordered). Optional interfaces, each found by a type assertion:
 
 | Interface | Meaning | Object stores | Local filesystem |
 |---|---|---|---|
@@ -174,11 +179,11 @@ These integrations still require work outside the provider directory:
 | `internal/replay/store/sorted.go` | When adding replay support: register the schema projection in `objectProjections`; unknown schema IDs currently replay keys only. |
 | `go.mod`, `go.sum` | Additional SDK dependencies, if needed. |
 
-Shared help in `internal/source/flags.go` and `internal/source/keyrange/flags.go` contains provider examples;
+Shared help in `internal/cli/groups.go` (the store's and the range engine's groups) contains provider examples;
 updating them is an optional wording change. Documentation and generated help blocks also need review.
 No command branch or pipeline import of the provider is needed.
 
-The three object stores compose `source.StoreGroup`, `keyrange.Group`, `keyrange.Engine` and `Registered`,
+The three object stores compose `cli.StoreGroup`, `cli.EngineGroup`, `keyrange.Engine` and `Registered`,
 [`objhttp` client plumbing](clients.md), and the [schema bindings](parquet-output.md#schemas) and
 [payload codec helpers](ordering.md#payload-delta-codec). Explicit provider ownership remains important:
 credential selection and warnings, endpoint grammar and identity, namespace admission, accepted bounds,
