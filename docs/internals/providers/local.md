@@ -132,13 +132,15 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   name each: a directory too wide for it ends its enumeration there (`held_budget_dirs`; the portable
   engine then reads 1,024 entries at a time rather than the whole directory). The walk reports each place
   it did not read as a worker meets it (`Provider.unread`), with the contract's scope and class
-  (`reader/listing`); no option hands the reports to a caller yet, only tests take them: a
+  (`reader/listing`), to the emitter of the range that met it (`source.Unreader`), so a count whose sink is
+  an `order.UnreadSink` is told them; no library walk of a local source takes them yet, only tests do: a
   directory not opened or not entered (`subtree`: permission, a symbolic link in its place, another
   device, too deep, a name too long, the tree changing under it, I/O), a directory whose enumeration did
   not end (`listing`: a read error, the held-names bound), an entry whose stat failed (`subtree`), and, when
   the walk stops, `budget` for each range it did not finish: `listing` for a directory it had opened, a
-  chunk or a continuation, `subtree` for one it never opened, from `Dispose` for the ranges still queued
-  (`TestStoppedWalkReportsUnread`). The order stage's `order.SubtreeSink` tells when a directory's subtree
+  chunk or a continuation, `subtree` for one it never opened; for the ranges still queued, the count
+  reports what `Dropped` says of each before it disposes them (`TestStoppedWalkReportsUnread`,
+  `TestUnreadReachesTheSink`). The order stage's `order.SubtreeSink` tells when a directory's subtree
   ended; every report under it was made before.
 - **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on
   macOS) is opened as any other, one name below its parent, so a tree of any depth lists; its children are
