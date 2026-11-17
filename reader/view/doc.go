@@ -12,9 +12,10 @@
 // # Evidence
 //
 // Every answer's Evidence comes from the manifest and is never wider than
-// it: the origin is OriginInventory, the manifest digest is the SHA-256 of
-// the manifest's bytes, the acquisition interval is the listing's start and
-// finish and the publication time is the manifest's. Its Scope is the
+// it: the origin is OriginInventory, the manifest digest is "sha256:" and
+// the hex SHA-256 of the manifest's bytes, the acquisition interval is the
+// listing's start and finish, each as the manifest records it, and the
+// publication time is the manifest's. Its Scope is the
 // listing's prefix scope; a question outside it is unknown (ErrOutOfScope),
 // never absent. Unlocated is the manifest's count of unreadable entries only
 // when the listing reached the end of its scope and records no filter and no

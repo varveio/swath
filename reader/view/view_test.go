@@ -44,7 +44,7 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 		}
 		return v
 	}
-	if e.Origin != listing.OriginInventory || e.Manifest != hex.EncodeToString(sum[:]) || e.Scope != nil ||
+	if e.Origin != listing.OriginInventory || e.Manifest != "sha256:"+hex.EncodeToString(sum[:]) || e.Scope != nil ||
 		!e.Started.Equal(at("2026-11-12T09:00:00Z")) || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) ||
 		!e.Published.Equal(at("2026-11-12T09:00:02Z")) || e.Unlocated == nil || *e.Unlocated != 0 || e.Stop != listing.StopCompleted {
 		t.Fatalf("evidence %+v", e)
@@ -75,6 +75,14 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 				t.Fatalf("Unlocated = %v, want %v", got, c.want)
 			}
 		})
+	}
+
+	// A manifest that records when its listing finished, not when it
+	// started: the start is unknown, the finish stands.
+	ext := coverage(extension(reader.S3ObjectsV1), map[string]any{"listing_started_at": nil})
+	e = open(t, write(t, fixture{id: reader.S3ObjectsV1, ext: ext, rows: objects()[:3]})).evidence(listing.StopCompleted)
+	if e.Started != nil || e.Finished == nil || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) {
+		t.Errorf("only a finish recorded: Started %v, Finished %v", e.Started, e.Finished)
 	}
 }
 
