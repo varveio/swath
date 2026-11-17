@@ -19,7 +19,10 @@ swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
 - The exit code and the outcome in `DIR` are the outcome of record: `DIR/run.json` beside a committed dataset
   (its `outcome`), else `DIR/error.json`, each with `class`, `exit_code` and `resumable`. An `error.json` whose
   `attempt.started_at` is before the attempt began is an earlier attempt's: one that was killed, or could not
-  write it, left it ([the outcome of record](reference/exit-codes.md#the-outcome-of-record)). To keep each
+  write it, left it ([the outcome of record](reference/exit-codes.md#the-outcome-of-record)). After exit 0 or 3
+  the dataset is committed even if neither file is there: the commit removes `error.json`, and `run.json` is
+  written after the commit, so a failed write leaves it out with the warning `run_report_unwritten` on stderr,
+  without changing the exit code; `manifest.json` then records the coverage. To keep each
   attempt's full report, a resume's included, add `--report FILE` at a fresh path for each attempt, outside the
   output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
