@@ -26,7 +26,8 @@ var errUnreached = wrap(listing.ErrBudgetExceeded, "a bound of the request kept 
 // target's State and Self are what Lookup answers for its key; the root's,
 // a subtree target with an empty key, is unknown. A target outside the
 // inventory's scope is unknown with ErrOutOfScope as its Reason, and
-// counts nothing.
+// counts nothing. A target unknown for a reason other than a bound, the
+// root excepted, has an empty Stop: it is never complete.
 //
 // The call reads in two phases, both within opts.Budget. First the entries
 // at the targets' keys, in target order, with those on the way to a local
@@ -133,7 +134,7 @@ func (s *summary) outside() {
 	for i, t := range s.targets {
 		switch {
 		case !s.inv.inScope(t.Key):
-			s.out[i].Reason, s.out[i].Totals = errOutOfScope, *zeroTotals()
+			s.out[i].Reason, s.out[i].Totals, s.out[i].Stop = errOutOfScope, *zeroTotals(), ""
 			s.known[i], s.done[i] = true, true
 		case len(t.Key) == 0:
 			s.out[i].Reason, s.known[i] = errRoot, true
@@ -230,6 +231,9 @@ func (s *summary) readOwn(ctx context.Context) error {
 		t := s.targets[i]
 		s.out[i].State, s.out[i].Self, s.out[i].Reason = s.inv.resolve(t.Key, found)
 		s.known[i] = true
+		if s.out[i].State == listing.LookupUnknown {
+			s.out[i].Stop = "" // not read, and no bound is why: never complete
+		}
 		if !t.Subtree {
 			s.out[i].Totals, s.done[i] = *entryTotals(s.out[i].Self, s.sel), true
 		}

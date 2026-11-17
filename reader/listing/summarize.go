@@ -66,6 +66,9 @@ type TargetSummary struct {
 	// Stop says whether the call finished this target (StopCompleted) or
 	// which bound of the request stopped it. The target is complete when
 	// Stop is StopCompleted, it has no Unread, and the Evidence's
-	// Unlocated is 0.
+	// Unlocated is 0. Stop is empty when the call did not read the target
+	// and no bound is why, such as a lookup refused access or a target
+	// outside an inventory's scope: State is LookupUnknown and Reason says
+	// why.
 	Stop StopReason
 }

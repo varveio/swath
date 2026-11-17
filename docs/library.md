@@ -163,7 +163,8 @@ files, never folders or links.
 The budget bounds each target's walk or lookup on its own. A target whose walk a bound stopped counts what was read,
 carries as its `Unread` the key intervals it did not read, and names the bound as its `Stop`: its totals are a lower
 bound. A target is complete when its `Stop` is `completed` and it has no `Unread`; `Evidence.Stop` names the first
-bound any target reached.
+bound any target reached. A target the call could not read for another reason, such as an exact key whose lookup was
+refused, is unknown with that reason and an empty `Stop`: never complete.
 
 ```go
 targets := []listing.Target{
@@ -334,7 +335,7 @@ library guarantees:
   (`logs/2026/`); any other entry has its kind (`file`, `symlink`, `other` for a FIFO, socket or device, or
   `unknown` when its stat fails) and what `lstat` gives of it: size, space on disk, modification time,
   device, inode and link count. The prefix's own directory comes back as the `Self` of the level's first page,
-  beside its children: `Limit` bounds the children only. A directory on another device is listed as a prefix like any other, and a page
+  and counts toward its `Limit`. A directory on another device is listed as a prefix like any other, and a page
   of it fails with `listing.ErrOtherDevice`.
 - **Pages continue by key.** A token resumes the level after the last key it read, so a directory that changes
   between pages repeats no key, keeps byte order across pages and skips no name that stayed; a name added

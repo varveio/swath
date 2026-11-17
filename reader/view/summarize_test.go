@@ -165,7 +165,7 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 		t.Fatalf("%+v, %v", e, err)
 	}
 	for i := range 3 {
-		if s := sums[i]; s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrOutOfScope) || s.Entries != 0 {
+		if s := sums[i]; s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrOutOfScope) || s.Entries != 0 || s.Stop != "" {
 			t.Errorf("target %d outside the scope: %+v", i, s)
 		}
 	}
@@ -175,7 +175,7 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 
 	partial := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects(), ext: coverage(extension(reader.S3ObjectsV1), map[string]any{"complete": false, "unreadable": 5})}))
 	sums, e, err = partial.Summarize(ctx, []listing.Target{{Key: []byte("missing")}, {Key: []byte("a/"), Subtree: true}}, listing.SummaryOptions{})
-	if err != nil || *e.Unlocated != 5 || sums[0].State != listing.LookupUnknown || sums[0].Reason != nil || sums[1].Entries != 4 {
+	if err != nil || *e.Unlocated != 5 || sums[0].State != listing.LookupUnknown || sums[0].Reason != nil || sums[0].Stop != "" || sums[1].Entries != 4 {
 		t.Fatalf("partial: %+v, %+v, %v", sums, e, err)
 	}
 }

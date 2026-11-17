@@ -34,8 +34,9 @@ var (
 // its key, absent when it did not and the walk read everything, and
 // unknown otherwise; the root's, the empty key's, is unknown. Its Unread
 // are its walk's, and its totals cover only what the walk read. A
-// target's Stop is the bound that stopped its walk or lookup, and
-// Evidence.Stop the first such bound. A counted entry without a size or a
+// target's Stop is the bound that stopped its walk or lookup, empty for an
+// exact target the lookup left unknown, and Evidence.Stop the first such
+// bound. A counted entry without a size or a
 // time, and a sum that overflows, make that total nil. A walk's or a
 // lookup's failure is Summarize's error; when ctx ends, Summarize returns
 // its error.
@@ -58,7 +59,7 @@ func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts l
 		if err != nil {
 			return nil, listing.Evidence{}, err
 		}
-		if stop == listing.StopCompleted {
+		if stop == listing.StopCompleted && out[i].Stop != "" {
 			stop = out[i].Stop
 		}
 		lostAny = lostAny || lost
@@ -104,7 +105,8 @@ func (s *Source) checkSummary(targets []listing.Target, opts listing.SummaryOpti
 }
 
 // exact answers an exact target by a Lookup of key within budget's time:
-// unknown and unread whole when the time ends first.
+// unknown and unread whole when the time ends first; an unknown answer's
+// Stop is empty.
 func (s *Source) exact(ctx context.Context, key []byte, budget listing.Budget, counted []bool) (listing.TargetSummary, error) {
 	op, cancel := withBudget(ctx, budget.MaxDuration)
 	defer cancel()
@@ -118,10 +120,14 @@ func (s *Source) exact(ctx context.Context, key []byte, budget listing.Budget, c
 	}
 
 	var tl tally
-	if r.State == listing.LookupPresent {
+	stop := listing.StopCompleted
+	switch r.State {
+	case listing.LookupPresent:
 		tl.add(r.Entry, counted)
+	case listing.LookupUnknown:
+		stop = "" // not read, and no bound is why: never complete
 	}
-	return listing.TargetSummary{State: r.State, Self: r.Entry, Reason: r.Reason, Totals: tl.totals(), Stop: listing.StopCompleted}, nil
+	return listing.TargetSummary{State: r.State, Self: r.Entry, Reason: r.Reason, Totals: tl.totals(), Stop: stop}, nil
 }
 
 // subtree answers a subtree target by one Walk of key within budget, and
