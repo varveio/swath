@@ -25,9 +25,11 @@ import (
 //
 // A directory is kept (keep set) when the walk's limit on kept
 // descriptors allows it, the root always (keptFDs). One the limit refuses
-// is still read through its descriptor, but its subdirectories are opened
-// from from, the kept directory it was itself opened from, below+1 names
-// down (child); it holds a reference on from until it closes.
+// is still read through its descriptor, but only by the Expand that opened
+// it: it is not shared among chunks or a continuation, and its
+// subdirectories are opened from from, the kept directory it was itself
+// opened from, below+1 names down (child); it holds a reference on from
+// until it closes. So only kept descriptors outlive an Expand.
 type dirFD struct {
 	fd    int
 	f     *os.File // the portable engine's handle on fd, which closes it
@@ -54,12 +56,15 @@ func (d *dirFD) release() {
 	d.from.release()
 }
 
+// kept reports whether the limit keeps d, so queued work may hold it.
+func (d *dirFD) kept() bool { return d.keep != nil }
+
 // child is where a subdirectory of d is opened from, with a reference its
 // range holds, and how many names down: d itself, one name down, or, when
 // the limit refused to keep d, the directory d was opened from, one name
 // further down than d.
 func (d *dirFD) child() (*dirFD, int) {
-	if d.keep != nil {
+	if d.kept() {
 		d.refs.Add(1)
 		return d, 1
 	}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/varveio/swath/internal/order"
@@ -123,15 +124,6 @@ func slabTree(t *testing.T) (string, int) {
 	return root, files
 }
 
-func openFDs(t *testing.T) int {
-	t.Helper()
-	des, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return len(des)
-}
-
 // TestCountSlabs: a count reads a directory of several slabs in slabs, hands
 // each slab's entries out as chunks with a continuation after them, and sees
 // what a sorted listing sees, at one worker and many, at the names and stat
@@ -146,7 +138,7 @@ func TestCountSlabs(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/w%d", fields, workers), func(t *testing.T) {
 				opt := Options{Fields: fields, LinkTarget: true}
 				sorted, want := list(t, root, opt, workers, 7)
-				fds := openFDs(t)
+				fds := countFDs(t)
 				src, err := open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: workers})
 				if err != nil {
 					t.Fatal(err)
@@ -168,7 +160,7 @@ func TestCountSlabs(t *testing.T) {
 				if fields == Stat && got.Chunks < 3*slabEntries/chunkEntries-1 {
 					t.Fatalf("chunks %d: the slabs were not handed out", got.Chunks)
 				}
-				if n := openFDs(t); n != fds {
+				if n := countFDs(t); n != fds {
 					t.Fatalf("%d descriptors open after the count, %d before", n, fds)
 				}
 			})
@@ -219,5 +211,138 @@ func TestCountSlabReleasesFD(t *testing.T) {
 		if n := d.refs.Load(); n != 0 {
 			t.Fatalf("dispose=%v: %d references left on the directory descriptor", dispose, n)
 		}
+	}
+}
+
+// nestedLarge builds a/b/c below a new root, each directory past
+// chunkThreshold entries and a past two slabs, so a kept directory is
+// chunked and a count reads a in several slabs. It returns the root and
+// each level's file count.
+func nestedLarge(t *testing.T) (string, []int) {
+	t.Helper()
+	root := t.TempDir()
+	files := []int{2*slabEntries + 100, chunkThreshold + 100, chunkThreshold + 100}
+	dir := root
+	for i, n := range files {
+		dir = filepath.Join(dir, string(rune('a'+i)))
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for j := range n {
+			if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%05d", j)), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return root, files
+}
+
+// TestRefusedDirectoryIsNotShared: a large directory the descriptor limit
+// did not keep is read whole by the Expand that opened it, as a listing
+// and as a count: it hands out no chunk or continuation, so no queued range
+// holds its descriptor once that Expand returns, and nested large
+// directories past the limit hold none. Each Expand is stepped by hand.
+func TestRefusedDirectoryIsNotShared(t *testing.T) {
+	root, files := nestedLarge(t)
+	for _, count := range []bool{false, true} {
+		t.Run(fmt.Sprintf("count=%v", count), func(t *testing.T) {
+			before := countFDs(t)
+			p, err := New(root, Options{Fields: Stat})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.keep.limit = 0
+			p.unsorted = count
+			var x expansion
+			if err := p.Expand(context.Background(), p.Root(), &x); err != nil {
+				t.Fatal(err)
+			}
+			if len(x.kids) != 1 {
+				t.Fatalf("root: %d children, want a's range", len(x.kids))
+			}
+			r := x.kids[0]
+			held := countFDs(t) // the root's, held by a's range
+			if held != before+1 {
+				t.Fatalf("%d descriptors open with the root held, %d before", held, before)
+			}
+
+			for i, n := range files {
+				var x expansion
+				if err := p.Expand(context.Background(), r, &x); err != nil {
+					t.Fatal(err)
+				}
+				dirRows := min(1, len(files)-1-i)
+				if open := countFDs(t); open != before+dirRows { // the root's, held by the next level's range
+					t.Fatalf("level %d: %d descriptors open after its Expand, want %d", i+1, open, before+dirRows)
+				}
+				if len(x.rows) != n+dirRows || len(x.kids) != dirRows {
+					t.Fatalf("level %d: %d rows and %d children, want %d and %d", i+1, len(x.rows), len(x.kids), n+dirRows, dirRows)
+				}
+				for _, k := range x.kids {
+					if k.chunk != nil || !k.at.kept() || k.below != i+2 {
+						t.Fatalf("level %d: child %q chunk %v, below %d: want the next level, from the root", i+1, k.prefix, k.chunk != nil, k.below)
+					}
+					r = k
+				}
+			}
+
+			st := p.Stats()
+			if st.Errors() != 0 || st.Chunks != 0 || st.DirOpens.Refused != int64(len(files)) || st.DirOpens.Redescents != int64(len(files)-1) {
+				t.Fatalf("errors %d %q, chunks %d, dir_opens %+v", st.Errors(), st.Samples, st.Chunks, st.DirOpens)
+			}
+			if count && st.Slabs < int64(len(files))+2 {
+				t.Fatalf("count_slabs %d: a was not read in several slabs", st.Slabs)
+			}
+			if open := countFDs(t); open != before {
+				t.Fatalf("%d descriptors open after the walk, %d before", open, before)
+			}
+		})
+	}
+}
+
+// TestRefusedDirectoriesListWhole: with no directory kept but the root, a
+// parallel listing and count of nested large directories see every key,
+// hand out no chunk, and close every descriptor.
+func TestRefusedDirectoriesListWhole(t *testing.T) {
+	root, _ := nestedLarge(t)
+	want := oracle(t, root, true)
+	for _, count := range []bool{false, true} {
+		t.Run(fmt.Sprintf("count=%v", count), func(t *testing.T) {
+			before := countFDs(t)
+			p, err := New(root, Options{Fields: Stat})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.keep.limit = 0
+			var rows []Row
+			if count {
+				p.unsorted = true
+				c := &collect{}
+				if _, err := order.CountWithSink[Range, Entry](context.Background(), p, nil, order.Options{Workers: 8, Unordered: true}, c); err != nil {
+					t.Fatal(err)
+				}
+				rows = c.rows
+			} else {
+				rows, _ = walk(t, p, 8, 1<<20)
+			}
+
+			keys := make([]string, len(rows))
+			for i := range rows {
+				keys[i] = rows[i].Key
+			}
+			if count {
+				slices.Sort(keys)
+			}
+			if !slices.Equal(keys, want) {
+				t.Fatalf("%d keys, want %d", len(keys), len(want))
+			}
+			st := p.Stats()
+			if st.Errors() != 0 || st.Chunks != 0 || st.DirOpens.Refused != 3 {
+				t.Fatalf("errors %d %q, chunks %d, dir_opens %+v", st.Errors(), st.Samples, st.Chunks, st.DirOpens)
+			}
+			if open := countFDs(t); open != before {
+				t.Fatalf("%d descriptors open after the walk, %d before", open, before)
+			}
+		})
 	}
 }

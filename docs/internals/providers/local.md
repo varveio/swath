@@ -16,10 +16,11 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   (descriptor-relative opens, below). On Linux and macOS its stat tier is one `fstatat` per entry relative
   to the open directory (every stat column, and `created_at` on macOS; `os.DirEntry.Info` would be an `lstat`
   of the full path, which resolves the path again per entry), and it reads a link's target with `readlinkat`
-  relative to it; `ReadDir` itself types an entry the filesystem leaves untyped (`DT_UNKNOWN`) with an `lstat`
-  of its full path. On Windows it opens a directory by its path, re-checking that it is the one that was listed
-  (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and takes the directory enumeration's own size, times and
-  attributes (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or `allocated_bytes`).
+  relative to it; `ReadDir` itself types an entry the filesystem leaves untyped (`DT_UNKNOWN`) with an
+  `fstatat` relative to the directory too. On Windows it opens a directory by its path, re-checking that it is
+  the one that was listed (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and takes the directory enumeration's
+  own size, times and attributes (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or
+  `allocated_bytes`).
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:
@@ -83,10 +84,12 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   ends, or when the order stage disposes it unexpanded (a cancelled or failed run, `source.Disposer`).
   **Limit:** the walk keeps at most a quarter of the soft descriptor limit, at most 1,024 (`maxKept`), of
   directory descriptors (`keptFDs`), the root always. Beyond them a worker holds at most two while it opens a
-  directory and one while it reads it. A directory opened past the limit is read through its descriptor (open
-  while its chunks are queued) but not kept: its subdirectories are opened from the nearest kept ancestor, one
-  `openat` per name below it, intermediates `O_PATH` on Linux (no read permission needed; read-only on macOS)
-  each closed as the next opens, checking for a stop between names; a name replaced by a link on that way is
+  directory and one while it reads it. A directory opened past the limit is read through its descriptor, whole
+  by the worker that opened it (getdents: no chunks, so a large one is statted by that worker alone, and a
+  count reads its slabs one after another), so its descriptor closes when that worker is done and open
+  descriptors stay within the limit plus two per worker. It is not kept: its subdirectories are opened from
+  the nearest kept ancestor, one `openat` per name below it, intermediates `O_PATH` on Linux (no read
+  permission needed; read-only on macOS) each closed as the next opens, checking for a stop between names; a name replaced by a link on that way is
   refused as above, its error sample naming the level. The cost is one `openat` per directory, as a path open
   was, plus, past the limit, one per name between the ancestor and the directory. With `--one-file-system`
   each directory opened below the root, and each intermediate on the way from an ancestor, is `fstat`ed

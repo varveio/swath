@@ -145,7 +145,9 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 		return err
 	}
 
-	if len(sc.ents) > chunkThreshold && p.opt.Fields != Names {
+	// Only a kept directory is shared among chunks: their queued references
+	// would hold one the limit refused open past this Expand.
+	if len(sc.ents) > chunkThreshold && p.opt.Fields != Names && d.kept() {
 		return p.emitChunks(d, r, sc, e, st)
 	}
 	rows, err := p.statInto(ctx, d.fd, r.path, sc.names, sc.keys, sc.ents, st)
@@ -169,43 +171,63 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 // beyond the chunks being statted. Reading the whole directory in one
 // worker instead, as find does, lost the chunks' parallel stats: 1.6x slower
 // cold and 2x warm on 1M files in one directory (4-CPU runner).
+//
+// A directory the limit did not keep (dirFD.kept) is read to its end here,
+// slab by slab, each statted by this worker: chunks and a continuation
+// would hold its descriptor open past this Expand, outside the limit.
 func (p *Provider) countSlab(ctx context.Context, d *dirFD, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
-	more, err := readSlab(ctx, d.fd, r.path, sc, p.opt.Fields != Names, st)
-	if err != nil {
-		return err
-	}
-	if len(sc.ents) == 0 && r.chunk != nil { // a continuation at the end: the last slab filled exactly
-		return nil
-	}
-	st.Slabs++
-	p.resolveUnknown(d.fd, sc)
-	buildKeys(r.prefix, sc)
-	if p.opt.Fields == Names || (!more && len(sc.ents) <= chunkThreshold) {
-		rows, err := p.statInto(ctx, d.fd, r.path, sc.names, sc.keys, sc.ents, st)
+	for first := r.chunk == nil; ; first = false {
+		more, err := readSlab(ctx, d.fd, r.path, sc, p.opt.Fields != Names, st)
 		if err != nil {
 			return err
 		}
-		if err := p.emit(r, d, rows, e, st); err != nil {
-			return err
+		if len(sc.ents) == 0 && !first { // a continuation at the end: the last slab filled exactly
+			return nil
 		}
-	} else {
-		names, keys, ents := sc.names, sc.keys, sc.ents
-		sc.names, sc.keys, sc.ents = nil, nil, nil // the chunks own them
-		for i := 0; i < len(ents); i += chunkEntries {
-			d.refs.Add(1) // the chunk's share; the emitter disposes it if Child fails
-			st.Chunks++
-			if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}}); err != nil {
+		st.Slabs++
+		p.resolveUnknown(d.fd, sc)
+		buildKeys(r.prefix, sc)
+
+		if p.opt.Fields != Names && (more || len(sc.ents) > chunkThreshold) && d.kept() {
+			if err := p.slabChunks(d, r, sc, e, st); err != nil {
+				return err
+			}
+		} else {
+			rows, err := p.statInto(ctx, d.fd, r.path, sc.names, sc.keys, sc.ents, st)
+			if err != nil {
+				return err
+			}
+			if err := p.emit(r, d, rows, e, st); err != nil {
 				return err
 			}
 		}
+
+		if !more {
+			return nil
+		}
+		if d.kept() {
+			d.refs.Add(1)
+			return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}})
+		}
 	}
-	if !more {
-		return nil
+}
+
+// slabChunks hands a count's slab to other workers as chunks of
+// chunkEntries sharing d, each with a reference of its own; the chunks take
+// the scratch's buffers.
+func (p *Provider) slabChunks(d *dirFD, r Range, sc *scratch, e source.Emitter[Range, Entry], st *Stats) error {
+	names, keys, ents := sc.names, sc.keys, sc.ents
+	sc.names, sc.keys, sc.ents = nil, nil, nil // the chunks own them
+	for i := 0; i < len(ents); i += chunkEntries {
+		d.refs.Add(1) // the chunk's share; the emitter disposes it if Child fails
+		st.Chunks++
+		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}}); err != nil {
+			return err
+		}
 	}
-	d.refs.Add(1)
-	return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}})
+	return nil
 }
 
 // readSlab reads fd's next entries into sc, whole getdents batches until

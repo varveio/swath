@@ -140,7 +140,8 @@ func (o *DirOpens) add(x *DirOpens) {
 // keptFDs bound the directory descriptors a walk keeps open (dirFD): a
 // directory's, from its open until its chunks are read and its queued
 // subdirectories opened relative to it. Past limit a directory is still
-// read, but not kept: its subdirectories are opened from a kept ancestor.
+// read, whole by the worker that opened it, but not kept: its
+// subdirectories are opened from a kept ancestor.
 // The root is always kept.
 type keptFDs struct {
 	limit int64
