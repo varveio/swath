@@ -57,9 +57,9 @@ func hold(t *testing.T, dir string) *os.File {
 }
 
 // open opens the directory f holds as a source, until the test ends.
-func open(t *testing.T, f *os.File, opts local.Options) *swath.Source {
+func open(t *testing.T, f *os.File) *swath.Source {
 	t.Helper()
-	src, err := local.Open(f, opts)
+	src, err := local.Open(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestPage(t *testing.T) {
 	if err := unix.Mkfifo(filepath.Join(root, "p"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	src := open(t, hold(t, root), local.Options{})
+	src := open(t, hold(t, root))
 	ctx := context.Background()
 
 	want := []string{"file a-b", "file a.b", "prefix a/", "file ab", "prefix e/", "symlink ln", "other p"}
@@ -172,17 +172,14 @@ func TestPageErrors(t *testing.T) {
 			class  error
 		}{"locked/x/", listing.ErrAuth})
 	}
-	src := open(t, hold(t, root), local.Options{})
+	src := open(t, hold(t, root))
 	for _, c := range cases {
 		_, err := src.Page(context.Background(), listing.PageRequest{Prefix: []byte(c.prefix), Limit: 10})
 		if !errors.Is(err, c.class) || strings.Contains(err.Error(), root) {
 			t.Errorf("%q: %v, want %v", c.prefix, err, c.class)
 		}
 	}
-	if _, err := local.Open(hold(t, root), local.Options{MaxHeldBytes: -1}); !errors.Is(err, listing.ErrInvalidRequest) {
-		t.Errorf("a negative bound: %v", err)
-	}
-	if _, err := local.Open(nil, local.Options{}); !errors.Is(err, listing.ErrInvalidRequest) {
+	if _, err := local.Open(nil); !errors.Is(err, listing.ErrInvalidRequest) {
 		t.Errorf("no root: %v", err)
 	}
 	file, err := os.Open(filepath.Join(root, "f"))
@@ -190,7 +187,7 @@ func TestPageErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	if _, err := local.Open(file, local.Options{}); !errors.Is(err, listing.ErrNotDirectory) {
+	if _, err := local.Open(file); !errors.Is(err, listing.ErrNotDirectory) {
 		t.Errorf("a file root: %v", err)
 	}
 }
@@ -218,7 +215,7 @@ func TestLookup(t *testing.T) {
 		{"f/x", listing.LookupAbsent, ""},
 		{"nope", listing.LookupAbsent, ""},
 		{"nope/x", listing.LookupAbsent, ""},
-		{"lnd/g", listing.LookupUnknown, ""},
+		{"lnd/g", listing.LookupUnknown, listing.ErrNotDirectory.Error()},
 		{long + "/x", listing.LookupUnknown, listing.ErrUnsupported.Error()},
 	}
 	if os.Getuid() != 0 {
@@ -232,8 +229,8 @@ func TestLookup(t *testing.T) {
 			want  string
 		}{"locked/x", listing.LookupUnknown, listing.ErrAuth.Error()})
 	}
-	src := open(t, hold(t, root), local.Options{})
-	classes := []error{listing.ErrAuth, listing.ErrUnsupported, listing.ErrUnavailable, listing.ErrOtherDevice, listing.ErrNotFound}
+	src := open(t, hold(t, root))
+	classes := []error{listing.ErrAuth, listing.ErrUnsupported, listing.ErrUnavailable, listing.ErrOtherDevice, listing.ErrNotFound, listing.ErrNotDirectory}
 	for _, c := range cases {
 		r, err := src.Lookup(context.Background(), []byte(c.key))
 		if err != nil || r.State != c.state {
@@ -278,7 +275,7 @@ func TestRootNotResolvedByPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	symlink(t, base, outside, "root")
-	src := open(t, f, local.Options{})
+	src := open(t, f)
 	ctx := context.Background()
 
 	if got, err := level(ctx, src, "", 10); err != nil || !slices.Equal(got, []string{"prefix in/"}) {
@@ -295,13 +292,14 @@ func TestRootNotResolvedByPath(t *testing.T) {
 }
 
 // TestSymlinkPrefixNotFollowed: a prefix that is a symbolic link, or has
-// one on the way, is not followed: the link itself is no directory, and a
-// prefix through it is not reached, neither listed nor shown absent.
+// one on the way, is not followed: the link is no directory, and a page or
+// a lookup through it is not reached, in that class, neither listed nor
+// shown absent.
 func TestSymlinkPrefixNotFollowed(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "real/sub/x")
 	symlink(t, root, "real", "lnk")
-	src := open(t, hold(t, root), local.Options{})
+	src := open(t, hold(t, root))
 	ctx := context.Background()
 
 	got, err := level(ctx, src, "lnk/", 10)
@@ -309,11 +307,11 @@ func TestSymlinkPrefixNotFollowed(t *testing.T) {
 		t.Errorf("lnk/: %q %v, want ErrNotDirectory", got, err)
 	}
 	got, err = level(ctx, src, "lnk/sub/", 10)
-	if !errors.Is(err, listing.ErrUnsupported) || errors.Is(err, listing.ErrNotFound) || errors.Is(err, listing.ErrNotDirectory) || len(got) != 0 {
-		t.Errorf("lnk/sub/: %q %v, want ErrUnsupported (not reached)", got, err)
+	if !errors.Is(err, listing.ErrNotDirectory) || errors.Is(err, listing.ErrNotFound) || len(got) != 0 {
+		t.Errorf("lnk/sub/: %q %v, want ErrNotDirectory (not reached)", got, err)
 	}
-	if r, err := src.Lookup(ctx, []byte("lnk/sub/x")); err != nil || r.State != listing.LookupUnknown {
-		t.Errorf("lnk/sub/x: %+v %v, want unknown", r, err)
+	if r, err := src.Lookup(ctx, []byte("lnk/sub/x")); err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrNotDirectory) {
+		t.Errorf("lnk/sub/x: %+v %v, want unknown, ErrNotDirectory", r, err)
 	}
 }
 
@@ -326,7 +324,7 @@ func TestReplacedBetweenPages(t *testing.T) {
 		class            error
 	}{
 		{"d/", "d", listing.ErrNotDirectory},
-		{"p/d/", "p", listing.ErrUnsupported},
+		{"p/d/", "p", listing.ErrNotDirectory},
 	} {
 		base := t.TempDir()
 		root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")
@@ -334,7 +332,7 @@ func TestReplacedBetweenPages(t *testing.T) {
 			write(t, root, fmt.Sprintf("%sf%02d", c.prefix, i))
 			write(t, outside, fmt.Sprintf("%sz%02d", c.prefix, i)) // under outside/d/ and outside/p/d/
 		}
-		src := open(t, hold(t, root), local.Options{})
+		src := open(t, hold(t, root))
 		ctx := context.Background()
 
 		page, err := src.Page(ctx, listing.PageRequest{Prefix: []byte(c.prefix), Limit: 3})
@@ -361,7 +359,7 @@ func TestChangedBetweenPages(t *testing.T) {
 	for i := range 20 {
 		write(t, root, fmt.Sprintf("c/f%02d", i))
 	}
-	src := open(t, hold(t, root), local.Options{})
+	src := open(t, hold(t, root))
 	ctx := context.Background()
 
 	req := listing.PageRequest{Prefix: []byte("c/"), Limit: 5}
@@ -403,29 +401,6 @@ func TestChangedBetweenPages(t *testing.T) {
 	}
 }
 
-// TestTooWide: a directory whose names pass MaxHeldBytes fails its page,
-// as ErrTooWide and listing.ErrUnsupported, and a narrower one pages.
-func TestTooWide(t *testing.T) {
-	root := t.TempDir()
-	for i := range 1000 {
-		write(t, root, fmt.Sprintf("w/f%04d", i))
-	}
-	write(t, root, "n/f")
-	src := open(t, hold(t, root), local.Options{MaxHeldBytes: 10_000}) // about 140 names
-	ctx := context.Background()
-
-	_, err := src.Page(ctx, listing.PageRequest{Prefix: []byte("w/"), Limit: 10})
-	if !errors.Is(err, local.ErrTooWide) || !errors.Is(err, listing.ErrUnsupported) {
-		t.Errorf("w/: %v, want ErrTooWide", err)
-	}
-	if got, err := level(ctx, src, "n/", 10); err != nil || len(got) != 2 {
-		t.Errorf("n/: %q %v", got, err)
-	}
-	if got, err := level(ctx, open(t, hold(t, root), local.Options{}), "w/", 300); err != nil || len(got) != 1001 {
-		t.Errorf("w/ under the default bound: %d entries, %v", len(got), err)
-	}
-}
-
 // openFDs counts the process's open descriptors (Linux: /proc/self/fd;
 // macOS: /dev/fd), the one reading them included.
 func openFDs(t *testing.T) int {
@@ -453,7 +428,7 @@ func TestDescriptorsClosed(t *testing.T) {
 	}
 	symlink(t, root, "a", "lnk")
 	f := hold(t, root)
-	src := open(t, f, local.Options{MaxHeldBytes: 100_000})
+	src := open(t, f)
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	ctx := context.Background()
@@ -492,7 +467,7 @@ func TestConcurrentPages(t *testing.T) {
 		write(t, root, fmt.Sprintf("f%03d", i))
 		write(t, root, fmt.Sprintf("d/g%03d", i))
 	}
-	src := open(t, hold(t, root), local.Options{})
+	src := open(t, hold(t, root))
 	ctx := context.Background()
 	want := map[string][]string{}
 	for _, prefix := range []string{"", "d/"} {
@@ -531,8 +506,8 @@ func TestTokens(t *testing.T) {
 			write(t, root, fmt.Sprintf("e/f%d", i))
 		}
 	}
-	src := open(t, hold(t, a), local.Options{})
-	other := open(t, hold(t, b), local.Options{})
+	src := open(t, hold(t, a))
+	other := open(t, hold(t, b))
 	ctx := context.Background()
 	page, err := src.Page(ctx, listing.PageRequest{Prefix: []byte("d/"), Limit: 2})
 	if err != nil || page.Next == "" {
@@ -571,7 +546,7 @@ func (o *observed) CacheHit(int64) {}
 func TestObserved(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "d/f")
-	src := open(t, hold(t, root), local.Options{})
+	src := open(t, hold(t, root))
 	obs := &observed{}
 	ctx := objfile.WithObserver(context.Background(), obs)
 	src.Page(ctx, listing.PageRequest{Prefix: []byte("d/"), Limit: 10})

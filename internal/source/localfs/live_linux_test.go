@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -64,7 +67,7 @@ func TestLiveUntyped(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(d, 0o755) })
 	untyped(t)
-	st, err := OpenLive(holdDir(t, root), 1<<20)
+	st, err := OpenLive(holdDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +105,7 @@ func TestLiveCanceledAfterRead(t *testing.T) {
 		}
 		return n, err
 	}
-	st, err := OpenLive(holdDir(t, root), 1<<20)
+	st, err := OpenLive(holdDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,5 +115,58 @@ func TestLiveCanceledAfterRead(t *testing.T) {
 	}
 	if _, err := st.List(context.Background(), []byte("d/"), "", 10); err != nil {
 		t.Errorf("a page not stopped: %v", err)
+	}
+}
+
+// TestLivePageBounded: a page of a directory of 200,000 files, made in a
+// shuffled order so that no filesystem returns them sorted, holds the
+// names that may still be on it, not the directory's: it allocates a few
+// thousand times, where reading the directory whole to sort it allocated
+// a string and a slot for each of its names. The level's pages come in
+// order, each after the last key of the one before.
+func TestLivePageBounded(t *testing.T) {
+	const files, limit = 200_000, 100
+	root := t.TempDir()
+	mk(t, root, "w", true)
+	dir, err := unix.Open(filepath.Join(root, "w"), unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range rand.New(rand.NewPCG(1, 2)).Perm(files) {
+		if err := unix.Mknodat(dir, fmt.Sprintf("f%06d", i), unix.S_IFREG|0o644, 0); err != nil {
+			unix.Close(dir)
+			t.Fatal(err)
+		}
+	}
+	unix.Close(dir)
+	st, err := OpenLive(holdDir(t, root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	first, err := st.List(ctx, []byte("w/"), "", limit)
+	runtime.ReadMemStats(&after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocs := after.Mallocs - before.Mallocs; allocs > files/20 {
+		t.Errorf("a page of %d allocated %d times: it held the directory, not the page", limit, allocs)
+	}
+
+	second, err := st.List(ctx, []byte("w/"), first.Next, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := append(keysOf(first), keysOf(second)...)
+	want := []string{"dir w/"}
+	for i := range 2*limit - 1 {
+		want = append(want, fmt.Sprintf("file w/f%06d", i))
+	}
+	if !slices.Equal(got, want) || !first.Truncated || first.Next != "w/f000098" || !second.Truncated || second.Next != "w/f000198" {
+		t.Errorf("pages %q (next %q, %q), want %q", got, first.Next, second.Next, want)
 	}
 }

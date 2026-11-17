@@ -92,26 +92,12 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   permission needed; read-only on macOS) each closed as the next opens, checking for a stop between names; a name replaced by a link on that way is
   refused as above, its error sample naming the level. The cost is one `openat` per directory, as a path
   open was, plus, past the limit, one per name between the ancestor and the directory, which on a deep
-  narrow tree grows with the square of its depth. A walk with a limit on every descriptor
-  (`MaxDescriptors`, below) bounds that: it reserves part of the kept limit for **checkpoints**, a
-  directory reached 8 names (`maxRedescent`) below a kept one, whose subdirectories are then opened from
-  it. A worker's kept directories are ancestors of the one it reads, so a reserve of one checkpoint per 8
-  levels of `MaxDepth` per worker means no directory is opened more than 8 names below a kept one: with one
-  worker on any tree, and with several on any tree whose directories with subdirectories still queued lie
-  on as many branches as there are workers, as on a deep narrow tree. Past that, a redescent is bounded by
-  `MaxDepth`. `TestRedescentBounded`: a 129-level spine with an empty sibling at each level, 258
-  directories, `MaxDepth` 128, the least limit accepted (19 descriptors for one worker on Linux, 17 kept:
-  the root and 16 checkpoints, all of them used), the worst order: 1,152 names opened, none more than 8
-  below a kept directory; 16,512 without checkpoints. The command reserves none and keeps no checkpoint. With `--one-file-system`
-  each directory opened below the root, and each intermediate on the way from an ancestor, is `fstat`ed
-  against the root's device; the first on another device is not walked and that is no error, as at a mount
-  point (`other_device_dirs`). The report's `dir_opens` counts `opened`,
-  `redescents` (opens from an ancestor), `refused` (directories not kept), `failed` by reason (`not_found`,
-  `permission`, `not_directory`, `symlink`, `name_too_long`, `other_device`, `other`), `peak_kept` and
-  `max_kept`; with `MaxDescriptors` also `checkpoints`, `redescent_names` and `max_redescent` (the names
-  redescents open, in all and at most) and `peak_open`, the most descriptors open at once, kept or not.
-  On macOS `os.File.ReadDir` reads through a directory stream on a duplicate of the descriptor
-  (`fdopendir`), so there, with `MaxDescriptors`, a directory counts two.
+  narrow tree grows with the square of its depth. With `--one-file-system` each directory opened below the
+  root, and each intermediate on the way from an ancestor, is `fstat`ed against the root's device; the first
+  on another device is not walked and that is no error, as at a mount point (`other_device_dirs`). The
+  report's `dir_opens` counts `opened`, `redescents` (opens from an ancestor), `refused` (directories not
+  kept), `failed` by reason (`not_found`, `permission`, `not_directory`, `symlink`, `name_too_long`,
+  `other_device`, `other`), `peak_kept` and `max_kept`.
 - **A held root** (`OpenDir`, Linux and macOS; no command option uses it). A caller that opened the root
   itself (`O_DIRECTORY`, not following a link) hands the open file to the provider, which never resolves the
   root by a path: it lists the directory at a prefix below it (`""`, or a directory key `a/b/`, keys staying
@@ -122,21 +108,13 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   every range is expanded or disposed. `Lookup` resolves one key the same way: `ENOENT` or `ENOTDIR` at the
   key, or at a directory on the way whose name is no symbolic link (`fstatat` tells), is absent; a symbolic link at the key is present as itself; a symbolic link or
   another device on the way, `EACCES`, `EPERM`, `ENAMETOOLONG` and other errors are unknown, with the class
-  of the contract's `Unread`. Options a library walk sets, all off for the command: `MaxDescriptors` bounds
-  every descriptor (`Opened.Begin` reserves two per worker from it, the most a worker holds beyond the kept
-  ones, and the checkpoints above; it needs `MaxDepth` and refuses a limit too small for both); `MaxDepth` lists a directory deeper than it below the prefix without reading it (`too_deep_dirs`);
-  `NoPaths` keeps no error sample and passes on no warning, so no entry's path stays after the walk;
-  `MaxHeldBytes` makes a count keep each directory's names until its enumeration ends (shared by its slabs
-  and continuations, released when it ends or is disposed), so a name read twice under concurrent renames
-  is listed once (`repeated_names`), and bounds what those sets hold across the walk at 64 bytes plus the
-  name each: a directory too wide for it ends its enumeration there (`held_budget_dirs`; the portable
-  engine then reads 1,024 entries at a time rather than the whole directory). The walk reports each place
-  it did not read as a worker meets it (`Provider.unread`), with the contract's scope and class
-  (`reader/listing`), to the emitter of the range that met it (`source.Unreader`), so a count whose sink is
-  an `order.UnreadSink` is told them; no library walk of a local source takes them yet, only tests do: a
-  directory not opened or not entered (`subtree`: permission, a symbolic link in its place, another
-  device, too deep, a name too long, the tree changing under it, I/O), a directory whose enumeration did
-  not end (`listing`: a read error, the held-names bound), an entry whose stat failed (`subtree`), and, when
+  of the contract's `Unread`. The walk reports each place it did not read as a worker meets it
+  (`Provider.unread`), with the contract's scope and class (`reader/listing`), to the emitter of the range
+  that met it (`source.Unreader`), so a count whose sink is an `order.UnreadSink` is told them; no library
+  walk of a local source takes them yet, only tests do: a directory not opened or not entered (`subtree`:
+  permission, a symbolic link in its place, another device, a name too long, the tree changing under it,
+  I/O), a directory whose enumeration did not end (`listing`: a read error), an entry whose stat failed
+  (`subtree`), and, when
   the walk stops, `budget` for each range it did not finish: `listing` for a directory it had opened, a
   chunk or a continuation, `subtree` for one it never opened; for the ranges still queued, the count
   reports what `Dropped` says of each before it disposes them (`TestStoppedWalkReportsUnread`,
@@ -149,22 +127,26 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   parent (`resolve`, shared: each ancestor with `longpath.Search` and `O_NOFOLLOW`, device-checked, at most two
   descriptors), then the directory itself `O_RDONLY|O_NOFOLLOW`, the root as `.` so that each page has its own
   read offset and concurrent pages share nothing, and checks its device too: another device is
-  `listing.ErrOtherDevice`, a symbolic link at the prefix `ErrNotDirectory`, one on the way `ErrUnsupported`
-  (not reached), nothing there `ErrNotFound`; `EACCES`/`EPERM` are `ErrAuth`, `ENAMETOOLONG` `ErrUnsupported`,
-  other errors `ErrUnavailable`, each message naming the level and the caller's prefix, never a name read. It
-  reads the directory whole (Linux: `getdents64`, an untyped entry typed by `fstatat` relative to it and, when
-  that stat fails, no directory; macOS: `os.File.ReadDir`, whose own `fstatat` of an untyped entry fails the
-  read when it fails, which APFS and HFS+, typing every entry, never ask), holds the names that sort after the
-  token's key, priced as `MaxHeldBytes` prices a count's (64 bytes plus the name; past the bound
-  `ErrTooWide`), sorts them with `/` on directories, keeps a name the read returned twice once, and stats only
-  the page's non-directory entries relative to the directory, checking for a stop of the context before the
-  first: one gone since is left out, one that is a directory now (its key sorts elsewhere) too, one whose stat
-  fails is `unknown`. A child directory is a common prefix, not statted. The directory's own entry, from
-  `fstat` of its descriptor, is the first page's `Self`.
+  `listing.ErrOtherDevice`, a symbolic link at the prefix or on the way `ErrNotDirectory` (not followed: not
+  reached, never absent), nothing there `ErrNotFound`; `EACCES`/`EPERM` are `ErrAuth`, `ENAMETOOLONG`
+  `ErrUnsupported`, other errors `ErrUnavailable`, each message naming the level and the caller's prefix, never
+  a name read. A lookup that does not reach its key answers unknown with the same class as its `Reason`
+  (`classed`). A page reads the directory whole (Linux: `getdents64`, an untyped entry typed by `fstatat` relative
+  to it and, when that stat fails, no directory; macOS: `os.File.ReadDir`, whose own `fstatat` of an untyped entry
+  fails the read when it fails, which APFS and HFS+, typing every entry, never ask), and keeps only the names,
+  with `/` on directories, that may still be on the page: of those that sort after the token's key, at most twice
+  the page's `Limit`, cut back to the first `Limit`+1 when it passes that, a name sorting after the last of them
+  passed over from then on (`levelNames`), so that a page's memory follows its `Limit` and not the directory's
+  size (`TestLivePageBounded`: a page of 100 of 200,000 files allocates fewer than 10,000 times, where holding and
+  sorting the directory whole allocated once per name). A name the read returned twice is kept once. It stats only
+  the page's non-directory entries relative to the directory, checking for a stop of the context before the first:
+  one gone since is left out, one that is a directory now (its key sorts elsewhere) too, one whose stat fails is
+  `unknown`. A child directory is a common prefix, not statted. The directory's own entry, from `fstat` of its
+  descriptor, is the first page's `Self`.
   The store's token is the last key the page read, so the next page is the names after it: nothing is held
   between pages, and a directory changing between them repeats and skips nothing that stayed
   (`local/local_test.go`: the root's path replaced by a link, a link at and on the way to a prefix, a
-  directory replaced between pages, entries removed and added between pages, a directory past the bound,
+  directory replaced between pages, entries removed and added between pages,
   descriptors after every call, concurrent pages; `TestLiveOtherDevice` through the `lookupFstat` seam;
   `TestLiveUntyped` and `TestLiveCanceledAfterRead` through the `levelGetdents` seam).
 - **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on

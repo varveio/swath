@@ -82,8 +82,7 @@ var (
 // key is present, as itself. A symbolic link or another device on the way,
 // EACCES, EPERM, ENAMETOOLONG and other errors leave the key unknown, not
 // reached. A key that is not one, a root not held, and a stop of ctx are
-// errors. A lookup holds at most two descriptors at once, outside a
-// listing's limit (Options.MaxDescriptors).
+// errors. A lookup holds at most two descriptors at once.
 func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 	p := o.p
 	if p.held == nil {

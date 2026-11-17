@@ -118,15 +118,7 @@ const (
 // restores the setting; a count has no encoders, reorder storage or
 // readahead, the other readers of GOMAXPROCS. Every listing that writes
 // output keeps the setting as it is.
-//
-// With Options.MaxDescriptors, Begin bounds the walk's descriptors for
-// opt.Workers (Provider.boundDescriptors), and refuses a limit too small.
 func (o *Opened) Begin(f *filter.Spec, unreadable func(prefix string), count bool, opt *order.Options) (end func(), err error) {
-	if n := o.p.opt.MaxDescriptors; n > 0 {
-		if err := o.p.boundDescriptors(int64(n), int64(max(opt.Workers, 1))); err != nil {
-			return nil, err
-		}
-	}
 	prune, plan, err := f.PruneDirectories()
 	if err != nil {
 		return nil, err

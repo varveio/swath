@@ -30,7 +30,6 @@ import (
 // resolved by a path.
 type Live struct {
 	o        *Opened
-	maxHeld  int64
 	location string
 }
 
@@ -38,9 +37,8 @@ var _ live.Store = (*Live)(nil)
 
 // OpenLive opens root, a directory the caller opened (O_DIRECTORY, not
 // following a symbolic link) and keeps open until the store is closed, as
-// a live.Store whose pages hold at most maxHeld bytes of names (ErrTooWide
-// past it). A root that is not a directory is listing.ErrNotDirectory.
-func OpenLive(root *os.File, maxHeld int64) (live.Store, error) {
+// a live.Store. A root that is not a directory is listing.ErrNotDirectory.
+func OpenLive(root *os.File) (live.Store, error) {
 	var s unix.Stat_t
 	if err := unix.Fstat(int(root.Fd()), &s); err != nil {
 		return nil, classed(unreadClass(err), fmt.Errorf("the root: %w", err))
@@ -54,7 +52,7 @@ func OpenLive(root *os.File, maxHeld int64) (live.Store, error) {
 	}
 	// The root's device and inode, not its path: the caller may have given
 	// none, and a path names whatever is there when it is resolved.
-	return &Live{o: o, maxHeld: maxHeld, location: fmt.Sprintf("local\x00%d\x00%d", s.Dev, s.Ino)}, nil
+	return &Live{o: o, location: fmt.Sprintf("local\x00%d\x00%d", s.Dev, s.Ino)}, nil
 }
 
 // Location identifies the held directory by its device and inode
@@ -75,11 +73,11 @@ func (l *Live) Close() error { return nil }
 // after a count of them, so that a directory that changes between pages
 // repeats no key and skips no name that stayed.
 //
-// The directory is read whole and sorted to choose the page: the names
-// after token are held, each priced at its length and heldNameBytes, and
-// past the store's bound the page fails with ErrTooWide. Only the page's
-// entries are statted, relative to the directory's descriptor. One read
-// directory is reported to ctx's objfile.Observer as one list request.
+// The directory is read whole to choose the page, again for each page,
+// keeping only the names that may still be on it (levelNames): what a page
+// holds follows max, not the directory's size. Only the page's entries
+// are statted, relative to the directory's descriptor. One read directory
+// is reported to ctx's objfile.Observer as one list request.
 func (l *Live) List(ctx context.Context, prefix []byte, token string, max int) (*live.Level, error) {
 	end := observe(ctx, objfile.ListRequest, string(prefix))
 	lvl, err := l.list(ctx, string(prefix), token, max)
@@ -107,25 +105,26 @@ func (l *Live) list(ctx context.Context, prefix, token string, limit int) (*live
 	}
 	f := os.NewFile(uintptr(fd), prefix) // it owns fd; its name, the caller's key, is all its errors can name
 	defer f.Close()
-	kids, err := levelNames(ctx, f, fd, after, l.maxHeld)
+	n := limit
+	if self {
+		n--
+	}
+	kids, more, err := levelNames(ctx, f, fd, after, n)
 	if err != nil {
 		return nil, failed(ctx, prefix, err)
 	}
 
-	n := limit
 	lvl := &live.Level{}
 	if self {
 		var e Entry
 		fillStat(&e, &st)
 		lvl.Objects = append(lvl.Objects, entryOf(prefix, &e))
-		n--
 	}
-	if len(kids) > n {
+	if more {
 		lvl.Truncated, lvl.Next = true, prefix // a page of the directory's own entry alone
 		if n > 0 {
 			lvl.Next = prefix + kids[n-1].key
 		}
-		kids = kids[:n]
 	}
 	if err := levelEntries(ctx, fd, prefix, kids, lvl); err != nil {
 		return nil, failed(ctx, prefix, err)
@@ -242,32 +241,44 @@ type child struct {
 }
 
 // levelNames reads f, the directory fd, whole (readLevel) and returns the
-// children whose keys sort after after, sorted by key, each once: a name
-// the directory returns twice in one read (renames moving entries in it)
-// is kept once. What it holds is bounded by maxHeld (ErrTooWide).
-func levelNames(ctx context.Context, f *os.File, fd int, after string, maxHeld int64) ([]child, error) {
-	var kids []child
-	var held int64
-	err := readLevel(ctx, f, fd, func(name string, dir bool) error {
-		k := child{key: name, dir: dir}
+// first n children whose keys sort after after, sorted by key, each once (a
+// name the directory returns twice in one read, renames moving entries in
+// it, is kept once), and whether more children follow them. It holds at
+// most 2n+1 names, whatever the directory's size: past 2n it keeps the
+// first n+1 (trim), and from then on passes over a name that does not sort
+// before the last of those (bound).
+func levelNames(ctx context.Context, f *os.File, fd int, after string, n int) (kids []child, more bool, err error) {
+	var key []byte // the name read, with "/" after a directory's
+	bound := ""    // once trimmed to n+1 names, the last; keys are never empty
+	trim := func() {
+		slices.SortFunc(kids, func(a, b child) int { return strings.Compare(a.key, b.key) })
+		kids = slices.CompactFunc(kids, func(a, b child) bool { return a.key == b.key })
+		if len(kids) > n {
+			kids, bound = kids[:n+1], kids[n].key
+		}
+	}
+	err = readLevel(ctx, f, fd, func(name string, dir bool) {
+		key = append(key[:0], name...)
 		if dir {
-			k.key += "/"
+			key = append(key, '/')
 		}
-		if k.key <= after {
-			return nil
+		if string(key) <= after || bound != "" && string(key) >= bound {
+			return
 		}
-		if held += int64(len(k.key)) + heldNameBytes; held > maxHeld {
-			return ErrTooWide
+		kids = append(kids, child{key: string(key), dir: dir})
+		if len(kids)-n > n {
+			trim()
 		}
-		kids = append(kids, k)
-		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	slices.SortFunc(kids, func(a, b child) int { return strings.Compare(a.key, b.key) })
-	return slices.CompactFunc(kids, func(a, b child) bool { return a.key == b.key }), nil
+	trim()
+	if len(kids) > n {
+		return kids[:n], true, nil
+	}
+	return kids, false, nil
 }
 
 // readError is a failed read of a level's directory, in its class.
@@ -312,9 +323,9 @@ func levelEntries(ctx context.Context, fd int, prefix string, kids []child, lvl 
 
 // Lookup says what is at exactly key below the held directory, as
 // Opened.Lookup finds it (live.Store): a present entry with what lstat
-// gives of it, absent, or unknown with the reason. A key of the wrong form
-// is listing.ErrInvalidRequest. One lookup is reported to ctx's
-// objfile.Observer as one metadata request.
+// gives of it, absent, or unknown with the reason in its class (classed).
+// A key of the wrong form is listing.ErrInvalidRequest. One lookup is
+// reported to ctx's objfile.Observer as one metadata request.
 func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	end := observe(ctx, objfile.MetadataRequest, string(key))
 	r, err := l.lookup(ctx, string(key))
@@ -342,26 +353,16 @@ func (l *Live) lookup(ctx context.Context, key string) (listing.LookupResult, er
 	case listing.LookupAbsent:
 		return listing.LookupResult{State: listing.LookupAbsent}, nil
 	}
-	return listing.LookupResult{State: listing.LookupUnknown, Reason: reason(r.Class, r.Err)}, nil
-}
-
-// reason says why a lookup did not reach its key: in the class of the
-// failure, or, for a symbolic link or another device on the way, an error
-// of no class naming it (listing.LookupResult).
-func reason(class listing.UnreadClass, err error) error {
-	switch class {
-	case listing.UnreadSymlinkAncestor, listing.UnreadOtherDevice:
-		return fmt.Errorf("not reached: %w", err)
-	}
-	return classed(class, err)
+	return listing.LookupResult{State: listing.LookupUnknown, Reason: classed(r.Class, r.Err)}, nil
 }
 
 // classed is err in the contract's class of the failure class names: a
 // refusal (EACCES, EPERM) is listing.ErrAuth; another device than the
-// root's listing.ErrOtherDevice; a name the system refuses as too long,
-// and a symbolic link on the way, which is never followed, are
+// root's listing.ErrOtherDevice; a symbolic link on the way, which is
+// never followed, listing.ErrNotDirectory: what lies past it is not
+// reached, never absent; a name the system refuses as too long
 // listing.ErrUnsupported, which asking again does not change; an I/O
-// error, and a tree that changed while it was resolved, are
+// error, and a tree that changed while it was resolved,
 // listing.ErrUnavailable.
 func classed(class listing.UnreadClass, err error) error {
 	c := listing.ErrUnavailable
@@ -370,7 +371,9 @@ func classed(class listing.UnreadClass, err error) error {
 		c = listing.ErrAuth
 	case listing.UnreadOtherDevice:
 		c = listing.ErrOtherDevice
-	case listing.UnreadNameTooLong, listing.UnreadSymlinkAncestor:
+	case listing.UnreadSymlinkAncestor:
+		c = listing.ErrNotDirectory
+	case listing.UnreadNameTooLong:
 		c = listing.ErrUnsupported
 	}
 	return fmt.Errorf("%w: %w", c, err)

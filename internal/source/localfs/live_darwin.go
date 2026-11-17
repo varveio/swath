@@ -10,19 +10,17 @@ import (
 )
 
 // readLevel calls add with each name the directory f holds and whether it
-// is a directory, until add fails. os.File.ReadDir types an entry the
-// filesystem leaves untyped by a stat relative to f, never by a path, and
-// a failure of that stat fails the read: APFS and HFS+ type every entry.
-func readLevel(ctx context.Context, f *os.File, _ int, add func(name string, dir bool) error) error {
+// is a directory. os.File.ReadDir types an entry the filesystem leaves
+// untyped by a stat relative to f, never by a path, and a failure of that
+// stat fails the read: APFS and HFS+ type every entry.
+func readLevel(ctx context.Context, f *os.File, _ int, add func(name string, dir bool)) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		ents, err := f.ReadDir(levelBatch)
 		for _, e := range ents {
-			if addErr := add(e.Name(), e.IsDir()); addErr != nil {
-				return addErr
-			}
+			add(e.Name(), e.IsDir())
 		}
 		if err == io.EOF {
 			return nil

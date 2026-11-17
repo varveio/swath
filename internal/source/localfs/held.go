@@ -23,12 +23,6 @@ type LookupResult struct {
 	Err   error
 }
 
-// ErrTooWide is a directory whose names, read whole to choose a page of
-// it (OpenLive), pass the page's bound on the bytes it holds. It matches
-// listing.ErrUnsupported: asking again with the same bound changes
-// nothing.
-var ErrTooWide = fmt.Errorf("%w: the directory's names pass the bound on held bytes", listing.ErrUnsupported)
-
 // keyNames splits key, below a held root (OpenDir), into its names: none
 // for "", the root itself. A name is never empty, "." or "..", and holds
 // no NUL. A prefix (OpenDir's) is "" or a directory key, ending in "/".

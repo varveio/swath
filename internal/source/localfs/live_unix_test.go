@@ -22,7 +22,7 @@ import (
 // TestLiveOtherDevice: a directory on another device than the held root,
 // which a test cannot mount, made so by the device check's stat: it is
 // listed as a child prefix of its parent; its own level, and one below
-// it, fail as on another device; a lookup through it is unknown, of no
+// it, fail as on another device; a lookup through it is unknown, in that
 // class; the directory itself is present.
 func TestLiveOtherDevice(t *testing.T) {
 	root := t.TempDir()
@@ -41,7 +41,7 @@ func TestLiveOtherDevice(t *testing.T) {
 		}
 		return err
 	}
-	st, err := OpenLive(holdDir(t, root), 1<<20)
+	st, err := OpenLive(holdDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestLiveOtherDevice(t *testing.T) {
 		}
 	}
 	r, err := st.Lookup(ctx, []byte("m/x/f"))
-	if err != nil || r.State != listing.LookupUnknown || r.Reason == nil || errors.Is(r.Reason, listing.ErrOtherDevice) ||
+	if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrOtherDevice) ||
 		!strings.Contains(r.Reason.Error(), errOtherDevice.Error()) {
 		t.Errorf("m/x/f: %+v %v, want unknown on another device", r, err)
 	}
@@ -73,7 +73,7 @@ func TestLiveLevelSelf(t *testing.T) {
 	root := t.TempDir()
 	mk(t, root, "d/a", false)
 	mk(t, root, "d/b/c", false)
-	st, err := OpenLive(holdDir(t, root), 1<<20)
+	st, err := OpenLive(holdDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestLiveLevelSelf(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if _, err := OpenLive(f, 1<<20); !errors.Is(err, listing.ErrNotDirectory) {
+	if _, err := OpenLive(f); !errors.Is(err, listing.ErrNotDirectory) {
 		t.Errorf("a file root: %v", err)
 	}
 }

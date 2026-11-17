@@ -28,6 +28,6 @@ func (o *Opened) Lookup(context.Context, string) (LookupResult, error) {
 
 // OpenLive is not supported here: a held root is listed on Linux and
 // macOS only (listing.ErrUnsupported).
-func OpenLive(*os.File, int64) (live.Store, error) {
+func OpenLive(*os.File) (live.Store, error) {
 	return nil, fmt.Errorf("%w: a local source lists on Linux and macOS only", listing.ErrUnsupported)
 }

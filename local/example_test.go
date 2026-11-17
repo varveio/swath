@@ -26,7 +26,7 @@ func Example() {
 		log.Fatal(err)
 	}
 	defer root.Close() // after the source's Close
-	src, err := local.Open(root, local.Options{})
+	src, err := local.Open(root)
 	if err != nil {
 		log.Fatal(err)
 	}

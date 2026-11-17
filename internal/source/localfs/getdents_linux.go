@@ -105,15 +105,6 @@ func disposeChunk(r Range) {
 	}
 }
 
-// disposeContinuation ends the enumeration of a count's directory whose
-// continuation will never be expanded: its name set is released.
-func disposeContinuation(r Range) {
-	if c := r.chunk; c != nil && c.next {
-		c.dir.seen.drop()
-		c.dir.seen = nil
-	}
-}
-
 // expandNative lists a range with raw getdents64 and fd-relative stat.
 // Per directory it allocates one key arena, one row slab sized from the
 // entry count and one range per subdirectory; entries are sorted by key
@@ -186,22 +177,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 // A directory the limit did not keep (dirFD.kept) is read to its end here,
 // slab by slab, each statted by this worker: chunks and a continuation
 // would hold its descriptor open past this Expand, outside the limit.
-//
-// With Options.MaxHeldBytes the directory's names are kept from its first
-// slab until its enumeration ends (d.seen, handed on with its
-// continuation): a name read again is dropped, and the enumeration ends
-// where the listing's bound on held names stops it (admitSlab).
 func (p *Provider) countSlab(ctx context.Context, d *dirFD, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	if r.chunk == nil {
-		d.seen = p.newNameSet()
-	}
-	handed := false // a continuation holds the name set
-	defer func() {
-		if !handed {
-			d.seen.drop()
-			d.seen = nil
-		}
-	}()
 	sc := scratchPool.Get().(*scratch)
 	defer func() { sc.keys = nil; scratchPool.Put(sc) }() // the rows own the key arena
 	for first := r.chunk == nil; ; first = false {
@@ -211,9 +187,6 @@ func (p *Provider) countSlab(ctx context.Context, d *dirFD, r Range, e source.Em
 		}
 		if len(sc.ents) == 0 && !first { // a continuation at the end: the last slab filled exactly
 			return nil
-		}
-		if !p.admitSlab(d.seen, r, sc, st) {
-			more = false
 		}
 		st.Slabs++
 		p.resolveUnknown(d.fd, sc)
@@ -238,38 +211,9 @@ func (p *Provider) countSlab(ctx context.Context, d *dirFD, r Range, e source.Em
 		}
 		if d.kept() {
 			d.refs.Add(1)
-			handed = true // the continuation's now, disposed with it if Child fails (disposeContinuation)
-			return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}, depth: r.depth})
+			return e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, next: true}})
 		}
 	}
-}
-
-// admitSlab keeps in sc the entries whose names the directory's
-// enumeration had not returned (n; nil keeps every one), counting the
-// repeats dropped. It reports false when the listing's bound on held
-// names stopped it: sc keeps the entries before that name, and the
-// enumeration ends there.
-func (p *Provider) admitSlab(n *nameSet, r Range, sc *scratch, st *Stats) bool {
-	if n == nil {
-		return true
-	}
-	k := 0
-	for i := range sc.ents {
-		fresh, over := n.admit(nameOf(sc.names, &sc.ents[i]))
-		if over {
-			sc.ents = sc.ents[:k]
-			p.heldFull(r, st)
-			return false
-		}
-		if !fresh {
-			st.RepeatedNames++
-			continue
-		}
-		sc.ents[k] = sc.ents[i]
-		k++
-	}
-	sc.ents = sc.ents[:k]
-	return true
 }
 
 // slabChunks hands a count's slab to other workers as chunks of
@@ -281,7 +225,7 @@ func (p *Provider) slabChunks(d *dirFD, r Range, sc *scratch, e source.Emitter[R
 	for i := 0; i < len(ents); i += chunkEntries {
 		d.refs.Add(1) // the chunk's share; the emitter disposes it if Child fails
 		st.Chunks++
-		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}, depth: r.depth}); err != nil {
+		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}}); err != nil {
 			return err
 		}
 	}
@@ -557,7 +501,7 @@ func (p *Provider) emitChunks(d *dirFD, r Range, sc *scratch, e source.Emitter[R
 	st.Chunks += int64(n)
 	for i := 0; i < len(ents); i += chunkEntries {
 		c := &chunk{dir: d, names: names, keys: keys, ents: ents[i:min(i+chunkEntries, len(ents))]}
-		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c, depth: r.depth}); err != nil {
+		if err := e.Child(Range{path: r.path, prefix: r.prefix, chunk: c}); err != nil {
 			// The emitter owns chunk i now (the order stage disposes it);
 			// release the references of the chunks never emitted.
 			for j := i + chunkEntries; j < len(ents); j += chunkEntries {
