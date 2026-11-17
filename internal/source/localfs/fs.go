@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -65,28 +64,6 @@ type Options struct {
 	// OneFilesystem lists a directory on another device than the root
 	// (a mount point) but does not walk it, as du -x and find -xdev.
 	OneFilesystem bool
-	// MaxDepth bounds how deep a listing reads: a directory more than
-	// MaxDepth names below the listing's own directory is listed but not
-	// read (too_deep_dirs, an UnreadSubtree). Zero sets no bound.
-	MaxDepth int
-	// MaxDescriptors bounds every descriptor the listing holds at once:
-	// the directories it keeps for queued work and those each worker
-	// opens, and bounds the names a directory is opened below a kept one
-	// (Provider.boundDescriptors, which Opened.Begin applies for its
-	// workers; it needs MaxDepth). Zero leaves the command's limit, on
-	// kept directories only (keepLimit).
-	MaxDescriptors int
-	// MaxHeldBytes, when positive, makes an unordered listing (a count)
-	// keep the names of each directory whose enumeration has not ended,
-	// so that a name the directory returns twice (read while renames
-	// move entries in it) is listed once, and bounds what those names
-	// hold across the listing (heldNameBytes each): a directory whose
-	// next name would pass it ends its enumeration there, unread
-	// (held_budget_dirs, an UnreadListing). Zero keeps no names.
-	MaxHeldBytes int64
-	// NoPaths keeps no entry's path once the listing returns: no error
-	// samples and no warnings, which name one.
-	NoPaths bool
 }
 
 // Stats count what a listing saw. Per-entry problems are counted, never fatal.
@@ -124,17 +101,6 @@ type Stats struct {
 	KeyTooLong int64     `json:"key_too_long"`
 	LongPaths  LongPaths `json:"long_paths"`
 	DirOpens   DirOpens  `json:"dir_opens"`
-	// TooDeep counts directories listed but not read, deeper than
-	// Options.MaxDepth: unreadable.
-	TooDeep int64 `json:"too_deep_dirs,omitempty"`
-	// RepeatedNames counts names a directory returned again in one
-	// enumeration, listed once (Options.MaxHeldBytes).
-	RepeatedNames int64 `json:"repeated_names,omitempty"`
-	// HeldBudget counts directories whose enumeration ended at
-	// Options.MaxHeldBytes: unreadable.
-	HeldBudget int64 `json:"held_budget_dirs,omitempty"`
-	// noSamples keeps note from naming paths (Options.NoPaths).
-	noSamples bool
 	// unreadTo is the Expand's emitter, told what it did not read (unread);
 	// nil when the emitter takes no reports.
 	unreadTo source.Unreader
@@ -151,22 +117,10 @@ type DirOpens struct {
 	Opened     int64 `json:"opened"`
 	Redescents int64 `json:"redescents"` // opens attempted from an ancestor, more than one name down
 	Refused    int64 `json:"refused"`    // directories the limit did not keep for their subdirectories
-	// Checkpoints counts directories kept in the limit's checkpoint
-	// reserve, maxRedescent names below a kept ancestor (adopt).
-	// RedescentNames counts the names the redescents open, intermediates
-	// included, and MaxRedescent the most one opens. All three are
-	// counted with Options.MaxDescriptors only.
-	Checkpoints    int64 `json:"checkpoints,omitempty"`
-	RedescentNames int64 `json:"redescent_names,omitempty"`
-	MaxRedescent   int64 `json:"max_redescent,omitempty"`
 	// Failed counts the opens that failed, by reason, as LongPaths.Failed.
 	Failed   map[string]int64 `json:"failed,omitempty"`
 	PeakKept int64            `json:"peak_kept"` // the most descriptors of kept directories at once
-	MaxKept  int64            `json:"max_kept"`  // the limit on them (keepLimit, Options.MaxDescriptors)
-	// PeakOpen is the most descriptors the walk had open at once, kept
-	// or not, the ones each worker opens included (Options.MaxDescriptors
-	// only).
-	PeakOpen int64 `json:"peak_open,omitempty"`
+	MaxKept  int64            `json:"max_kept"`  // the limit on them (keepLimit)
 }
 
 func (o *DirOpens) fail(reason string) {
@@ -180,9 +134,6 @@ func (o *DirOpens) add(x *DirOpens) {
 	o.Opened += x.Opened
 	o.Redescents += x.Redescents
 	o.Refused += x.Refused
-	o.Checkpoints += x.Checkpoints
-	o.RedescentNames += x.RedescentNames
-	o.MaxRedescent = max(o.MaxRedescent, x.MaxRedescent)
 	for k, v := range x.Failed {
 		if o.Failed == nil {
 			o.Failed = map[string]int64{}
@@ -191,99 +142,31 @@ func (o *DirOpens) add(x *DirOpens) {
 	}
 }
 
-// keptFDs count the directory descriptors a walk holds. open counts those
-// of the directories it keeps (dirFD), which limit bounds: a directory's,
-// from its open until its chunks are read and its queued subdirectories
-// opened relative to it. The last reserve of limit keeps only checkpoints
-// (keepCheckpoint); the command reserves none. Past limit a directory is
-// still read, whole by the worker that opened it, but not kept: its
+// keptFDs bound the directory descriptors a walk keeps open (dirFD): a
+// directory's, from its open until its chunks are read and its queued
+// subdirectories opened relative to it. Past limit a directory is still
+// read, whole by the worker that opened it, but not kept: its
 // subdirectories are opened from a kept ancestor. The root is always
-// kept. With countAll (Options.MaxDescriptors), all counts every
-// descriptor the walk has open, kept or not; the command does not pay for
-// counting them.
+// kept.
 type keptFDs struct {
-	limit    int64
-	reserve  int64 // of limit, for checkpoints only (Provider.boundDescriptors)
-	countAll bool
-	open     atomic.Int64
-	peak     atomic.Int64
-	all      atomic.Int64
-	allPeak  atomic.Int64
+	limit int64
+	open  atomic.Int64
+	peak  atomic.Int64
 }
 
-// keepAs is why a directory asks to be kept (keptFDs.take).
-type keepAs uint8
-
-const (
-	keepRoot       keepAs = iota // always
-	keepOrdinary                 // within the limit less its reserve
-	keepCheckpoint               // within the limit: maxRedescent names below a kept ancestor (adopt)
-)
-
-// take counts n more kept descriptors if the limit allows them as how.
-func (k *keptFDs) take(how keepAs, n int64) bool {
-	open := k.open.Add(n)
-	ceiling := k.limit
-	if how == keepOrdinary {
-		ceiling -= k.reserve
-	}
-	if how != keepRoot && open > ceiling {
-		k.open.Add(-n)
+// take counts one more kept descriptor if the limit allows, or always.
+func (k *keptFDs) take(always bool) bool {
+	n := k.open.Add(1)
+	if n > k.limit && !always {
+		k.open.Add(-1)
 		return false
 	}
-	raise(&k.peak, open)
-	return true
-}
-
-// maxRedescent is the most names a directory is opened below a kept one
-// while the checkpoint reserve lasts (adopt).
-const maxRedescent = 8
-
-// boundDescriptors sets the limit on kept descriptors from n, every
-// descriptor the walk may hold (Options.MaxDescriptors), for workers. Two
-// per worker are left to what a worker opens beyond the kept ones (one it
-// reads, or two while it descends). Of the rest, reserve keeps checkpoints
-// for each worker's branch down to Options.MaxDepth, one per maxRedescent
-// levels (adopt). The directories one worker's walk keeps are ancestors of
-// the one it reads, so with one worker the reserve never runs out and no
-// directory is opened more than maxRedescent names below a kept one. A
-// limit too small for the reserve and the root is refused, and so is one
-// without MaxDepth, whose branches have no length to reserve for.
-func (p *Provider) boundDescriptors(n, workers int64) error {
-	if p.opt.MaxDepth <= 0 {
-		return errors.New("localfs: a limit on descriptors needs a limit on depth")
-	}
-	cost := p.dirCost()
-	reserve := workers * int64((p.opt.MaxDepth+maxRedescent-1)/maxRedescent) * cost
-	kept := n - 2*workers
-	if need := reserve + cost; kept < need {
-		return fmt.Errorf("localfs: a limit of %d descriptors is below the %d that %d workers need to a depth of %d", n, need+2*workers, workers, p.opt.MaxDepth)
-	}
-	p.keep.limit, p.keep.reserve, p.keep.countAll = kept, reserve, true
-	return nil
-}
-
-// opened and closed count n descriptors the walk opened or closed, kept or
-// not, when it counts them all.
-func (k *keptFDs) opened(n int64) {
-	if k.countAll {
-		raise(&k.allPeak, k.all.Add(n))
-	}
-}
-
-func (k *keptFDs) closed(n int64) {
-	if k.countAll {
-		k.all.Add(-n)
-	}
-}
-
-// raise sets peak to n if n is higher.
-func raise(peak *atomic.Int64, n int64) {
-	for p := peak.Load(); n > p; p = peak.Load() {
-		if peak.CompareAndSwap(p, n) {
-			return
+	for peak := k.peak.Load(); n > peak; peak = k.peak.Load() {
+		if k.peak.CompareAndSwap(peak, n) {
+			break
 		}
 	}
+	return true
 }
 
 // LongPaths account for the paths past the kernel's length limit
@@ -339,7 +222,7 @@ const maxKeyBytes = 32 << 10
 
 // Errors is the sum of the error counters.
 func (s *Stats) Errors() int64 {
-	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe + s.KeyTooLong + s.TooDeep + s.HeldBudget
+	return s.OpenErrors + s.ReadErrors + s.StatErrors + s.Vanished + s.Changed + s.ReadlinkErrors + s.Unsafe + s.KeyTooLong
 }
 
 // ErrorSamples are the first entries the listing could not read, each
@@ -349,11 +232,10 @@ func (s *Stats) ErrorSamples() []string { return s.Samples }
 const maxSamples = 8
 
 // note counts an error; one that left the entry out (not a vanished entry,
-// nor a link whose target was not read: Report) is a sample too, unless
-// the listing keeps no paths.
+// nor a link whose target was not read: Report) is a sample too.
 func (s *Stats) note(counter *int64, path string, err error) {
 	*counter++
-	if !s.noSamples && len(s.Samples) < maxSamples && counter != &s.Vanished && counter != &s.ReadlinkErrors {
+	if len(s.Samples) < maxSamples && counter != &s.Vanished && counter != &s.ReadlinkErrors {
 		s.Samples = append(s.Samples, path+": "+err.Error())
 	}
 }
@@ -381,9 +263,6 @@ func (s *Stats) add(o *Stats) {
 	s.PrunedDirs += o.PrunedDirs
 	s.FilteredStatErrors += o.FilteredStatErrors
 	s.KeyTooLong += o.KeyTooLong
-	s.TooDeep += o.TooDeep
-	s.RepeatedNames += o.RepeatedNames
-	s.HeldBudget += o.HeldBudget
 	s.LongPaths.add(&o.LongPaths)
 	s.DirOpens.add(&o.DirOpens)
 	for _, x := range o.Samples {
@@ -404,7 +283,6 @@ type Range struct {
 	// directories are opened by their path.
 	at    *dirFD
 	below int
-	depth int // names below the listing's own directory (Options.MaxDepth)
 }
 
 // Provider lists one root. It implements source.Provider[Range, Entry].
@@ -420,11 +298,8 @@ type Provider struct {
 	held     *dirFD
 	heldFile *os.File
 	prefix   string
-	// heldNames is the bytes the name sets of the directories being
-	// enumerated hold (Options.MaxHeldBytes).
-	heldNames atomic.Int64
-	prune     func(string) bool // immutable directory predicate, set before workers start
-	keyOut    func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
+	prune    func(string) bool // immutable directory predicate, set before workers start
+	keyOut   func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
 	// unreadable is told the key prefix of a directory that could not be
 	// opened (Opened.Begin's unreadable; nil: nobody asks), set before
 	// workers start.
@@ -452,10 +327,9 @@ type Provider struct {
 	keep keptFDs
 }
 
-// warnf passes a warning to the user, if the run takes them and the
-// listing may name paths.
+// warnf passes a warning to the user, if the run takes them.
 func (p *Provider) warnf(code, format string, a ...any) {
-	if p.warn == nil || p.opt.NoPaths {
+	if p.warn == nil {
 		return
 	}
 	p.warnMu.Lock()
@@ -527,16 +401,14 @@ func (p *Provider) Stats() Stats {
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
 	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
 	s.DirOpens.PeakKept, s.DirOpens.MaxKept = p.keep.peak.Load(), p.keep.limit
-	s.DirOpens.PeakOpen = p.keep.allPeak.Load()
 	return s
 }
 
 // Dispose releases what a range that will never be expanded holds (a
-// stopped listing's), a continuation's name set included, and reports it
-// not read (unread). It implements source.Disposer.
+// stopped listing's) and reports it not read (unread). It implements
+// source.Disposer.
 func (p *Provider) Dispose(r Range) {
 	p.unreadStopped(nil, r, false)
-	disposeContinuation(r)
 	p.release(r)
 }
 
@@ -561,11 +433,10 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	// before any work included: a range a worker has taken is no longer
 	// queued, so the order stage will not dispose it.
 	defer p.release(r)
-	st := Stats{noSamples: p.opt.NoPaths}
+	var st Stats
 	st.unreadTo, _ = e.(source.Unreader)
 	if ctx.Err() != nil { // as if disposed
 		p.unreadStopped(&st, r, false)
-		disposeContinuation(r)
 		return ctx.Err()
 	}
 	if t, ok := e.(source.Subtreer); ok && r.chunk == nil && !p.file {
@@ -677,8 +548,8 @@ func (p *Provider) statFailed(key, path string, st *Stats, err error) {
 // as a child range right after its DIR row, opened from d, the directory
 // read (dirFD.child). The run's own output (Skip) and an entry whose key
 // passes maxKeyBytes are dropped, a directory with its subtree. A
-// directory on another device (OneFilesystem), pruned by the filters or
-// deeper than Options.MaxDepth is listed and not walked.
+// directory on another device (OneFilesystem) or pruned by the filters is
+// listed and not walked.
 func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
 	start := 0
 	for i := range rows {
@@ -712,10 +583,6 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 		case p.prune != nil && p.prune(row.Key):
 			st.PrunedDirs++
 			stop = true
-		case p.opt.MaxDepth > 0 && r.depth >= p.opt.MaxDepth:
-			st.TooDeep++
-			p.unread(st, row.Key, listing.UnreadSubtree, listing.UnreadTooDeep)
-			stop = true
 		}
 		if stop {
 			if !p.opt.NoDirs {
@@ -738,7 +605,7 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 		// parent's names alive. Its reference on d is taken as it is handed
 		// on: Child owns it then, even when it fails.
 		key := row.Key
-		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key), depth: r.depth + 1}
+		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}
 		if err := e.Rows(rows[start:end]); err != nil {
 			return err
 		}
@@ -807,10 +674,6 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	}
 	st.DirsRead++
 	defer d.release() // statEntry and readlinkIn read relative to it (Linux, macOS); subdirectories take their own references
-	if seen := p.newNameSet(); seen != nil {
-		defer seen.drop()
-		return p.expandPortableBatches(ctx, r, d, seen, e, st)
-	}
 	ents, err := d.f.ReadDir(-1)
 	if err != nil {
 		p.readFailed(r, st, err)
@@ -825,49 +688,6 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 		sortRows(rows)
 	}
 	return p.emit(r, d, rows, e, st)
-}
-
-// portableBatch is how many entries the portable engine reads at a time
-// when it keeps a directory's names (expandPortableBatches).
-const portableBatch = 1024
-
-// expandPortableBatches lists a count's directory whose names are kept
-// (seen): portableBatch entries at a time, each name checked, each batch
-// statted and emitted before the next is read, so the directory holds its
-// names and one batch, not all its entries.
-func (p *Provider) expandPortableBatches(ctx context.Context, r Range, d *dirFD, seen *nameSet, e source.Emitter[Range, Entry], st *Stats) error {
-	st.Unsorted++
-	for {
-		ents, readErr := d.f.ReadDir(portableBatch)
-		if readErr != nil && readErr != io.EOF {
-			p.readFailed(r, st, readErr)
-		}
-		k, full := 0, false
-		for _, ent := range ents {
-			fresh, over := seen.admit(ent.Name())
-			if over {
-				p.heldFull(r, st)
-				full = true
-				break
-			}
-			if !fresh {
-				st.RepeatedNames++
-				continue
-			}
-			ents[k] = ent
-			k++
-		}
-		rows, err := p.portableRows(ctx, r, d.f, ents[:k], st)
-		if err != nil {
-			return err
-		}
-		if err := p.emit(r, d, rows, e, st); err != nil {
-			return err
-		}
-		if readErr != nil || full {
-			return nil
-		}
-	}
 }
 
 // portableRows stats ents, read from the directory f (statEntry), into
@@ -910,60 +730,6 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 		rows = append(rows, row)
 	}
 	return rows, nil
-}
-
-// nameSet is one directory enumeration's names (Options.MaxHeldBytes):
-// the names it returned, so that one returned again is listed once. What
-// the sets of a listing hold together is bounded (Provider.heldNames).
-type nameSet struct {
-	p    *Provider
-	set  map[string]struct{}
-	held int64
-}
-
-// heldNameBytes prices a name held in a set beyond its own bytes: its map
-// entry and string header, about.
-const heldNameBytes = 64
-
-// newNameSet is a name set for a directory's enumeration, nil when the
-// listing keeps none: only a count keeps them, with Options.MaxHeldBytes.
-func (p *Provider) newNameSet() *nameSet {
-	if !p.unsorted || p.opt.MaxHeldBytes <= 0 {
-		return nil
-	}
-	return &nameSet{p: p, set: map[string]struct{}{}}
-}
-
-// admit adds name, reporting whether it is new to the enumeration; over
-// when holding it would pass the listing's bound, and it is not added.
-func (n *nameSet) admit(name string) (fresh, over bool) {
-	if _, ok := n.set[name]; ok {
-		return false, false
-	}
-	cost := int64(len(name)) + heldNameBytes
-	if n.p.heldNames.Add(cost) > n.p.opt.MaxHeldBytes {
-		n.p.heldNames.Add(-cost)
-		return false, true
-	}
-	n.held += cost
-	n.set[strings.Clone(name)] = struct{}{}
-	return true, false
-}
-
-// drop releases the set: its enumeration ended. A nil set holds nothing.
-func (n *nameSet) drop() {
-	if n == nil {
-		return
-	}
-	n.p.heldNames.Add(-n.held)
-	n.set, n.held = nil, 0
-}
-
-// heldFull counts a directory whose enumeration ends at the listing's
-// bound on held names: its entries not yet read stay unread.
-func (p *Provider) heldFull(r Range, st *Stats) {
-	st.HeldBudget++
-	p.unread(st, r.prefix, listing.UnreadListing, listing.UnreadBudget)
 }
 
 // leftOut says the filters leave out the entry at key (its name below the

@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"runtime"
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
@@ -40,13 +39,9 @@ type dirFD struct {
 	f      *os.File // the portable engine's handle on fd, which closes it
 	refs   atomic.Int32
 	fds    *keptFDs // the walk's counts; nil for the caller's directory
-	cost   int64    // the descriptors it is counted as holding (dirCost)
 	pooled bool     // kept: counted in fds.open
 	from   *dirFD
 	below  int
-	// seen is the directory's name set while a count enumerates it
-	// (countSlab), handed on with its continuation.
-	seen *nameSet
 }
 
 // release drops one reference to d; the last closes it and releases what
@@ -60,9 +55,8 @@ func (d *dirFD) release() {
 	} else {
 		unix.Close(d.fd)
 	}
-	d.fds.closed(d.cost)
 	if d.pooled {
-		d.fds.open.Add(-d.cost)
+		d.fds.open.Add(-1)
 	}
 	d.from.release()
 }
@@ -122,16 +116,9 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	var fd int
 	if r.at == nil {
 		fd, err = longpath.OpenFD(p.root, unix.O_RDONLY|unix.O_DIRECTORY)
-		if err == nil {
-			p.keep.opened(1)
-		}
 	} else {
 		if r.below > 1 && r.at != p.held {
 			st.DirOpens.Redescents++
-			if p.opt.MaxDescriptors > 0 {
-				st.DirOpens.RedescentNames += int64(r.below)
-				st.DirOpens.MaxRedescent = max(st.DirOpens.MaxRedescent, int64(r.below))
-			}
 		}
 		fd, err = p.descend(ctx, r)
 	}
@@ -179,26 +166,21 @@ func (p *Provider) descend(ctx context.Context, r Range) (int, error) {
 	dir := at
 	for i := len(names) - r.below; i < len(names); i++ {
 		if err := ctx.Err(); err != nil {
-			p.closeTemporary(dir, at)
+			if dir != at {
+				unix.Close(dir)
+			}
 			return -1, err
 		}
 		fd, err := p.openAt(dir, names[i], i == len(names)-1)
-		p.closeTemporary(dir, at)
+		if dir != at {
+			unix.Close(dir)
+		}
 		if err != nil {
 			return -1, fmt.Errorf("level %d below the root: %w", i+1, err)
 		}
 		dir = fd
 	}
 	return dir, nil
-}
-
-// closeTemporary closes dir, an intermediate of a descent, unless it is
-// at, the directory the descent started from.
-func (p *Provider) closeTemporary(dir, at int) {
-	if dir != at {
-		unix.Close(dir)
-		p.keep.closed(1)
-	}
 }
 
 // openAt opens the directory name in dir, never following a symbolic
@@ -214,14 +196,12 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 	if err != nil {
 		return -1, classifyOpen(dir, name, err)
 	}
-	p.keep.opened(1)
 	if !p.opt.OneFilesystem {
 		return fd, nil
 	}
 	var s unix.Stat_t
 	if err := unix.Fstat(fd, &s); err != nil || int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
 		unix.Close(fd)
-		p.keep.closed(1)
 		if err == nil {
 			err = errOtherDevice
 		}
@@ -231,28 +211,16 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 }
 
 // adopt holds the directory fd opened for r, with the caller's reference:
-// the root always kept; another kept within the limit less its reserve
-// or, at maxRedescent names or more below r.at, as a checkpoint within the
-// whole limit (Provider.boundDescriptors), so that while the reserve
-// lasts no directory is opened more than maxRedescent names below a kept
-// one. The command reserves none: it keeps no checkpoint. One the limit
-// refuses takes a reference on r.at for its subdirectories (child).
+// kept if the limit allows, the root (the listing's own directory) always.
+// One the limit refuses takes a reference on r.at for its subdirectories
+// (child).
 func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
-	d := &dirFD{fd: fd, fds: &p.keep, cost: p.dirCost()}
+	d := &dirFD{fd: fd, fds: &p.keep}
 	d.refs.Store(1)
 	if r.at != p.held {
 		st.DirOpens.Opened++
 	}
-	switch {
-	case r.at == p.held:
-		d.pooled = p.keep.take(keepRoot, d.cost)
-	case p.keep.take(keepOrdinary, d.cost):
-		d.pooled = true
-	case p.keep.reserve > 0 && r.below >= maxRedescent && p.keep.take(keepCheckpoint, d.cost):
-		d.pooled = true
-		st.DirOpens.Checkpoints++
-	}
-	if d.pooled {
+	if d.pooled = p.keep.take(r.at == p.held); d.pooled {
 		return d
 	}
 	st.DirOpens.Refused++
@@ -261,35 +229,12 @@ func (p *Provider) adopt(fd int, r Range, st *Stats) *dirFD {
 	return d
 }
 
-// streamFDs is how many descriptors a directory the portable engine reads
-// holds: on macOS os.File.ReadDir reads through a directory stream on a
-// duplicate of the descriptor (fdopendir), open until the file closes.
-var streamFDs = func() int64 {
-	if runtime.GOOS == "darwin" {
-		return 2
-	}
-	return 1
-}()
-
-// dirCost is the descriptors a directory the walk opens is counted as
-// holding (dirFD.cost): streamFDs for the portable engine when the walk
-// bounds every descriptor (Options.MaxDescriptors), else one, as the
-// command's limit on kept directories counts them.
-func (p *Provider) dirCost() int64 {
-	if !p.native && p.opt.MaxDescriptors > 0 {
-		return streamFDs
-	}
-	return 1
-}
-
 // openPortable opens r's directory for the portable engine (openRange),
-// with an os.File that reads its entries, counting the descriptor its
-// reading may add (streamFDs).
+// with an os.File that reads its entries.
 func (p *Provider) openPortable(ctx context.Context, r Range, st *Stats) (*dirFD, bool, error) {
 	d, ok, err := p.openRange(ctx, r, st)
 	if ok {
 		d.f = os.NewFile(uintptr(d.fd), r.path)
-		p.keep.opened(d.cost - 1)
 	}
 	return d, ok, err
 }

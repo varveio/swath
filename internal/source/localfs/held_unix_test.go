@@ -7,7 +7,6 @@ package localfs
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -177,273 +176,10 @@ func TestHeldRootNotResolvedByPath(t *testing.T) {
 	}
 }
 
-// chain makes levels nested directories d/d/…/d under root and a file f in
-// the last; it returns the last directory's key.
-func chain(t *testing.T, root string, levels int) string {
-	t.Helper()
-	key := strings.Repeat("d/", levels)
-	mk(t, root, key+"f", false)
-	return key
-}
-
-// TestMaxDepth: under a limit of 128, the directory 129 levels down is
-// listed and not read, its file not listed, and reported too deep; under a
-// limit of 129 everything is read. Either engine, as a count.
-func TestMaxDepth(t *testing.T) {
-	root := t.TempDir()
-	deepest := chain(t, root, 129)
-	for _, portable := range []bool{false, true} {
-		for _, limit := range []int{128, 129} {
-			t.Run(fmt.Sprintf("portable=%v/limit=%d", portable, limit), func(t *testing.T) {
-				var u unreads
-				o, err := OpenDir(holdDir(t, root), "", Options{Fields: Stat, Portable: portable, MaxDepth: limit})
-				if err != nil {
-					t.Fatal(err)
-				}
-				keys := countKeys(t, u.to(o), 4)
-				st := o.p.Stats()
-				if limit == 129 {
-					if len(keys) != 130 || len(u.got) != 0 || st.TooDeep != 0 {
-						t.Fatalf("%d keys, unread %q, too_deep_dirs %d", len(keys), u.got, st.TooDeep)
-					}
-					return
-				}
-				if len(keys) != 129 || keys[len(keys)-1] != deepest || !slices.Equal(u.sorted(), []string{"subtree too_deep " + deepest}) ||
-					st.TooDeep != 1 || st.Errors() != 1 {
-					t.Fatalf("%d keys (last %q), unread %q, too_deep_dirs %d", len(keys), keys[len(keys)-1], u.sorted(), st.TooDeep)
-				}
-			})
-		}
-	}
-}
-
-// TestHeldNamesBound: a count keeping each directory's names
-// (MaxHeldBytes) lists a directory read in several slabs whole when the
-// bound allows, and ends one too wide for it there, unread; either way the
-// names it held are released when the walk ends. Either engine.
-func TestHeldNamesBound(t *testing.T) {
-	root := t.TempDir()
-	n := slabbed
-	for i := range n {
-		mk(t, root, fmt.Sprintf("wide/f%05d", i), false)
-	}
-	const fit = 8192 + 500 // the names a bound holds: into the second slab
-	perName := int64(len("f00000") + heldNameBytes)
-	for _, portable := range []bool{false, true} {
-		for _, bound := range []int64{1 << 30, perName * fit} {
-			t.Run(fmt.Sprintf("portable=%v/bound=%d", portable, bound), func(t *testing.T) {
-				var u unreads
-				o, err := OpenDir(holdDir(t, root), "", Options{Fields: Stat, Portable: portable, MaxHeldBytes: bound})
-				if err != nil {
-					t.Fatal(err)
-				}
-				keys := countKeys(t, u.to(o), 4)
-				st := o.p.Stats()
-				if o.p.heldNames.Load() != 0 {
-					t.Fatalf("%d bytes of names still held", o.p.heldNames.Load())
-				}
-				if bound == 1<<30 {
-					if len(keys) != n+1 || len(u.got) != 0 || st.HeldBudget != 0 || st.RepeatedNames != 0 {
-						t.Fatalf("%d keys, unread %q, held_budget_dirs %d", len(keys), u.got, st.HeldBudget)
-					}
-					return
-				}
-				// The root's names are released before wide/ is read: wide/
-				// holds the whole bound, and lists exactly as many names.
-				if len(keys) != 1+fit || !slices.Equal(u.sorted(), []string{"listing budget wide/"}) || st.HeldBudget != 1 {
-					t.Fatalf("%d keys, unread %q, held_budget_dirs %d", len(keys), u.sorted(), st.HeldBudget)
-				}
-			})
-		}
-	}
-}
-
-// comb makes a spine of levels directories a/a/…/a under root, each with
-// an empty sibling directory b: a deep narrow tree. It returns the number
-// of directories.
-func comb(t *testing.T, root string, levels int) int {
-	t.Helper()
-	key := ""
-	for range levels {
-		mk(t, root, key+"b", true)
-		key += "a/"
-	}
-	mk(t, root, key, true)
-	return 2 * levels
-}
-
-// depthFirst expands r and then each child range, the spine (a/) first,
-// recursively: the order in which a stack-driven walk holds every pending
-// sibling's parent and reaches the deepest spine directory first, the
-// worst case for the descriptors kept and for redescents. It returns the
-// rows listed.
-func depthFirst(t *testing.T, p *Provider, r Range) int {
-	t.Helper()
-	var x expansion
-	if err := p.Expand(context.Background(), r, &x); err != nil {
-		t.Fatal(err)
-	}
-	slices.SortFunc(x.kids, func(a, b Range) int { return strings.Compare(a.prefix, b.prefix) })
-	rows := len(x.rows)
-	for _, k := range x.kids {
-		rows += depthFirst(t, p, k)
-	}
-	return rows
-}
-
-// minDescriptors is the least Options.MaxDescriptors that Begin accepts
-// for workers walking to depth with opt (Provider.boundDescriptors).
-func minDescriptors(t *testing.T, root *os.File, workers, depth int, opt Options) int {
-	t.Helper()
-	opt.MaxDepth, opt.MaxDescriptors = depth, 1
-	cost := int(mustOpenDir(t, root, opt).p.dirCost())
-	return 2*workers + (workers*((depth+maxRedescent-1)/maxRedescent)+1)*cost
-}
-
-// beginWith readies o for a sorted listing by workers, as Run's caller
-// does, and fails the test if Begin refuses.
-func beginWith(t *testing.T, o *Opened, workers int) {
-	t.Helper()
-	if _, err := o.Begin(nil, nil, false, &order.Options{Workers: workers}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestRedescentBounded: on a deep narrow tree under the least limit Begin
-// accepts for one worker and a depth of 128, which keeps the root and
-// nothing more but checkpoints, and which the walk fills, every directory
-// is opened at most maxRedescent names below a kept one, so the names
-// opened stay within maxRedescent per directory instead of growing with
-// depth squared (16,512 here without checkpoints), and every
-// descriptor open at once within the limit. Through the order stage with 4
-// workers, whose order the filesystem decides, the same holds under the
-// least limit for 4. A smaller limit, or one without a depth, is refused.
-func TestRedescentBounded(t *testing.T) {
-	root := t.TempDir()
-	dirs := comb(t, root, 129)
-	const depth = 128
-	f := holdDir(t, root)
-	for _, portable := range []bool{false, true} {
-		opt := Options{Fields: Stat, Portable: portable, MaxDepth: depth}
-		t.Run(fmt.Sprintf("depth-first/portable=%v", portable), func(t *testing.T) {
-			before := countFDs(t)
-			opt.MaxDescriptors = minDescriptors(t, f, 1, depth, opt)
-			o := mustOpenDir(t, f, opt)
-			beginWith(t, o, 1)
-			p := o.p
-			if rows := depthFirst(t, p, p.Root()); rows != dirs {
-				t.Fatalf("%d rows, want %d", rows, dirs)
-			}
-			do := p.Stats().DirOpens
-			names := do.Opened - do.Redescents + do.RedescentNames
-			t.Logf("%d directories, limit %d: %d names opened, %d redescents, %d checkpoints, %d refused, peak kept %d of %d, peak open %d",
-				dirs, opt.MaxDescriptors, names, do.Redescents, do.Checkpoints, do.Refused, do.PeakKept, do.MaxKept, do.PeakOpen)
-			if do.Refused == 0 || do.PeakKept != do.MaxKept || do.MaxRedescent > maxRedescent || names > maxRedescent*int64(dirs) || do.PeakOpen > int64(opt.MaxDescriptors) {
-				t.Fatalf("dir_opens %+v: %d names opened for %d directories", do, names, dirs)
-			}
-			if n := countFDs(t); n != before || p.keep.all.Load() != 0 || p.keep.open.Load() != 0 {
-				t.Fatalf("%d descriptors open, %d before; %d counted open, %d kept", n, before, p.keep.all.Load(), p.keep.open.Load())
-			}
-		})
-		t.Run(fmt.Sprintf("count/portable=%v", portable), func(t *testing.T) {
-			const workers = 4
-			opt.MaxDescriptors = minDescriptors(t, f, workers, depth, opt)
-			o := mustOpenDir(t, f, opt)
-			if keys := countKeys(t, o, workers); len(keys) != dirs {
-				t.Fatalf("%d keys, want %d", len(keys), dirs)
-			}
-			do := o.p.Stats().DirOpens
-			if do.MaxRedescent > maxRedescent || do.PeakOpen > int64(opt.MaxDescriptors) {
-				t.Fatalf("dir_opens %+v, limit %d", do, opt.MaxDescriptors)
-			}
-		})
-	}
-
-	least := minDescriptors(t, f, 1, depth, Options{Fields: Stat})
-	for _, opt := range []Options{
-		{Fields: Stat, MaxDepth: depth, MaxDescriptors: least - 1},
-		{Fields: Stat, MaxDepth: depth, MaxDescriptors: 4},
-		{Fields: Stat, MaxDescriptors: least},
-	} {
-		if _, err := mustOpenDir(t, f, opt).Begin(nil, nil, false, &order.Options{Workers: 1}); err == nil {
-			t.Errorf("max depth %d, %d descriptors for one worker: accepted", opt.MaxDepth, opt.MaxDescriptors)
-		}
-	}
-}
-
-// TestMaxDescriptors: a limit too small for the workers is refused; the
-// least one accepted binds, keeps every descriptor the walk opens within
-// it, kept or not, and the tree lists whole.
-func TestMaxDescriptors(t *testing.T) {
-	root := t.TempDir()
-	for i := range 8 {
-		for j := range 8 {
-			mk(t, root, fmt.Sprintf("d%d/e%d/f%d/g", i, j, j), false)
-		}
-	}
-	want := oracle(t, root, true)
-	f := holdDir(t, root)
-	const workers, depth = 8, 3
-	for _, portable := range []bool{false, true} {
-		opt := Options{Fields: Stat, Portable: portable, MaxDepth: depth}
-		limit := minDescriptors(t, f, workers, depth, opt)
-		opt.MaxDescriptors = limit - 1
-		if err := countOpened(context.Background(), mustOpenDir(t, f, opt), workers, &collect{}); err == nil {
-			t.Fatalf("portable=%v: a limit of %d for %d workers accepted", portable, limit-1, workers)
-		}
-		opt.MaxDescriptors = limit
-		o := mustOpenDir(t, f, opt)
-		if got := countKeys(t, o, workers); !slices.Equal(got, want) {
-			t.Fatalf("portable=%v: %d keys, want %d", portable, len(got), len(want))
-		}
-		do := o.p.Stats().DirOpens
-		if do.Refused == 0 || do.PeakOpen > int64(limit) || do.PeakKept > do.MaxKept {
-			t.Fatalf("portable=%v: dir_opens %+v, limit %d", portable, do, limit)
-		}
-	}
-}
-
-// TestNoPaths: a listing that keeps no paths keeps no sample and passes on
-// no warning, so nothing it counted names an entry; the same listing
-// keeping them names some (not vacuous).
-func TestNoPaths(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root reads a directory of mode 0")
-	}
-	root := t.TempDir()
-	mk(t, root, "lockedsecretname/x", false)
-	chain(t, filepath.Join(root, "deepsecretname"), 3)
-	if err := os.Chmod(filepath.Join(root, "lockedsecretname"), 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(filepath.Join(root, "lockedsecretname"), 0o755) })
-	for _, noPaths := range []bool{true, false} {
-		for _, portable := range []bool{false, true} {
-			o, err := OpenDir(holdDir(t, root), "", Options{Fields: Stat, Portable: portable, MaxDepth: 2, NoPaths: noPaths})
-			if err != nil {
-				t.Fatal(err)
-			}
-			warned := false
-			o.p.warn = func(string, string) { warned = true }
-			countKeys(t, o, 4)
-			st := o.p.Stats()
-			out, err := json.Marshal(st)
-			if err != nil {
-				t.Fatal(err)
-			}
-			named := strings.Contains(string(out), "secretname")
-			if st.OpenErrors != 1 || st.TooDeep != 1 || named != !noPaths || warned {
-				t.Fatalf("no_paths=%v portable=%v: open errors %d, too deep %d, warned %v, stats %s", noPaths, portable, st.OpenErrors, st.TooDeep, warned, out)
-			}
-		}
-	}
-}
-
 // TestHeldWalkReleasesDescriptors: a held root's walk closes every
 // descriptor it opened and leaves the caller's open, whether it completes,
 // is cancelled or fails, as a count and as a sorted listing, with either
-// engine and with nothing kept but the root; the names it held are
-// released.
+// engine and with nothing kept but the root.
 func TestHeldWalkReleasesDescriptors(t *testing.T) {
 	root := t.TempDir()
 	for i := range 6 {
@@ -462,8 +198,7 @@ func TestHeldWalkReleasesDescriptors(t *testing.T) {
 			for _, count := range []bool{false, true} {
 				for _, end := range []string{"completed", "cancelled", "failed"} {
 					name := fmt.Sprintf("kept=%v/portable=%v/count=%v/%s", kept, portable, count, end)
-					o := mustOpenDir(t, f, Options{Fields: Stat, Portable: portable, MaxHeldBytes: 1 << 30})
-					o.p.keep.countAll = true // as with MaxDescriptors, which would set the limit
+					o := mustOpenDir(t, f, Options{Fields: Stat, Portable: portable})
 					if !kept {
 						o.p.keep.limit = 0
 					}
@@ -485,9 +220,8 @@ func TestHeldWalkReleasesDescriptors(t *testing.T) {
 					if (err == nil) != (end == "completed") {
 						t.Fatalf("%s: %v", name, err)
 					}
-					if n := countFDs(t); n != before || o.p.keep.all.Load() != 0 || o.p.keep.open.Load() != 0 || o.p.heldNames.Load() != 0 {
-						t.Fatalf("%s: %d descriptors open, %d before; %d counted, %d kept, %d bytes of names held",
-							name, n, before, o.p.keep.all.Load(), o.p.keep.open.Load(), o.p.heldNames.Load())
+					if n := countFDs(t); n != before || o.p.keep.open.Load() != 0 {
+						t.Fatalf("%s: %d descriptors open, %d before; %d kept", name, n, before, o.p.keep.open.Load())
 					}
 				}
 			}
@@ -531,7 +265,7 @@ func TestStoppedWalkReportsUnread(t *testing.T) {
 	for _, portable := range []bool{false, true} {
 		for _, stop := range []int{1, 20, 3000, 9000, 15000} {
 			var u unreads
-			o := u.to(mustOpenDir(t, f, Options{Fields: Stat, Portable: portable, MaxHeldBytes: 1 << 30}))
+			o := u.to(mustOpenDir(t, f, Options{Fields: Stat, Portable: portable}))
 			ctx, cancel := context.WithCancel(context.Background())
 			c := &cancelAfter{n: stop, cancel: cancel}
 			got := &collect{}
