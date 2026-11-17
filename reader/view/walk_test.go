@@ -220,7 +220,8 @@ func TestWalkEmitError(t *testing.T) {
 
 // TestWalkScopeAndDirectories: a walk outside the scope is ErrOutOfScope;
 // a local directory the inventory has as another kind is ErrNotDirectory,
-// one it proves absent ErrNotFound; an empty one is its own entry.
+// one it proves absent ErrNotFound, one at or under an entry of unknown
+// kind neither; an empty one is its own entry.
 func TestWalkScopeAndDirectories(t *testing.T) {
 	ext := extension(reader.S3ObjectsV1)
 	ext["scope"] = map[string]any{"kind": "prefix", "prefix": "a/"}
@@ -238,6 +239,11 @@ func TestWalkScopeAndDirectories(t *testing.T) {
 			if _, _, err := walk(t, files, listing.WalkRequest{Prefix: []byte(prefix), MaxDepth: depth}); !errors.Is(err, want) {
 				t.Errorf("walk %q depth %d: %v, want %v", prefix, depth, err, want)
 			}
+		}
+	}
+	for _, prefix := range []string{"u/", "u/x/"} {
+		if w, _, err := walk(t, files, listing.WalkRequest{Prefix: []byte(prefix)}); err != nil || len(w.entries) != 0 {
+			t.Errorf("walk %q under an entry of unknown kind: %+v, %v", prefix, w, err)
 		}
 	}
 	if w, _, err := walk(t, files, listing.WalkRequest{Prefix: []byte("empty/")}); err != nil || len(w.entries) != 1 || w.entries[0].Kind != listing.KindDir {

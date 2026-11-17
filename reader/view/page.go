@@ -179,14 +179,18 @@ func prefixEntry(key []byte, kind listing.Kind) (*listing.Entry, error) {
 }
 
 // missingDirectory explains a local directory key with no row and nothing
-// under it: ErrNotDirectory when the inventory has its name as another
-// kind, ErrNotFound when the inventory proves it absent, else nothing.
+// under it: nothing when its name or an ancestor is an entry of unknown
+// kind, ErrNotDirectory when the inventory has its name as another kind,
+// ErrNotFound when the inventory proves it absent, else nothing.
 func (inv *Inventory) missingDirectory(ctx context.Context, prefix []byte) error {
 	name := prefix[:len(prefix)-1]
-	found, err := inv.entries(ctx, [][]byte{name})
+	names := inv.ancestors(prefix) // name and the names on the way to it
+	found, err := inv.entries(ctx, names)
 	switch {
 	case err != nil:
 		return err
+	case unresolved(found, names):
+		return nil
 	case found[string(name)] != nil:
 		return errNotDirectory
 	case inv.provable:

@@ -60,7 +60,7 @@ var localKinds = map[string]listing.Kind{
 	"socket":       listing.KindOther,
 	"char_device":  listing.KindOther,
 	"block_device": listing.KindOther,
-	"unknown":      listing.KindOther,
+	"unknown":      listing.KindUnknown,
 }
 
 // errNULKey refuses a row whose key holds a NUL, which no listing key

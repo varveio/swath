@@ -75,7 +75,8 @@ func TestLookup(t *testing.T) {
 
 // TestLookupLocal: a local key names a file or, without a trailing "/", a
 // directory too, answered with its directory key; a directory key names
-// a directory only. The root has no entry.
+// a directory only. The root has no entry. Nothing at or under an entry
+// of unknown kind is absent.
 func TestLookupLocal(t *testing.T) {
 	ctx := context.Background()
 	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
@@ -90,7 +91,7 @@ func TestLookupLocal(t *testing.T) {
 		{"d/nested", "d/nested/", listing.LookupPresent, listing.KindDir},
 		{"link", "link", listing.LookupPresent, listing.KindSymlink},
 		{"fifo", "fifo", listing.LookupPresent, listing.KindOther},
-		{"u", "u", listing.LookupPresent, listing.KindOther},
+		{"u", "u", listing.LookupPresent, listing.KindUnknown},
 		{"bad\xffname.txt", "bad\xffname.txt", listing.LookupPresent, listing.KindFile},
 		{"a.txt/", "", listing.LookupAbsent, 0},
 		{"d/missing", "", listing.LookupAbsent, 0},
@@ -98,6 +99,17 @@ func TestLookupLocal(t *testing.T) {
 		r, err := inv.Lookup(ctx, []byte(c.key))
 		if err != nil || r.State != c.state || c.entry != "" && (r.Entry == nil || string(r.Entry.Key) != c.entry || r.Entry.Kind != c.kind) {
 			t.Errorf("Lookup(%q) = %v %+v, %v; want %v %q %v", c.key, r.State, r.Entry, err, c.state, c.entry, c.kind)
+		}
+	}
+	// An entry of unknown kind may be a directory the listing did not
+	// read: nothing at or under it is absent. Under another kind it is.
+	for key, want := range map[string]listing.LookupState{
+		"u/": listing.LookupUnknown, "u/x": listing.LookupUnknown, "u/x/y/": listing.LookupUnknown,
+		"fifo/x": listing.LookupAbsent, "link/x": listing.LookupAbsent,
+	} {
+		r, err := inv.Lookup(ctx, []byte(key))
+		if err != nil || r.State != want || (want == listing.LookupUnknown) != errors.Is(r.Reason, errUnresolvedKind) {
+			t.Errorf("Lookup(%q) = %v %v, %v; want %v", key, r.State, r.Reason, err, want)
 		}
 	}
 	if _, err := inv.Lookup(ctx, nil); !errors.Is(err, listing.ErrInvalidRequest) {

@@ -26,8 +26,8 @@ const (
 	// link as ENOTDIR or ELOOP. A symbolic link or another device on the
 	// way, EACCES, EPERM, ENAMETOOLONG and I/O errors leave the key
 	// unknown: it was not reached. An inventory proves it only inside its
-	// scope, from a listing whose Evidence.Unlocated is 0, and only as of
-	// that listing.
+	// scope, from a listing whose Evidence.Unlocated is 0, never at or
+	// under the key of a KindUnknown entry, and only as of that listing.
 	LookupAbsent
 )
 

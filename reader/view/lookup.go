@@ -6,6 +6,7 @@ package view
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -16,11 +17,13 @@ import (
 // Lookup says what is at exactly key: present when the inventory has a row
 // for it; absent only inside the inventory's scope and when its Unlocated
 // is 0, as of the listing; otherwise unknown. A key outside the scope is
-// unknown with ErrOutOfScope as its Reason, and a read that fails leaves
-// it unknown with the failure as its Reason. On a local inventory a key
-// without a trailing "/" is also looked up as a directory's key. An empty
-// key, or one holding a NUL, is ErrInvalidRequest. It returns an error only
-// for such a request, and when ctx ends.
+// unknown with ErrOutOfScope as its Reason, a key at or under a local
+// entry of unknown kind is unknown with a Reason that says so, and a read
+// that fails leaves it unknown with the failure as its Reason. On a local
+// inventory a key without a trailing "/" is also looked up as a
+// directory's key. An empty key, or one holding a NUL, is
+// ErrInvalidRequest. It returns an error only for such a request, and when
+// ctx ends.
 func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := inv.checkKey(key); err != nil {
 		return listing.LookupResult{}, err
@@ -31,7 +34,7 @@ func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupRes
 		return result, nil
 	}
 
-	found, err := inv.entries(ctx, inv.names(key))
+	found, err := inv.entries(ctx, inv.keys(key))
 	if err != nil {
 		if ctx.Err() != nil {
 			return listing.LookupResult{}, ctx.Err()
@@ -39,8 +42,18 @@ func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupRes
 		result.Reason = err
 		return result, nil
 	}
-	result.State, result.Entry = inv.resolve(key, found)
+	result.State, result.Entry, result.Reason = inv.resolve(key, found)
 	return result, nil
+}
+
+// keys are the keys whose entries answer what is at key: its names and,
+// when the inventory proves absence, its ancestors.
+func (inv *Inventory) keys(key []byte) [][]byte {
+	keys := inv.names(key)
+	if inv.provable {
+		keys = append(keys, inv.ancestors(key)...)
+	}
+	return keys
 }
 
 // names are the keys an entry at key may have: key, and on a local
@@ -52,18 +65,56 @@ func (inv *Inventory) names(key []byte) [][]byte {
 	return [][]byte{key, append(bytes.Clone(key), '/')}
 }
 
-// resolve answers what is at key from the entries found at its names: the
-// entry at key itself before a directory's.
-func (inv *Inventory) resolve(key []byte, found map[string]*listing.Entry) (listing.LookupState, *listing.Entry) {
-	for _, name := range inv.names(key) {
-		if e := found[string(name)]; e != nil {
-			return listing.LookupPresent, cloneEntry(e)
+// ancestors are the names on the way to a local key, each component but
+// the last without its trailing "/": "a" and "a/b" for "a/b/c" and for
+// "a/b/". An entry of unknown kind at one of them may be a directory the
+// listing did not read, so it proves nothing absent at or under it. An
+// object store has none.
+func (inv *Inventory) ancestors(key []byte) [][]byte {
+	if !inv.rows.local {
+		return nil
+	}
+	var out [][]byte
+	for i, c := range key {
+		if c == '/' && i > 0 {
+			out = append(out, key[:i])
 		}
 	}
-	if inv.provable {
-		return listing.LookupAbsent, nil
+	return out
+}
+
+// errUnresolvedKind is the Reason of a key the inventory cannot prove
+// absent because an entry on the way to it is of unknown kind.
+var errUnresolvedKind = errors.New("view: an entry on the way to the key is of a kind the listing did not resolve")
+
+// resolve answers what is at key from the entries found at its keys: the
+// entry at key itself before a directory's; else absent when the
+// inventory proves it and no ancestor found is of unknown kind; else
+// unknown, with errUnresolvedKind when such an ancestor is the reason.
+func (inv *Inventory) resolve(key []byte, found map[string]*listing.Entry) (listing.LookupState, *listing.Entry, error) {
+	for _, name := range inv.names(key) {
+		if e := found[string(name)]; e != nil {
+			return listing.LookupPresent, cloneEntry(e), nil
+		}
 	}
-	return listing.LookupUnknown, nil
+	if !inv.provable {
+		return listing.LookupUnknown, nil, nil
+	}
+	if unresolved(found, inv.ancestors(key)) {
+		return listing.LookupUnknown, nil, errUnresolvedKind
+	}
+	return listing.LookupAbsent, nil, nil
+}
+
+// unresolved reports whether an entry found at one of keys is of unknown
+// kind.
+func unresolved(found map[string]*listing.Entry, keys [][]byte) bool {
+	for _, key := range keys {
+		if e := found[string(key)]; e != nil && e.Kind == listing.KindUnknown {
+			return true
+		}
+	}
+	return false
 }
 
 // entries reads the entries at keys, by their keys, in one planned scan.

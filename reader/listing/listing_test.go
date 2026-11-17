@@ -11,14 +11,15 @@ import (
 
 func TestKindString(t *testing.T) {
 	want := map[Kind]string{
-		KindObject:    "object",
-		KindPrefix:    "prefix",
-		KindFile:      "file",
-		KindDir:       "dir",
-		KindSymlink:   "symlink",
-		KindOther:     "other",
-		0:             "Kind(0)",
-		KindOther + 1: "Kind(7)",
+		KindObject:      "object",
+		KindPrefix:      "prefix",
+		KindFile:        "file",
+		KindDir:         "dir",
+		KindSymlink:     "symlink",
+		KindOther:       "other",
+		KindUnknown:     "unknown",
+		0:               "Kind(0)",
+		KindUnknown + 1: "Kind(8)",
 	}
 	for k, name := range want {
 		if got := k.String(); got != name {

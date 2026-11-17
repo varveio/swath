@@ -30,7 +30,7 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 		{reader.S3ObjectsV1, objects(), [][]listing.Kind{all, {listing.KindObject}, {listing.KindFile}}},
 		{reader.GCSObjectsV1, objects(), [][]listing.Kind{all}},
 		{reader.AzureObjectsV1, objects(), [][]listing.Kind{all}},
-		{reader.LocalV1, tree(), [][]listing.Kind{all, {listing.KindFile}, {listing.KindDir, listing.KindSymlink}, {listing.KindOther}, {listing.KindPrefix}}},
+		{reader.LocalV1, tree(), [][]listing.Kind{all, {listing.KindFile}, {listing.KindDir, listing.KindSymlink}, {listing.KindOther}, {listing.KindUnknown}, {listing.KindPrefix}}},
 		{reader.LocalV1, namesOnly(tree()), [][]listing.Kind{all, {listing.KindFile}}},
 	} {
 		isLocal := c.id == reader.LocalV1
@@ -82,6 +82,41 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 					t.Fatalf("%s %v: %q subtree %t = %s, unread %v; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, showTotals(want))
 				}
 			}
+		}
+	}
+}
+
+// TestSummarizeUnknownKind: an entry of unknown kind is counted only when
+// every kind or KindUnknown is selected, never as a file or another kind,
+// and nothing at or under it is absent.
+func TestSummarizeUnknownKind(t *testing.T) {
+	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
+	targets := []listing.Target{
+		{Subtree: true}, {Key: []byte("u")}, {Key: []byte("u/"), Subtree: true}, {Key: []byte("u/x")}, {Key: []byte("fifo/x")},
+	}
+	for _, c := range []struct {
+		kinds       []listing.Kind
+		root, entry int64
+	}{
+		{nil, 13, 1},
+		{[]listing.Kind{listing.KindFile}, 5, 0},
+		{[]listing.Kind{listing.KindOther}, 1, 0},
+		{[]listing.Kind{listing.KindUnknown}, 1, 1},
+	} {
+		sums, _, err := inv.Summarize(context.Background(), targets, listing.SummaryOptions{Kinds: c.kinds})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sums[0].Entries != c.root || sums[1].Entries != c.entry || sums[1].State != listing.LookupPresent || sums[1].Self.Kind != listing.KindUnknown {
+			t.Errorf("%v: the root counts %d, u %d (%v %+v); want %d and %d", c.kinds, sums[0].Entries, sums[1].Entries, sums[1].State, sums[1].Self, c.root, c.entry)
+		}
+		for _, s := range sums[2:4] {
+			if s.State != listing.LookupUnknown || !errors.Is(s.Reason, errUnresolvedKind) || s.Entries != 0 {
+				t.Errorf("%v: under u: %v %v %d", c.kinds, s.State, s.Reason, s.Entries)
+			}
+		}
+		if s := sums[4]; s.State != listing.LookupAbsent || s.Reason != nil {
+			t.Errorf("%v: under a FIFO: %v %v", c.kinds, s.State, s.Reason)
 		}
 	}
 }

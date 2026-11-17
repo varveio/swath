@@ -164,7 +164,8 @@ inventory has no row for its root.
 Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes, the
 listing's interval and publication time, its scope, and its count of unreadable entries as `Unlocated` only when
 the listing reached the end of its scope with no filter and no exclusion. A key is absent only inside the scope
-and when `Unlocated` is 0; a question outside the scope is unknown (`ErrOutOfScope`). A budget that stops a walk
+and when `Unlocated` is 0, never at or under a local entry of unknown kind (`listing.KindUnknown`, which may be a
+directory the listing did not read); a question outside the scope is unknown (`ErrOutOfScope`). A budget that stops a walk
 or a summary reports the keys it did not reach as `Unread` intervals of class `budget`; the listing's own gaps
 stay unlocated. The view checks every value it reads (a missing column, a negative size, a local kind swath does
 not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.

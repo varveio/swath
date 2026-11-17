@@ -9,8 +9,8 @@ import (
 )
 
 // Kind is what an entry is. Object stores have objects and common
-// prefixes; local sources have files, directories, symbolic links and other
-// entries. The zero Kind is no kind. The numeric values are not stable:
+// prefixes; local sources have files, directories, symbolic links, other
+// entries and entries of unknown kind. The zero Kind is no kind. The numeric values are not stable:
 // record a kind by its String form.
 type Kind uint8
 
@@ -29,9 +29,14 @@ const (
 	// KindSymlink is a symbolic link. It is listed, never followed, and its
 	// key has no trailing "/" whatever it points to.
 	KindSymlink
-	// KindOther is any other local entry: a FIFO, a socket, a device, or
-	// an entry whose kind the source did not report.
+	// KindOther is any other local entry: a FIFO, a socket or a device.
 	KindOther
+	// KindUnknown is a local entry whose kind the listing did not
+	// resolve. Nothing is inferred from it: Summarize counts it only when
+	// SummaryOptions.Kinds is empty or names KindUnknown, never as a file,
+	// and it proves nothing absent at or under its key, which may be a
+	// directory that was not read.
+	KindUnknown
 )
 
 var kindNames = [...]string{
@@ -41,10 +46,11 @@ var kindNames = [...]string{
 	KindDir:     "dir",
 	KindSymlink: "symlink",
 	KindOther:   "other",
+	KindUnknown: "unknown",
 }
 
-// String returns the kind's name: object, prefix, file, dir, symlink or
-// other; Kind(N) for a value that is no kind.
+// String returns the kind's name: object, prefix, file, dir, symlink,
+// other or unknown; Kind(N) for a value that is no kind.
 func (k Kind) String() string {
 	if int(k) < len(kindNames) && kindNames[k] != "" {
 		return kindNames[k]

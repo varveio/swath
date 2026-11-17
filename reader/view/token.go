@@ -36,7 +36,7 @@ func (inv *Inventory) binding(prefix []byte, totals *selection) string {
 	if totals != nil {
 		// One byte per kind, 1 where totals counts it, so that the same
 		// count spelt in two ways binds alike.
-		for k := listing.KindObject; k <= listing.KindOther; k++ {
+		for k := listing.KindObject; k <= lastKind; k++ {
 			var counted byte
 			if totals.counts(k) {
 				counted = 1

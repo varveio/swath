@@ -179,7 +179,7 @@ func TestPageTokenOptions(t *testing.T) {
 		}
 	}
 
-	all := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile, listing.KindDir, listing.KindSymlink, listing.KindOther}
+	all := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile, listing.KindDir, listing.KindSymlink, listing.KindOther, listing.KindUnknown}
 	every, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +264,8 @@ func TestPageScope(t *testing.T) {
 
 // TestPageMissingDirectory: a local directory the inventory has as another
 // kind is ErrNotDirectory; one it lacks is ErrNotFound when it proves the
-// absence, an empty page otherwise; an empty directory is its Self alone.
+// absence, an empty page otherwise, and always at or under an entry of
+// unknown kind; an empty directory is its Self alone.
 func TestPageMissingDirectory(t *testing.T) {
 	ctx := context.Background()
 	complete := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
@@ -283,6 +284,13 @@ func TestPageMissingDirectory(t *testing.T) {
 	}
 	if p, err := page(partial, "missing/"); err != nil || len(p.Entries) != 0 || p.Self != nil {
 		t.Errorf("missing directory, absence unproven: %+v, %v", p, err)
+	}
+	// An entry of unknown kind may be a directory the listing did not
+	// read: neither it nor anything under it is another kind or absent.
+	for _, prefix := range []string{"u/", "u/x/"} {
+		if p, err := page(complete, prefix); err != nil || len(p.Entries) != 0 || p.Self != nil {
+			t.Errorf("%q under an entry of unknown kind: %+v, %v", prefix, p, err)
+		}
 	}
 	if p, err := page(complete, "empty/"); err != nil || len(p.Entries) != 0 || p.Self == nil || p.Self.Kind != listing.KindDir {
 		t.Errorf("empty directory: %+v, %v", p, err)

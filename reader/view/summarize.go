@@ -30,7 +30,8 @@ var errUnreached = errors.New("view: a bound of the request kept the call from r
 // counts nothing.
 //
 // The call reads in two phases, both within opts.Budget. First the
-// entries at the targets' keys, in target order: an exact target's totals
+// entries at the targets' keys, in target order, with those on the way to
+// a local key when the inventory proves absence: an exact target's totals
 // are those of its own entry. Then the subtrees' rows, in one aggregation
 // through SeekParquet, every counted key's order checked. MaxEntries
 // bounds the rows of both phases together, each counted once however many
@@ -161,7 +162,7 @@ func (s *summary) locate(ctx context.Context) error {
 			continue
 		}
 		if !s.known[i] {
-			for _, name := range s.inv.names(t.Key) {
+			for _, name := range s.inv.keys(t.Key) {
 				selections = append(selections, seekparquet.Selection{Span: seekparquet.KeySpan(name)})
 				slots = append(slots, slot{target: i})
 			}
@@ -242,7 +243,7 @@ func (s *summary) readOwn(ctx context.Context) error {
 	}
 	for _, i := range admitted {
 		t := s.targets[i]
-		s.out[i].State, s.out[i].Self = s.inv.resolve(t.Key, found)
+		s.out[i].State, s.out[i].Self, s.out[i].Reason = s.inv.resolve(t.Key, found)
 		s.known[i] = true
 		if !t.Subtree {
 			s.out[i].Totals, s.done[i] = *entryTotals(s.out[i].Self, s.sel), true

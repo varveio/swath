@@ -18,16 +18,19 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
+// lastKind is the greatest Kind.
+const lastKind = listing.KindUnknown
+
 // selection is the kinds a summary counts. KindPrefix is never counted.
 type selection struct {
 	all   bool
-	kinds [listing.KindOther + 1]bool
+	kinds [lastKind + 1]bool
 }
 
 func selectionOf(kinds []listing.Kind) (selection, error) {
 	s := selection{all: len(kinds) == 0}
 	for _, k := range kinds {
-		if k == 0 || k > listing.KindOther {
+		if k == 0 || k > lastKind {
 			return selection{}, invalid("%v is no kind", k)
 		}
 		s.kinds[k] = true
@@ -44,7 +47,8 @@ func (s selection) countsAny(rows rowShape) bool {
 	if !rows.local {
 		return s.counts(listing.KindObject)
 	}
-	return s.counts(listing.KindFile) || s.counts(listing.KindDir) || s.counts(listing.KindSymlink) || s.counts(listing.KindOther)
+	return s.counts(listing.KindFile) || s.counts(listing.KindDir) || s.counts(listing.KindSymlink) || s.counts(listing.KindOther) ||
+		s.counts(listing.KindUnknown)
 }
 
 // The reductions of a set of rows, in result order: an object's, then a

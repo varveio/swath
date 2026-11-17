@@ -19,7 +19,9 @@
 // never absent. Unlocated is the manifest's count of unreadable entries only
 // when the listing reached the end of its scope and records no filter and no
 // exclusion; otherwise it is nil. A key is proven absent only when
-// Unlocated is 0, and only as of the listing.
+// Unlocated is 0, never at or under a local entry of unknown kind
+// (listing.KindUnknown), which may be a directory the listing did not
+// read, and only as of the listing.
 //
 // An inventory's own gaps are never located. When a bound of the request
 // stops a Walk or a Summarize, the keys it did not reach come back as

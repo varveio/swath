@@ -419,11 +419,23 @@ func children(rs []rec, prefix string, isLocal bool) (self *rec, out []child) {
 	return self, out
 }
 
+// kindOf is the kind of a record's Entry, as the contract maps the kinds
+// swath writes: independently of the view's own map.
 func kindOf(r rec, isLocal bool) listing.Kind {
 	if !isLocal {
 		return listing.KindObject
 	}
-	return localKinds[r.kind]
+	switch r.kind {
+	case "file":
+		return listing.KindFile
+	case "dir":
+		return listing.KindDir
+	case "symlink":
+		return listing.KindSymlink
+	case "unknown":
+		return listing.KindUnknown
+	}
+	return listing.KindOther
 }
 
 // totalsOf counts the records of kinds (all for none) selected by keep, as

@@ -40,8 +40,9 @@ Notable changes per release. The human summary of the current release is in the
   classes with `Retryable`. It holds types only and imports nothing beyond the standard library.
 - `reader/view` (experimental) answers those four questions from an opened dataset, an inventory (`view.Open`):
   pages with opaque tokens and optional child totals, lookups, walks and budgeted summaries, every answer's
-  evidence taken from the manifest and never wider; a key is absent only inside the listing's scope and when
-  nothing in it was unreadable ([reader guide](reader/README.md#the-inventory-view)).
+  evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
+  nothing in it was unreadable, and never at or under a local entry of unknown kind
+  ([reader guide](reader/README.md#the-inventory-view)).
 
 ### Release
 
