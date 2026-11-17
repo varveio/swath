@@ -204,9 +204,9 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 
 The nested modules have their own `go.mod`, so `./...` at the root never reaches them, even in the
 workspace (`go.work`) that joins them to the root; each needs its own job or it is untested. Every
-job but the reader module's builds through that workspace, so the root compiles the nested modules'
-local copies; the reader module requires no other module of the repository and is checked alone
-(`GOWORK=off`), since in the workspace its `TestNoCloudSDK` would read all three modules' graph. `go mod
+job builds through that workspace, so the root compiles the nested modules' local copies; the reader
+module requires no other module of the repository, and its `TestNoCloudSDK` runs its own `go list`
+with the workspace off, so it reads the reader's module graph, not all three modules'. `go mod
 tidy` ignores the workspace: at the root it reads the published `reader` and `objfile` versions
 `go.mod` requires, so `go-lint` runs `go mod tidy -e -diff`, which lets through an import of a
 nested-module package not released yet, and the release checks it strictly

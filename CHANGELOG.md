@@ -20,6 +20,38 @@ Notable changes per release. The human summary of the current release is in the
   (`invocation.narrowing` `provider_declined_prefix`). An Azure run with such an include that was
   interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2) (#621).
 
+### Fixed
+
+- A local listing on Linux and macOS opens every directory below the root relative to its parent's open
+  descriptor (`openat`, `O_NOFOLLOW`), never by its path. A symbolic link swapped in for a directory, or for any
+  directory above it, while the walk runs is not followed, so the walk does not leave its root through one; it
+  counts in `unsafe_dirs` (the getdents engine counted such a link in `open_errors`). The run report's
+  diagnostics gain `dir_opens` (`opened`, `redescents`, `refused`, `failed` by reason, `peak_kept`, `max_kept`).
+  Windows is unchanged.
+
+### Libraries
+
+- The root module `github.com/varveio/swath` is importable: its `go.mod` requires `reader` and `objfile` by
+  released version and carries no `replace`. `go.work` at the repository root joins the three modules, so a
+  build in a checkout compiles the local `reader/` and `objfile/`.
+- `reader/listing` (experimental: it may change in any release) is the contract of the four questions swath
+  answers about a listed location: `Page`, `Lookup`, `Walk` and `Summarize`, their requests and results, the
+  common `Entry`, the `Evidence` every answer carries, the `Unread` extents a call did not read, and the error
+  classes with `Retryable`. It holds types only and imports nothing beyond the standard library.
+- `reader/view` (experimental) answers those four questions from an opened dataset, an inventory (`view.Open`):
+  pages with opaque tokens and optional child totals, lookups, walks and budgeted summaries, every answer's
+  evidence taken from the manifest and never wider; a key is absent only inside the listing's scope and when
+  nothing in it was unreadable ([reader guide](reader/README.md#the-inventory-view)).
+
+### Release
+
+- A release tags its modules in dependency order without committing to `main`: `just release-modules` tags
+  `reader/vX.Y.Z` and `objfile/vX.Y.Z` on `main`, `just release-prep` makes a branch whose one commit points
+  `go.mod` at them, and once its pull request merges, `just release` tags `vX.Y.Z` on the merge commit. The
+  release workflow builds without the workspace (`GOWORK=off`), as an outside project does, and refuses a tagged
+  `go.mod` that carries a `replace` or does not require each nested module at its tag
+  ([RELEASING.md](RELEASING.md#cutting-a-release)).
+
 ## 0.4.0
 
 swath lists S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage and local or mounted

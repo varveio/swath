@@ -99,8 +99,7 @@ The contributor reference is
   [schemas](docs/internals/parquet-output.md#schemas) and
   [spill codecs](docs/internals/ordering.md#payload-delta-codec).
 - The gate is `go vet ./... && go test -race ./...` at the root and again in `objfile/` and
-  `reader/`, there with `GOWORK=off` because its `TestNoCloudSDK` reads `go list -m all`, which in
-  the workspace is all three modules' graph; CI runs it sharded. Locally run the tests you change, not the whole suite;
+  `reader/`; CI runs it sharded. Locally run the tests you change, not the whole suite;
   repeats go through `go-stress.yml`. Static builds use `CGO_ENABLED=0` (`./build.sh`).
 - A commit that touches Go code needs its selected Go jobs of `ci.yml` green (`go-lint`, `go-docs`, the `go-race`
   shards, `go-nonrace`, `go-build`, `go-xos`, `go-fixtures`; `ci-gate` requires them). Selection

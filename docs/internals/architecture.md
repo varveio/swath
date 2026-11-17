@@ -88,7 +88,9 @@ failure is classed by its `HTTPStatusCode`, which `objfile`'s GCS and Azure writ
 inherit the lister's dependencies: `reader` (`github.com/varveio/swath/reader`: the schema ids and their
 columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and a `Dataset` that opens a
 dataset, hands on its metadata, checks its schema, and exposes the underlying SeekParquet dataset for reads; the SeekParquet module
-and the standard library only; [../../reader/README.md](../../reader/README.md)) and `objfile` (a dataset in an object
+and the standard library only; [../../reader/README.md](../../reader/README.md)), with two experimental packages:
+`reader/listing`, the contract of the four questions (Page, Lookup, Walk, Summarize) as types over the standard
+library only, and `reader/view`, which answers them from an opened dataset through SeekParquet and `objfile` (a dataset in an object
 store opened as files read by byte range, pinned across opens and process restarts, by URI with default
 credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The root
 `go.mod` requires both by released version and carries no `replace`, so the root module is importable as a
