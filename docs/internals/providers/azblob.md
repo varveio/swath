@@ -102,7 +102,8 @@ the SAS names, found by name wherever the SDK sorted it into the query and howev
 decoded, escaped again), its value replaced and the rest of the text kept; a 400's parsed query drops the SAS's
 parameters and keeps the request's (`TestSASRedacted`, `TestScrubSASParameters`). The Azure SDK's own
 log, which quotes request URLs, is off in swath: the command clears azcore's log listener at startup, so
-`AZURE_SDK_GO_LOGGING=all` prints nothing. The root is redacted where the command parses
+`AZURE_SDK_GO_LOGGING=all` prints nothing. A library host that leaves that log on gets each failed answer without its
+body: the client keeps the body from the SDK and reads the code itself (`TestSDKLogWithheld`). The root is redacted where the command parses
 it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the
 report's `invocation.source` see it, so an admission refusal records no SAS either; the identity, the manifest
 and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is accepted and listed

@@ -72,7 +72,7 @@ type Options struct {
 // digits.
 var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 
-// Open opens container, "ACCOUNT/CONTAINER", as a live source. It builds
+// Open opens the container of account as a live source. It builds
 // the source's client, which may load credentials, and sends nothing: a
 // container that is not there, or that the credentials may not read,
 // fails the first call, not Open. Credentials that do not load are
@@ -83,18 +83,17 @@ var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 // permission to read the blob's properties, and to list the container to
 // tell an absent blob: a key is absent only when Get Blob Properties
 // finds no blob and a listing then shows the container is there.
-func Open(ctx context.Context, container string, opts Options) (*swath.Source, error) {
-	account, name, _ := strings.Cut(container, "/")
+func Open(ctx context.Context, account, container string, opts Options) (*swath.Source, error) {
 	switch {
-	case !accountName.MatchString(account) || name == "" || strings.ContainsAny(name, "/\x00"):
-		return nil, objfile.RedactError(fmt.Errorf("%w: container %q: an account and a container, ACCOUNT/CONTAINER", listing.ErrInvalidRequest, container))
+	case !accountName.MatchString(account) || container == "" || strings.ContainsAny(container, "/\x00"):
+		return nil, objfile.RedactError(fmt.Errorf("%w: account %q, container %q", listing.ErrInvalidRequest, account, container))
 	case opts.MaxRequests < 0 || opts.RequestRate < 0:
 		return nil, fmt.Errorf("%w: a negative MaxRequests or RequestRate", listing.ErrInvalidRequest)
 	}
 
 	st, err := azsource.OpenLive(ctx, azsource.Options{
 		Account:   account,
-		Container: name,
+		Container: container,
 		Endpoint:  opts.Endpoint,
 		Anonymous: opts.Anonymous,
 		Workers:   opts.MaxRequests,

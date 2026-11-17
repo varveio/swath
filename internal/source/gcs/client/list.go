@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"google.golang.org/api/googleapi"
@@ -207,6 +208,7 @@ func (c *Client) failure(actx, ctx context.Context, s *objhttp.Capture, err erro
 			e.Reason = ge.Errors[0].Reason
 		}
 		if loc := ge.Header.Get("Location"); e.Status/100 == 3 && e.Message == "" {
+			loc, _, _ = strings.Cut(loc, "?") // a signed URL's credentials are its query
 			e.Message = "redirect to " + loc + " (not followed)"
 		}
 		if e.Status == http.StatusBadRequest {

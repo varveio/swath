@@ -554,22 +554,19 @@ func (c *Client) head(ctx context.Context, u *url.URL) (http.Header, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		// a HEAD answer has no body: its code is the header's
-		return nil, c.responseError(resp, resp.Header.Get(headerErrorCode), body, u)
+		return nil, c.responseError(resp, body, u)
 	}
 	return resp.Header, nil
 }
 
 // responseError is a non-200 answer as an *Error: the header code, else
-// decoded XML code, else the SDK code (which also reads JSON); the message
-// from the bounded XML body, both scrubbed of the SAS; a
-// redirect's target withheld, a 400's query (without the SAS), the
-// Retry-After wait.
-func (c *Client) responseError(resp *http.Response, code string, body []byte, u *url.URL) *Error {
-	decoded, message := errorDocument(body)
+// the code of the bounded body (errorDocument); the message from an XML
+// body, both scrubbed of the SAS; a redirect's target withheld, a 400's
+// query (without the SAS), the Retry-After wait.
+func (c *Client) responseError(resp *http.Response, body []byte, u *url.URL) *Error {
+	code, message := errorDocument(body)
 	if header := resp.Header.Get(headerErrorCode); header != "" {
 		code = header
-	} else if decoded != "" {
-		code = decoded
 	}
 	e := &Error{Status: resp.StatusCode, Code: c.scrub(code), Message: message,
 		Wait: retryAfter(resp.Header.Get(headerRetryAfter), time.Now())}
