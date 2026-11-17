@@ -2692,6 +2692,62 @@ prune keeps, about 0.38 GB, and the overlay databases, about 0.11 GB), one gener
 overlapping `main` run holds until the prune, and the eviction rate are measured only after the merge.
 Aging took 0.1–6 s per job and the trim 1–10 s, Windows the slowest.
 
+### macOS legs and the release's race shards, 2026-11-17
+
+**macOS in two legs.** Before, the single `go-xos (macos-latest)` job of
+[44078925548](https://github.com/varveio/swath/actions/runs/44078925548), a full-scope pull-request run of
+the #619 branch (not a `main` push), took 15 min 40 s, and the run 16 min 21 s from trigger to `ci-gate`.
+After, in [44084267779](https://github.com/varveio/swath/actions/runs/44084267779) (full scope, the macOS
+legs' pull request), first attempt:
+
+| | minutes |
+|---|---:|
+| trigger to `ci-gate` | 11.8 (11 min 50 s) |
+| `go-xos (macos-latest, listing)`, the critical job | 10.8 (10 min 45 s), its build cache cold |
+| `go-xos (macos-latest, rest)` | 10.5 (10 min 32 s), restoring `main`'s `go-xos` |
+| Windows legs, slowest | 9.2 (`cmd-kill`) |
+| `go-race`, slowest shard | 6.1 (`crash`) |
+
+The `listing` leg had no cache of its own to restore: its family, `go-xos-listing-rest` on macOS, is new,
+and a pull request saves nothing, so its warm time is measured only after the merge. The two legs printed
+the same 80 package results as the single job, compared as a multiset of status and package: `listing` 1
+(`internal/listing`), `rest` 79 (66 of the main module, 1 of `reader`, 12 of `objfile`), none missing, added
+or duplicated.
+
+On disk `listing` kept 974 MiB of build cache (5,688 entries) and `rest` 1,591 MiB, as the single job did
+(1,592). The new family adds those 974 MiB, about 0.16–0.20 GB compressed at the ratio above: 18 build-cache
+families of 28,111 MiB on disk (29.5 GB), about 5.3 GB compressed (4.7–5.9), and one generation about 8.2 GB
+(7.6–8.7) of the 10 GB.
+
+**The release's race shards.** `release.yml` `go-tests` ran one unsharded `go test -race ./...` on amd64,
+19.5 to 25.5 of the 21.6 to 30.4 minutes from a tag push to the approval prompt over the last three
+releases. Its matrix replacement ran as
+[44082399323](https://github.com/varveio/swath/actions/runs/44082399323): a byte-for-byte copy of the new
+`go-tests` job and of `source`'s shard step, in a workflow that triggered on a push to a throwaway branch
+(since deleted) and built, signed and published nothing. Each leg cold, on `ubuntu-latest`:
+
+| leg | duration | test time |
+|---|---:|---:|
+| `crash` | 5:55 | 254 s |
+| `durable` | 5:24 | 181 s |
+| `remote-crash` | 3:14 | 94 s |
+| `listing-rest` | 5:42 | 246 s |
+| `cmd-kill` | 6:34 | 273 s |
+| `cmd` | 9:46 | 444 s |
+| `rest-replay` | 4:36 | 144 s, its slowest package |
+| `rest-source` | 5:39 | 207 s, its slowest package |
+| `rest` | 5:25 | 167 s, its slowest package |
+| `vet-reader` | 5:00 | |
+
+The slowest leg, `cmd` (the `cmd/swath` remainder), sets the wait: with `source` (about 12 s) and beside
+`build` (6.5 to 8.2 min over the same three releases), a tag should reach the approval prompt in about
+10 minutes. `--check` in `vet-reader` counted 194 `internal/listing` tests over four shards and 258
+`cmd/swath` tests over two, and the shard legs printed 67 distinct packages.
+
+What the rehearsal does not prove: the tag-triggered path itself (the `source` job's qualification, the
+matrix expanded from its output, `build`, the environment approval and `publish`), and that a failed or
+cancelled leg blocks `publish`, which was reviewed by reading the workflow, not by a run.
+
 ### Parallel CLI crash tests and Java input filtering, 2026-11-10
 
 PR #410 lets seven isolated CLI crash/recovery tests overlap after their private binary builds,

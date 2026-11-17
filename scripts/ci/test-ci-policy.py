@@ -310,12 +310,16 @@ exit 2
     def test_actual_xos_matrix(self):
         windows = json.loads(subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--windows-matrix'], text=True))
-        # One Windows leg is the full one (vet, nested modules); the others run shards only.
-        self.assertEqual(sorted(row['scope'] for row in windows),
-                         ['full'] + ['leg'] * (len(windows) - 1))
+        macos = json.loads(subprocess.check_output(
+            [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--macos-matrix'], text=True))
+        # One leg per platform is the full one (vet, nested modules); the others run shards only.
+        for legs in [windows, macos]:
+            self.assertEqual(sorted(row['scope'] for row in legs),
+                             ['full'] + ['leg'] * (len(legs) - 1))
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / 'output'
-            full = ['macos-latest'] + ['windows-latest'] * len(windows) + ['ubuntu-24.04-arm']
+            full = (['macos-latest'] * len(macos) + ['windows-latest'] * len(windows)
+                    + ['ubuntu-24.04-arm'])
             for main, any_module, platforms, expected, scopes in [
                 ('true', 'true', 'false', ['ubuntu-24.04-arm'], {'extra'}),
                 ('true', 'true', 'true', full, {'full', 'leg'}),
@@ -333,6 +337,8 @@ exit 2
                 self.assertEqual({row['scope'] for row in matrix}, scopes)
                 self.assertEqual([row for row in matrix if row['os'] == 'windows-latest'],
                                  windows if platforms == 'true' else [])
+                self.assertEqual([row for row in matrix if row['os'] == 'macos-latest'],
+                                 macos if platforms == 'true' else [])
 
     def test_full_gate_refuses_partial_or_failed_validation(self):
         flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms', 'docs')
@@ -341,8 +347,10 @@ exit 2
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--matrix'], text=True)
         windows = json.loads(subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--windows-matrix'], text=True))
-        xos = [dict(os=os_name, runner=os_name, scope='full')
-               for os_name in ('macos-latest', 'ubuntu-24.04-arm')] + windows
+        macos = json.loads(subprocess.check_output(
+            [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--macos-matrix'], text=True))
+        arm = dict(os='ubuntu-24.04-arm', runner='ubuntu-24.04-arm', scope='full')
+        xos = macos + [arm] + windows
         selection['go_xos'] = json.dumps(xos)
 
         def check(selected, result='success'):
@@ -355,8 +363,10 @@ exit 2
             self.assertNotEqual(check(selection, result), 0)
         for omitted in flags:
             self.assertNotEqual(check(dict(selection, **{omitted: 'false'})), 0, omitted)
-        unsplit = xos[:2] + [dict(os='windows-latest', runner='windows-latest', scope='full')]
-        for bad_matrix in [xos[:2], xos[:-1], unsplit, [dict(row, scope='extra') for row in xos],
+        unsplit_windows = macos + [arm, dict(os='windows-latest', runner='windows-latest', scope='full')]
+        unsplit_macos = [dict(os='macos-latest', runner='macos-latest', scope='full'), arm] + windows
+        for bad_matrix in [macos + [arm], xos[:-1], xos[1:], unsplit_windows, unsplit_macos,
+                           [dict(row, scope='extra') for row in xos],
                            [dict(row, runner='ubuntu-latest') for row in xos]]:
             self.assertNotEqual(check(dict(selection, go_xos=json.dumps(bad_matrix))), 0)
         self.assertNotEqual(check(dict(selection, go_shards='[]')), 0)

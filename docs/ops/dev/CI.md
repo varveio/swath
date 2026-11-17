@@ -35,10 +35,23 @@ passed full Go validation. It separately verifies that the tag is an ancestor of
 nested modules' tags of the same version (`reader/vX.Y.Z`, `objfile/vX.Y.Z`) name the same commit,
 and requires
 `go-full-gate` from the exact commit's main push run. It then reruns `go vet`
-and the race tests unsharded on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
+and the race tests on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
 binaries once into the release archives, builds both images from those archived binaries, pushes
 them by digest, smokes the digests, and only then applies tags and signs.
 [`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
+
+The release's `go-tests` runs the race tests in the shards of `scripts/ci/go-race-shards.sh`,
+read from the table at the tag, one matrix leg per shard and every one on amd64, beside a
+`vet-reader` leg (`go vet`, the table's `--check`, the reader module's race tests); `publish`
+needs every leg. One unsharded run took 19.5 to 25.5 of the about 28 minutes from a tag push to
+the approval prompt, `internal/listing` alone 1,044 to 1,369 s; the slowest shard sets that wait
+now, `cmd` at about 10 minutes in a rehearsal of the job ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
+The cost: no leg runs all the tests of `internal/listing` or of `cmd/swath`, the two split
+packages, in one process under the race detector, so state leaking from one of their tests into a
+test of another shard is caught only by nightly's unsharded amd64 `go-race-nightly`. The release
+does not check it: its checklist requires a successful `go-race-nightly` job on the commit being
+released or on one with the same Go sources, a step for a person that no workflow enforces
+([RELEASING.md](../../../RELEASING.md#cutting-a-release)).
 
 [`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. The three modules are one `directories` entry, so a group is one pull request across them: the root requires `objfile` and `reader` by local `replace`, and a bump in one module alone leaves the root's `go.mod` short of what the nested module requires, which fails every `go` command at the root. The Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
 
@@ -56,7 +69,7 @@ instead of taking the repository default:
 
 - 14 days for the per-commit `go test -json` streams in `ci.yml`;
 - 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`, and the release's
-  `go test -json` stream;
+  `go test -json` streams (one per shard);
 - 1 day for an artifact that only hands files from one job to another in the same run.
 
 ## One required check: `ci-gate`
@@ -126,8 +139,8 @@ input-selection mistakes.
 ### Full validation and releases
 
 `go-full-gate` depends directly on every Go job on full-scope PRs and main/dispatch. It requires every job to pass, every
-Go selection to be enabled, the full race-shard matrix, the full macOS and arm64 legs and exactly the
-Windows legs of the shard table.
+Go selection to be enabled, the full race-shard matrix, the full arm64 leg and exactly the macOS
+and Windows legs of the shard table.
 Regression tests require both aggregates to include every Go job. Full-scope PRs exercise the
 qualification before merge, but only its main push result can qualify a release. Main runs retain independent concurrency groups, so a newer merge cannot
 cancel the older commit's qualification. A red main run must be fixed or reverted; green PR checks do
@@ -183,7 +196,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
 | `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile`) for two architectures and their smokes; the image build runs the Go license gate (`notices.sh`) |
 | `go-objfile`, `go-reader` | the nested modules `objfile` and `reader`: vet, tidy, race tests, cross-builds |
-| `go-xos (OS)`, `go-xos (windows-latest, LEG)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch, Windows split into legs |
+| `go-xos (OS)`, `go-xos (OS, LEG)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch, macOS and Windows split into legs |
 | `go-fixtures` | the replay fixture tier on the fixtures `bench/replay/fixtures` writes |
 
 The nested modules have their own `go.mod`, so `./...` at the root never reaches them; each needs its
@@ -255,6 +268,21 @@ cache, which the stress Windows runs restore; the other legs use the build cache
 the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
+
+macOS then became the critical job of a full run, 14.5 to 15.7 minutes, its single leg running
+`internal/listing` and `cmd/swath` side by side on three vCPUs. A third table in the same script
+splits it in two legs: `listing` (`internal/listing`'s four shards, which run as the whole package)
+and `rest` (everything else, `go vet` and the nested modules, with the `go-xos` cache). A macOS leg
+runs its packages in one `go test`, as the single job did, so each package still runs all its
+tests in one process there ([macOS legs](../../internals/testing.md#macos-legs)). A full run now
+holds two macOS runners at once instead of one, of the five concurrent macOS jobs the account's plan
+allows: two overlapping full runs (or one and the nightly) take four, and a third beside them waits
+for a runner. The first run took 10.8 minutes for its slowest leg, its `listing` cache not yet
+saved, against 15.7 for the single job ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
+
+A leg's step runs the commands the script prints for it, one per line. A leg that printed none
+would not pass silently: its one empty line becomes a bare `go test` at the repository root, which
+holds no Go package, and fails.
 
 macOS and Windows runtime coverage is usually deferred because those jobs and their runner queues
 previously dominated PR turnaround. It has caught real platform differences, so it is retained on
@@ -344,11 +372,12 @@ Newest means creation time, not this run's commit: overlapping main runs must no
 run's caches. A fixed-order, deduplicated snapshot limits deletions to observed IDs; new entries
 are left for the next pass. This bounds generations, not bytes: concurrent writes can temporarily
 exceed the quota, and the retained families still need to fit the repository budget. With the
-trim, one generation is estimated at about 8.0 GB: 17 build-cache families of about 5.2 GB
-compressed, four module caches of 1.9 GB, BuildKit's 0.4 GB and CodeQL's main dependency cache and
-overlay databases, about 0.5 GB
-([measurements](../../internals/measurements.md#windows-shard-legs-remote-crash-and-trimmed-build-caches-2026-11-17)).
-Two things push the occupancy past that. A `main` run saves a second build generation, about 5 GB,
+trim, one generation is estimated at about 8.2 GB: 18 build-cache families of about 5.3 GB
+compressed (the macOS `listing` leg's, added after the
+[#619 measurement](../../internals/measurements.md#windows-shard-legs-remote-crash-and-trimmed-build-caches-2026-11-17),
+about 0.16–0.20 GB), four module caches of 1.9 GB, BuildKit's 0.4 GB and CodeQL's main dependency
+cache and overlay databases, about 0.5 GB ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
+Two things push the occupancy past that. A `main` run saves a second build generation, about 5.3 GB,
 which lives beside the first until the prune after the run. And the prune removes superseded
 generations, not retired families: when a job or shard stops using a key (a shard renamed, or
 made to share another's cache), the newest entry of its old family stays until it is deleted by
@@ -381,7 +410,7 @@ running deploy.
 ## Runners and cost
 
 Everything runs on GitHub-hosted runners. Linux jobs use `ubuntu-latest` (amd64) or
-`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` and
+`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` (legs, as in `go-xos`) and
 `go-stress.yml`. The choices above are driven mostly by wall time and queueing rather than by
 minutes:
 
@@ -419,7 +448,7 @@ minutes:
   docs tier then runs it with no edit here. A test that reads `docs/` as data (the provider evidence)
   also needs a policy rule that selects its tier for that file.
 - **A new race shard:** add a row to the table in `go-race-shards.sh` and its name to one Windows
-  leg there, and give it its own build cache or that of a row of the same package whose tests
+  leg and one macOS leg there, and give it its own build cache or that of a row of the same package whose tests
   build the same things; run `--self-test` and `--check` locally, and update the shard tables in
   `docs/internals/testing.md`.
 - **A new platform:** add a leg to the `go-xos` matrix that `changes` emits, for the events where it

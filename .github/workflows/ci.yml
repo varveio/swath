@@ -87,9 +87,11 @@ jobs:
           if [ "$GO_ANY" != true ]; then
             matrix='[{"os":"off","runner":"ubuntu-latest","scope":"off"}]'
           elif [ "$PLATFORMS" = true ]; then
-            # Windows runs as legs along the race shards (go-race-shards.sh --windows-matrix).
+            # macOS and Windows run as legs along the race shards (go-race-shards.sh --macos-matrix,
+            # --windows-matrix).
+            macos=$(./scripts/ci/go-race-shards.sh --macos-matrix)
             windows=$(./scripts/ci/go-race-shards.sh --windows-matrix)
-            matrix=$(jq -cn --argjson windows "$windows" '[{os: "macos-latest", runner: "macos-latest", scope: "full"}]
+            matrix=$(jq -cn --argjson macos "$macos" --argjson windows "$windows" '$macos
               + $windows + [{os: "ubuntu-24.04-arm", runner: "ubuntu-24.04-arm", scope: "full"}]')
           elif [ "$GO_CHANGED" = true ]; then
             matrix='[{"os":"ubuntu-24.04-arm","runner":"ubuntu-24.04-arm","scope":"extra"}]'
@@ -533,10 +535,11 @@ jobs:
   # Ordinary PRs keep arm64 coverage of the packages raced on amd64, without
   # repeating the CLI/engine matrices already raced on arm64. The shard table owns
   # that complement. Escalated PRs/main/dispatch run every selected module in full.
-  # Windows runs the suite about three times slower than macOS, so its full run is legs along
-  # the race shards (`leg`, go-race-shards.sh --windows-matrix), most of them one shard each; the
-  # leg of scope `full` also vets the module and tests the nested modules, and keeps the go-xos
-  # build cache. A leg's build cache is the one the table names (`cache`).
+  # macOS and Windows run their full suite in legs along the race shards (`leg`, go-race-shards.sh
+  # --macos-matrix and --windows-matrix): macOS in two, internal/listing and the rest, Windows,
+  # about three times slower, mostly one shard per leg. The leg of scope `full` also vets the
+  # module and tests the nested modules, and keeps the go-xos build cache. A leg's build cache is
+  # the one the table names (`cache`).
   go-xos:
     needs: changes
     name: go-xos (${{ matrix.os }}${{ matrix.leg && format(', {0}', matrix.leg) || '' }})
@@ -558,8 +561,9 @@ jobs:
         with:
           key: ${{ matrix.cache || 'go-xos' }}
 
-      # A Windows leg runs one `go test` per race shard it names, each printed first, and goes on
-      # after a failed one so that every shard reports.
+      # A leg runs the `go test` commands the table gives it (on Windows one per race shard, on
+      # macOS its packages in one), each printed first, and goes on after a failed one so that
+      # every command reports.
       - name: Main module vet and tests (no -race)
         if: matrix.scope != 'off' && needs.changes.outputs.go == 'true'
         env:
@@ -568,9 +572,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "$LEG" ]; then
-            leg_args=$(./scripts/ci/go-race-shards.sh --windows "$LEG")
+            platform=--windows
+            if [ "$RUNNER_OS" = macOS ]; then platform=--macos; fi
+            leg_args=$(./scripts/ci/go-race-shards.sh "$platform" "$LEG")
             if [ "$SCOPE" = full ]; then go vet ./...; fi
-            mapfile -t shards <<<"$leg_args"
+            # A loop, not mapfile: macOS runs bash 3.2.
+            shards=()
+            while IFS= read -r shard; do shards+=("$shard"); done <<<"$leg_args"
             status=0
             for shard in "${shards[@]}"; do
               read -ra args <<<"$shard"
@@ -724,13 +732,14 @@ jobs:
           set -euo pipefail
           jq -e 'all(.[]; .result == "success")' <<<"$NEEDS"
           shards=$(./scripts/ci/go-race-shards.sh --matrix)
+          macos=$(./scripts/ci/go-race-shards.sh --macos-matrix)
           windows=$(./scripts/ci/go-race-shards.sh --windows-matrix)
-          jq -e --argjson shards "$shards" --argjson windows "$windows" '
+          jq -e --argjson shards "$shards" --argjson macos "$macos" --argjson windows "$windows" '
             (.full == "true") and (.go == "true") and (.reader == "true") and
             (.objfile == "true") and (.fixtures == "true") and (.images == "true") and
             (.platforms == "true") and (.docs == "true") and (.go_shards | fromjson == $shards) and
             (.go_xos | fromjson |
-              ([.[] | select(.os != "windows-latest")] |
-                (map(.os) | sort) == ["macos-latest", "ubuntu-24.04-arm"] and
-                all(.[]; .scope == "full" and .runner == .os)) and
+              [.[] | select(.os != "windows-latest" and .os != "macos-latest")] ==
+                [{os: "ubuntu-24.04-arm", runner: "ubuntu-24.04-arm", scope: "full"}] and
+              [.[] | select(.os == "macos-latest")] == $macos and
               [.[] | select(.os == "windows-latest")] == $windows)' <<<"$SELECTION"
