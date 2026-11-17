@@ -49,6 +49,9 @@ type Options struct {
 	DualStack bool   // dual-stack (IPv6) endpoint
 	Profile   string // shared-file profile
 	Anonymous bool   // never sign, whatever the environment holds
+	// CredentialsFile replaces the shared credentials file
+	// (client.Config.CredentialsFile).
+	CredentialsFile string
 	// BearerCommand, if set, is a shell command printing a bearer token,
 	// sent instead of a SigV4 signature (client.BearerToken), fetched again
 	// every BearerRefresh (0: 45 minutes). Never recorded.
@@ -208,7 +211,8 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		lim, rate := opt.Admission.New(opt.Workers)
 		cc := client.Config{Retry: objhttp.Retry{Limiter: lim, Rate: rate},
 			Region: opt.Region, Endpoint: opt.Endpoint, PathStyle: opt.PathStyle, FIPS: opt.FIPS, DualStack: opt.DualStack,
-			Profile: opt.Profile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer, Trust: opt.Trust,
+			Profile: opt.Profile, CredentialsFile: opt.CredentialsFile, Anonymous: opt.Anonymous, RequestTimeout: opt.Timeout, RequestPayer: opt.RequestPayer,
+			Trust: opt.Trust,
 		}
 		if opt.BearerCommand != "" {
 			cc.Bearer = client.NewBearerToken(opt.BearerCommand, opt.BearerRefresh)

@@ -74,6 +74,9 @@ type Config struct {
 	// Bearer, if set, authenticates every request with its token
 	// ("Authorization: Bearer") instead of SigV4; no credential is looked up.
 	Bearer *tokensource.Shared
+	// CredentialsFile replaces the shared credentials files the SDK reads
+	// (AWS_SHARED_CREDENTIALS_FILE, else ~/.aws/credentials).
+	CredentialsFile string
 }
 
 // Client lists S3 buckets. It is safe for concurrent use.
@@ -81,6 +84,7 @@ type Client struct {
 	cfg  Config
 	auth *auth
 	sdk  *awss3.Client
+	hc   *http.Client // the SDK's, under the Guard
 	*objhttp.Meter
 }
 
@@ -116,7 +120,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		Meter: objhttp.NewMeter(cfg.Retry),
 	}
 
-	hc := objhttp.Pool(1, cfg.HTTPClient, trust, func(next http.RoundTripper) http.RoundTripper {
+	c.hc = objhttp.Pool(1, cfg.HTTPClient, trust, func(next http.RoundTripper) http.RoundTripper {
 		guard := &objhttp.Guard{Next: next, Validate: validate}
 		if a.bearer != nil {
 			guard.Header = bearerHeader
@@ -127,7 +131,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	c.sdk = awss3.New(awss3.Options{
 		Region:       a.region,
 		Credentials:  aws.AnonymousCredentials{}, // a signed attempt supplies its own (attempt)
-		HTTPClient:   hc,
+		HTTPClient:   c.hc,
 		Retryer:      aws.NopRetryer{},
 		BaseEndpoint: base,
 		UsePathStyle: cfg.PathStyle,
@@ -260,6 +264,50 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 		})
 	})
 }
+
+// HeadObject sends one HeadObject request on ListObjectsV2's path: the
+// same signing, admission, retries and classification. A HEAD answer has
+// no body, so a refusal's code is its status text: a missing key and a
+// missing bucket are both an *Error of status 404 and code NotFound, which
+// HeadBucket tells apart.
+func (c *Client) HeadObject(ctx context.Context, bucket, key string) (*Head, error) {
+	req := &awss3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)}
+	if c.cfg.RequestPayer {
+		req.RequestPayer = types.RequestPayerRequester
+	}
+	var renewed bool
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Head, error) {
+		var out *awss3.HeadObjectOutput
+		answer := func([]byte) (*Head, error) {
+			return &Head{Size: out.ContentLength, LastModified: out.LastModified, StorageClass: string(out.StorageClass)}, nil
+		}
+		return attempt(c, ctx, &renewed, nil, answer, func(actx context.Context, opts ...func(*awss3.Options)) error {
+			var err error
+			out, err = c.sdk.HeadObject(actx, req, opts...)
+			return err
+		})
+	})
+}
+
+// HeadBucket sends one HeadBucket request on ListObjectsV2's path. It
+// succeeds when the bucket exists and the credentials may list it; a
+// missing bucket is an *Error of status 404.
+func (c *Client) HeadBucket(ctx context.Context, bucket string) error {
+	req := &awss3.HeadBucketInput{Bucket: aws.String(bucket)}
+	var renewed bool
+	answer := func([]byte) (*struct{}, error) { return &struct{}{}, nil }
+	_, err := objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*struct{}, error) {
+		return attempt(c, ctx, &renewed, nil, answer, func(actx context.Context, opts ...func(*awss3.Options)) error {
+			_, err := c.sdk.HeadBucket(actx, req, opts...)
+			return err
+		})
+	})
+	return err
+}
+
+// CloseIdleConnections closes the client's idle connections. The client
+// stays usable: a later request opens a new one.
+func (c *Client) CloseIdleConnections() { c.hc.CloseIdleConnections() }
 
 func str(s string) *string {
 	if s == "" {

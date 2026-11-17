@@ -37,8 +37,9 @@ const (
 // authentication form (anonymous, an access key from the environment, a
 // session's credentials, a bearer token), virtual-host on AWS's endpoint
 // and path-style (with requester pays) and on a custom endpoint:
-// ListObjectsV2 with no options, with every option and continuing, and
-// ListObjectVersions with no options and with every option, is method,
+// ListObjectsV2 with no options, with every option and continuing,
+// ListObjectVersions with no options and with every option, HeadObject
+// and HeadBucket, is method,
 // intended authority, escaped path, every query parameter as sent, in
 // order, every header value (duplicates kept) and the body's length,
 // exactly as testdata/wire.txt has it, as the request reaches the
@@ -84,6 +85,8 @@ func TestWireSnapshot(t *testing.T) {
 			{"objects, continuing", func() error { _, err := c.ListObjectsV2(ctx, &next); return err }},
 			{"versions", func() error { _, err := c.ListObjectVersions(ctx, &VersionsInput{Bucket: "bkt"}); return err }},
 			{"versions, every option", func() error { _, err := c.ListObjectVersions(ctx, &versions); return err }},
+			{"head object", func() error { _, err := c.HeadObject(ctx, "bkt", "p/"+key); return err }},
+			{"head bucket", func() error { return c.HeadBucket(ctx, "bkt") }},
 		} {
 			n := len(rec.reqs)
 			if err := call.do(); err != nil {
