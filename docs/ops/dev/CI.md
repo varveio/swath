@@ -266,6 +266,16 @@ the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
 
+macOS then became the critical job of a full run, 14.5 to 15.7 minutes, its single leg running
+`internal/listing` and `cmd/swath` side by side on three vCPUs. A third table in the same script
+splits it in two legs: `listing` (`internal/listing`'s four shards, which run as the whole package)
+and `rest` (everything else, `go vet` and the nested modules, with the `go-xos` cache). A macOS leg
+runs its packages in one `go test`, as the single job did, so each package still runs all its
+tests in one process there ([macOS legs](../../internals/testing.md#macos-legs)). A full run now
+holds two macOS runners at once instead of one, of the five concurrent macOS jobs the account's plan
+allows: two overlapping full runs (or one and the nightly) take four, and a third beside them waits
+for a runner.
+
 macOS and Windows runtime coverage is usually deferred because those jobs and their runner queues
 previously dominated PR turnaround. It has caught real platform differences, so it is retained on
 main/nightly and required before release. Path escalation is an early-warning aid, not proof that
@@ -391,7 +401,7 @@ running deploy.
 ## Runners and cost
 
 Everything runs on GitHub-hosted runners. Linux jobs use `ubuntu-latest` (amd64) or
-`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` and
+`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` (legs, as in `go-xos`) and
 `go-stress.yml`. The choices above are driven mostly by wall time and queueing rather than by
 minutes:
 
