@@ -103,6 +103,7 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/utf16order"
+	"github.com/varveio/swath/objfile"
 )
 
 // services builds one SDK service client per pooled transport, each over
@@ -147,27 +148,31 @@ func (c *Client) services(bodyCap int64) error {
 
 // List sends one List Blobs request, retrying retryable failures
 // (objhttp.Do), and validates the page (objhttp.ErrInvalidPage). A page past the
-// body cap is ErrBodyCap, not retried.
+// body cap is ErrBodyCap, not retried. Each attempt is reported to ctx's
+// objfile.Observer, when it carries one, as a list request of the prefix.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*ListOutput, error) { return c.list(ctx, in) })
+	op := &observed{request: objfile.Request{Kind: objfile.ListRequest, Name: in.Prefix}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*ListOutput, error) { return c.list(ctx, in, op) })
 }
 
 // list is one List Blobs attempt: a fresh pager seeded with the marker,
 // one NextPage.
-func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
+func (c *Client) list(ctx context.Context, in *ListInput, op *observed) (out *ListOutput, err error) {
 	s := &sent{}
 	actx, cancel, err := c.begin(ctx, s)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
+	end := op.begin(ctx)
+	defer func() { end(int64(len(s.Body)), err) }()
+
 	cc := c.svc[c.pick()].NewContainerClient(in.Container)
 	var size *int32
 	if in.MaxResults > 0 {
 		m := int32(min(in.MaxResults, math.MaxInt32))
 		size = &m
 	}
-	var out *ListOutput
 	done := c.Tally.Attempt()
 	if in.Delimiter == "" {
 		var r container.ListBlobsFlatResponse
@@ -195,11 +200,82 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
 	}
-	if err := out.Validate(in.Marker, in.Include.Grouped()); err != nil {
-		return nil, err
+	var check error
+	if in.AnyOrder {
+		check = out.continues(in.Marker)
+	} else {
+		check = out.Validate(in.Marker, in.Include.Grouped())
+	}
+	if check != nil {
+		return nil, check
 	}
 	c.formats.count(arrowAnswer(s.Header), len(out.Items))
 	return out, nil
+}
+
+// Properties sends Get Blob Properties of the blob name in container,
+// retrying retryable failures (objhttp.Do), with the listing's
+// credentials, timeout and classification: a missing blob and a missing
+// container are both an *Error of status 404, their codes BlobNotFound and
+// ContainerNotFound. Each attempt is reported to ctx's objfile.Observer,
+// when it carries one, as a metadata request of the name.
+func (c *Client) Properties(ctx context.Context, container, name string) (*Head, error) {
+	op := &observed{request: objfile.Request{Kind: objfile.MetadataRequest, Name: name}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (h *Head, err error) {
+		s := &sent{}
+		actx, cancel, err := c.begin(ctx, s)
+		if err != nil {
+			return nil, err
+		}
+		defer cancel()
+		end := op.begin(ctx)
+		defer func() { end(0, err) }()
+
+		done := c.Tally.Attempt()
+		r, err := c.svc[c.pick()].NewContainerClient(container).NewBlobClient(name).GetProperties(actx, nil)
+		done()
+		switch {
+		case err != nil && s.refused(err):
+			return nil, c.refusal(err)
+		case err != nil:
+			return nil, c.failure(actx, ctx, s, err, container)
+		}
+		h = &Head{LastModified: micros(r.LastModified), AccessTier: deref(r.AccessTier), Directory: Directory(r.Metadata)}
+		if r.ContentLength != nil {
+			h.Size = *r.ContentLength
+		}
+		return h, nil
+	})
+}
+
+// Head is what Get Blob Properties says of a blob.
+type Head struct {
+	Size         int64
+	LastModified int64  // Unix microseconds; 0 when absent
+	AccessTier   string // as answered; "" when absent
+	// Directory: the blob is a hierarchical namespace's directory
+	// (Directory).
+	Directory bool
+}
+
+// Directory reports metadata that marks a blob as a directory of a
+// hierarchical namespace: hdi_isfolder=true, which Azure sets on the blob
+// that stands for each directory (names and values in any case).
+func Directory(metadata map[string]*string) bool {
+	for k, v := range metadata {
+		if strings.EqualFold(k, "hdi_isfolder") && v != nil && strings.EqualFold(*v, "true") {
+			return true
+		}
+	}
+	return false
+}
+
+// CloseIdleConnections closes the idle connections of every transport of
+// the pool. The client stays usable: a later request opens a new one.
+func (c *Client) CloseIdleConnections() {
+	for _, h := range c.http {
+		h.CloseIdleConnections()
+	}
 }
 
 // AccountInfo sends Get Account Information on the container's path

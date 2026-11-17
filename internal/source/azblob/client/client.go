@@ -96,6 +96,10 @@ type ListInput struct {
 	Marker     string
 	MaxResults int     // 0: the server default (5,000, also the cap)
 	Include    Include // the zero value sends no include
+	// AnyOrder holds the page to no order of its names, for a caller that
+	// orders them itself: a hierarchical namespace lists in its own order,
+	// which is not UTF-16 code-unit order. It is never sent.
+	AnyOrder bool
 }
 
 // Item is one listed entry: a blob, or with Prefix a BlobPrefix (a
