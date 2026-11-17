@@ -88,8 +88,8 @@ The contributor reference is
   ordering, Parquet output, providers, testing, CLI); a code change is not done until its
   page there is current. Measurements are recorded, dated, in
   [`docs/internals/measurements.md`](docs/internals/measurements.md).
-- A provider's runtime integration is its directory under `internal/source/` plus one blank
-  import in `cmd/swath`; reader contracts, verifier support and central conformance tests
+- A provider's runtime integration is its directory under `internal/source/` plus one file
+  in `internal/cli`; reader contracts, verifier support and central conformance tests
   still need explicit integration. Follow the verified
   [provider checklist](docs/internals/providers.md#adding-a-provider). Providers compose
   shared flag groups, the range engine and `keyrange.Registered`, `objhttp` client plumbing

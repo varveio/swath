@@ -81,10 +81,10 @@ type Stats struct {
 	Chunks           int64    `json:"chunks"`                      // large-directory chunks statted in parallel
 	ParallelSorts    int64    `json:"parallel_sorts"`              // large directories whose entries were sorted in parallel runs
 	ReaddirplusHints int64    `json:"readdirplus_hints,omitempty"` // full directory reads followed by a few stats, so an NFS client fetches attributes with the next (readNames)
-	Unsorted         int64    `json:"unsorted_dirs,omitempty"`     // directories a count read without sorting (opened.Run)
+	Unsorted         int64    `json:"unsorted_dirs,omitempty"`     // directories a count read without sorting (Opened.Begin)
 	Slabs            int64    `json:"count_slabs,omitempty"`       // directory slabs a count read before statting them (countSlab, Linux)
 	Presized         int64    `json:"presized"`                    // large directories whose buffers were sized from st_size
-	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (opened.Run)
+	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (Opened.Begin)
 	Samples          []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
@@ -289,7 +289,7 @@ type Provider struct {
 	prune  func(string) bool // immutable directory predicate, set before workers start
 	keyOut func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
 	// unreadable is told the key prefix of a directory that could not be
-	// opened (registry.Env.Unreadable; nil: nobody asks), set before
+	// opened (Opened.Begin's unreadable; nil: nobody asks), set before
 	// workers start.
 	unreadable func(string)
 	// unsorted: a count, whose rows nothing orders; a directory's entries
@@ -298,8 +298,8 @@ type Provider struct {
 	file     bool // the root is not a directory (expandFile)
 	mu       sync.Mutex
 	stats    Stats
-	// warn tells the user of a directory left out (registry.Request.Warn);
-	// nil outside a run. warnMu serialises the workers' calls.
+	// warn tells the user of a directory left out (Open's warn); nil
+	// outside a run. warnMu serialises the workers' calls.
 	warn   func(code, msg string)
 	warnMu sync.Mutex
 	// space is the root's filesystem space, measured once (spaceOnce):
@@ -599,7 +599,7 @@ func (p *Provider) leftOut(key string, dir, known bool) bool {
 	return asFile
 }
 
-// unreadableDir tells the run (registry.Env.Unreadable) of a directory
+// unreadableDir tells the run (Opened.Begin's unreadable) of a directory
 // below the root that could not be opened.
 func (p *Provider) unreadableDir(r Range) {
 	if p.unreadable != nil && r.prefix != "" {

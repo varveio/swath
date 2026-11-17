@@ -50,7 +50,7 @@ func (s *swapAt) Expand(ctx context.Context, r Range, e source.Emitter[Range, En
 // from the root (no descriptor kept), it refuses the link, as it refuses
 // a link in place of the directory it opens: unsafe_dirs, unreadable,
 // named in the error samples (with the level refused, from the root), and
-// the directory told to the run (Env.Unreadable).
+// the directory told to the run (Opened.Begin's unreadable).
 func TestSwappedDirectoryNotFollowed(t *testing.T) {
 	listed := []string{"a/", "a/b/", "a/b/c/"}
 	whole := append(slices.Clone(listed), "a/b/c/d/", "a/b/c/d/e", "a/b/c/in")
