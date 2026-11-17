@@ -1,7 +1,7 @@
 # Run on a schedule
 
 A short guide for whoever schedules and supervises swath: the nightly command, what to do with each exit code,
-and writing the dataset to a bucket from a machine that may not last. One run's command, outcome and limits are
+and writing the dataset to a bucket from a machine that may not last. Listing a bucket once, start to finish, is
 in [Run large listings](running.md); every option is in the [command reference](commands/swath.md). Numbers below are
 observations on the stated runs ([Measurements (internals)](internals/measurements.md)), not limits or promises.
 

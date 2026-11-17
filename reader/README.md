@@ -21,8 +21,11 @@ API compatibility promise: a minor release may change its API.
 `Open(ctx, src, opt)` takes `seekparquet.Source` and `seekparquet.OpenOptions`;
 `OpenDir(ctx, path, opt)` opens a local directory. Both read the manifest alone,
 resolve its registered schema id and parse `extensions.swath`. A present extension
-must have integer `version: 1`; malformed members return a `SemanticError`.
-An absent extension leaves `Metadata.Swath` false. Unknown schema ids are refused.
+must have integer `version: 1`: one without a `version`, or with any other, is a `SemanticError` of
+`KindSchema` ("unsupported swath metadata version"), and a member of the wrong JSON type one of
+`KindMetadata`. Members swath does not define are ignored, and `Metadata.Manifest` keeps the manifest as
+SeekParquet read it, so an informative member can be added under `version` 1. An absent extension leaves
+`Metadata.Swath` false: `Open` alone does not prove that swath wrote a dataset. Unknown schema ids are refused.
 
 `Dataset.Metadata()` returns a copy of the parsed publication time, source, scope,
 coverage (its filters as `Filter`s), what the listing collected (`Collected`), committed object bytes and, for a local source, the filesystem's space. Missing members remain nil: unknown is distinct
@@ -88,9 +91,27 @@ versions. `Sum` skips null/absent values; request `CountNulls` and `CountAbsent`
 missing values must make an application total unknown. `AggregateOptions.CheckKeys`
 requests selected-key validation. `ValueBudgetBytes` is explicit: zero allows no
 value I/O, -1 is unlimited, and a positive budget bounds unique compressed measure
-and filter extents. For browsing, request `Page` with count and size reductions and
+and filter extents, including dictionaries. For browsing, request `Page` with count and size reductions and
 a caller-selected budget such as 4 MiB. Inspect each result's status before its value.
 The SeekParquet API owns execution, borrowed lifetimes, cancellation and exactness.
+
+`Page` reuses the row positions a listing has already established for complete-prefix
+reductions: an unfiltered count adds no value reads, while an unknown boundary, a clipped
+prefix or an unchecked contributing row count leaves the result unknown. Value-only reads do
+not certify the keys they did not read; request `CheckKeys` when that matters. For a local
+dataset, every count includes a directory's own row (a prefix `d/` includes its row `d/` once;
+the root has no row), and `Sum(size)` without a kind filter gives entry bytes, directories'
+own `st_size` included; select `kind` through SeekParquet's `BatchFilter` for files-only totals.
+Under `--metadata names` sizes are null, so check the null and absent counters before calling
+a sum complete.
+
+A row's offset is its zero-based position among the rows of its key. A row cursor
+`(key, offset)` continues after that row: at offset + 1 of the same key, then at the next key
+([SeekParquet PAGE-1](https://github.com/varveio/seekparquet/blob/go/v0.2.0/spec/format-1.md#page-1)).
+A cursor is always a row's: `Cursor{Key: k}` is the cursor after row 0 of `k`, not "after key
+`k`". To skip every row of `k`, use an exclusive key bound (`seekparquet.Span` with `Start` = `k`
+and `StartExclusive`), which also skips the rest of a versions group. An offset is valid only
+for the same immutable dataset and is not a durable version id.
 
 Storage owns caching and physical concurrency. To bypass objfile's byte cache for a
 bulk operation, pass `objfile.WithCacheMode(ctx, objfile.CacheBypass)` to both planning

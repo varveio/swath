@@ -138,3 +138,14 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - A link target is at most 4,096 bytes (`link_target`'s `schema.Spec.MaxBytes`, PATH_MAX): the writer's
   admission prices it at that width, and a longer target stops the run with the typed `schema.ErrValueTooLong`, as
   a key over its cap does; a target within it is written byte for byte.
+- **Filesystem space** (`space.go`, the manifest's `filesystem`). Measured once, when the walk ends (`Report`),
+  for the filesystem that holds the root: for a symbolic link to a file, which lists as the link, the link's
+  directory; for a link to a directory, which is walked through, the target's. With `--one-file-system` that is
+  the filesystem the walk stayed on; without it, nested mounts are listed but not described. `statfs` on Linux
+  (fragment units) and macOS; `GetDiskFreeSpaceEx` on Windows, where the total and available bytes are within the
+  caller's quota and the free bytes are the volume's, so free can exceed total. It is left out on other
+  platforms, when the call fails, for a filesystem that reports a size of 0, and when the root no longer names
+  what `New` found (a link retargeted, a directory replaced); a failure never fails the listing. It is what the
+  filesystem says of itself, not a disk's capacity: volumes that share a pool (an APFS container, a ZFS pool)
+  each report the pool's free space, and the dataset's size is not `total_bytes` minus `free_bytes` (scope, hard
+  links, shared blocks, snapshots and the filesystem's overhead differ). Added under `extensions.swath` `version` 1.

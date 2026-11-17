@@ -1,175 +1,324 @@
 # Watch and tune a run
 
-What a running listing shows on the terminal, in its progress file and in its report, the signals that mean
-trouble, and the flags to change when they do. How much disk and memory a run needs is in
+While a listing runs, swath shows its progress on the terminal and in a file beside the output, and when it
+ends it says what it did. This page says which values to look at, and what to do when a run is throttled,
+short of memory or disk, or stuck. How much disk and memory to give a run before it starts is in
 [Size a run](size-a-run.md).
 
-## Watching a run
+## Is the run making progress
 
-**On a terminal.** swath draws one progress line on stderr, redrawn every second: phase, objects (with rows a
-resume recovered), their bytes so far, elapsed time, live and average keys/s (while every request fails, the
-cause retried instead), parts, then requests in flight, API calls and a cost estimate when a tariff is known. Off a terminal it is off unless asked: `--progress` appends the same record as a plain line every 30 s
-(`--progress-interval` sets it, at least 1 s); a log never receives control sequences. `-q` turns the
-automatic progress and the warnings off, `--no-progress` turns progress off everywhere. While `swath list`'s
-rows go to the same terminal there is no line, and `--progress` is refused; `swath du` draws it while it lists
-and erases it before its table. At the end, runs over
-1.5 s, runs that wrote output and runs that did not complete print their closing lines on stderr: the verdict
-(`complete`, or with its cause `partial: 1 unreadable entry`, `stopped: --max-duration reached`,
-`interrupted`), the objects and bytes listed, the time and (from 2 s) the rate, and the output written, then
-`next:` with `swath resume DIR` for a resumable stop, or `swath show` and `swath du --from-dataset` for a
-committed dataset ([closing lines](commands/swath.md#stdout-and-stderr)). `--stats` prints them always and adds
-the statistics (API calls, mean and peak in flight, throttles and retries when any, the estimate, peak RSS),
-also for a supervisor's log; `--no-stats` drops them. Warnings come before the lines.
-stdout carries only rows, totals or `--report -`. Color: `--color auto|always|never`, auto honoring `NO_COLOR`.
+On a terminal swath draws one progress line on stderr and redraws it every second. This listing of a large
+public bucket stops itself after five seconds:
 
-`DIR/.swath/progress.json` is rewritten every 2 s (atomic rename) while the run holds the output: the live
-counts, the request account (`http_attempts`, `retries`, `inflight`, the limiter's `limit`, `cost_usd`), the order
-stage's resources and the run's `state`. The report written at the end keeps the curve (`diagnostics.history`, up to 300 samples), the phase times
-(`diagnostics.seed_ms`, `listing_ms`, `drain_ms`, `publication_ms`), the request account (`requests`), the
-resources and the provider's counters (`diagnostics.source.stats.counters.values`: attempt latency percentiles, the
-limiter's steps, the split counters). Both schemas are in
-[Run report and progress file](reference/run-report.md); the counters in [Counters (internals)](internals/counters.md). The signals to read:
+```bash
+swath list s3://noaa-gestofs-pds/ --anonymous --s3-region us-east-1 -o noaa-all --max-duration 5s
+```
 
-**The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
-parallel listing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
-until the leftmost range ends, and are then replayed in order. `timings.provider_finished_at` is when the provider
-finished; `listing_finished_at` when the order stage ended; `diagnostics.resources.drain.tail_ns` the interval between, the
-part of the run in which only the drain was left. In it idle workers read and decode spilled frames ahead of
-the drainer (`diagnostics.resources.drain.read_ahead`) and more encoders are admitted ([encoders](size-a-run.md#resources-and-their-flags)). What the drainer did:
-`replay_read_ns` and `ahead_wait_ns` (the spill), `order_check_ns`, `sink_write_ns` (the encoders, with
-`encoder_wait_ns`), over the whole run, not the tail alone; and in the tail, the workers'
-`worker_idle_after_provider_finished_ns`. A tail that is most of the run with `sink_write_ns` most of the drainer's
-time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
+At three seconds, on a terminal 150 columns wide, the line read:
 
-| Signal | Healthy | Act when |
-|---|---|---|
-| `part_age_ms` | under a minute | several minutes: no part has been published for that long; a crash would list again at least what was listed since |
-| `order.spill_bytes` | the spill held now: on an unseeded sorted run of a large list it grows toward most of the rows listed, since such a run spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)); seeded from a counted prior, it stays near the frontier window's rows (`diagnostics.resources.window`) | near `diagnostics.resources.spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
-| `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
-| `order.ahead_rows`, `diagnostics.resources.peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more). The set is bounded by `--spill-budget`, not by `--sort-buffer`; a count holds none | not by itself; read it with `diagnostics.resources.spill.refused`, `budget_wait_ns` and `max_frontier_stuck_ns` |
-| `diagnostics.resources.spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (with plain spill frames, before the delta coding, a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s) |
-| `diagnostics.resources.max_frontier_stuck_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on measured sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
-| `diagnostics.resources.peak_heap_live_bytes` against `invocation.sort_buffer_bytes` (report) | the budget plus the encoders' allowance and the pages in flight | far beyond: memory the budget does not see |
-| `diagnostics.resources.spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
-| `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
-| `order.spill_pressure_since` | absent | present: spill has been refused, with workers waiting on it (in publish or at admission), since then: the spill cap is full (with the default cap, the disk: grow it and listing continues), or free space is down to the reserve; at 2 minutes the run says so on stderr (`spill_pressure`), and `--spill-wait-timeout` stops it ([three bad patterns](#three-bad-patterns)) |
-| `rows` against `encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
-| `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
-| `throttles` | flat | rising steadily: see [Throttling](#throttling) |
-| `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
-| `diagnostics.resources.budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full sort buffer |
-| `mean_active` against mean in flight (report) | both near `--workers` | active high, in flight low: requests held by the limiter or admission |
-| `inflight.p99_ns` against `inflight.p50_ns` (report) | a few times p50 | p99 tens of times p50: a tail of slow attempts (timeouts, a throttled route) |
-| `inflight.latency_overflow` (report) | 0 | above 0: attempts of 18 min 20 s or longer; a percentile among them reads 9223372036854775807, open-ended, not a measured bound |
-| `idle_demand_ns` against `busy_ns` (report) | small | comparable: workers sat idle with work wanted; the split policy could not hand out work (see the split counters) |
-| exit 75 on the same output | never twice | a second 75 in a row needs a person |
+```text
+  listing · 2,026,002 objects · 69.2 TiB · 3.0s elapsed · 832,641 keys/s (avg 675,334) · 0 parts · 64 in flight · 2,095 API calls
+```
 
-## A healthy run report
+From the left: what the run is doing (`listing`; `verifying` while a resume checks the parts it keeps), the
+objects listed so far (a local directory's are `entries`; a resume adds `(+N recovered)`), their total size,
+the time elapsed, keys a second now and on average, the parts published, requests in flight, API calls made,
+and an estimate of their cost where the provider's list price is known (not for Azure Blob or a custom
+endpoint), which this terminal was too narrow to show: a narrow terminal drops whole fields from the right.
+There is no percentage: swath cannot know how many objects are left.
 
-Five fields to check in the `--report` file of a sorted listing of a million keys or more:
+A run is making progress while the objects and API calls rise. The parts can stay at 0 for a long time, as
+here: `swath list` writes its rows in key order, so the output waits until the start of the key space has been
+listed, and the rows listed ahead of it wait in memory and then on disk meanwhile
+([short of disk](#disk)). `swath du` counts without ordering and never waits so.
 
-| Field | Normal |
+Where the line appears:
+
+- Off a terminal (a log file, a pipe) there is no line unless you ask: `--progress` appends the same record as
+  a plain line every 30 s, and `--progress-interval 10s` sets the interval (at least 1 s) and implies
+  `--progress`. A log never receives control sequences.
+- `-q` turns the automatic line and the warnings off; `--no-progress` turns progress off everywhere.
+- While `swath list` writes rows to the same terminal there is no line, and `--progress` is refused: send the
+  rows to a file or a dataset. `swath du` draws the line while it lists and erases it before its table.
+- `--color auto|always|never` colors the line and the closing lines; `auto` honors `NO_COLOR`.
+
+### The progress file
+
+A dataset run (`-o DIR`) also rewrites `DIR/.swath/progress.json` every 2 seconds, for a script or a
+supervisor. Read in another terminal while the run above goes (with `jq`, if you have it; any JSON reader
+will do):
+
+```bash
+jq '{state, rows_fetched, object_bytes, parts_written, part_age_ms, advance, throttles, inflight, limit}' \
+  noaa-all/.swath/progress.json
+```
+
+```json
+{
+  "state": "listing",
+  "rows_fetched": 2026002,
+  "object_bytes": 76044354827022,
+  "parts_written": 0,
+  "part_age_ms": 3000,
+  "advance": 2078006,
+  "throttles": 0,
+  "inflight": 64,
+  "limit": 64
+}
+```
+
+| Field | What it says |
 |---|---|
-| `outcome.class` | `ok` (exit 0), with `outcome.complete` true; for the whole source, also no filters in the dataset's coverage ([check](results.md#coverage-and-unreadable-entries)) |
-| `diagnostics.efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
-| `diagnostics.resources.spill.refused` | 0 |
-| `diagnostics.resources.budget_wait_ns` | 0 or close to it |
-| `diagnostics.resources.max_frontier_stuck_ns` | a few request round trips: a median 0.28 s and at most 1 s on sorted runs of the 64 lists of 20M keys or more through a 50 ms fake (candidate 4, run `c4big`: its resumed and spill-capped arms) |
+| `state` | `listing`; `draining` once listing is done and the rows it holds are being written; `publishing`; then `done` or `failed` |
+| `rows_fetched`, `object_bytes` | rows listed so far, and the objects' total size |
+| `parts_written`, `part_age_ms` | parts published, and the time since the last one was published (or since the start) |
+| `advance` | rises whenever rows are listed or written, parts published or a resume's parts verified: flat means nothing moves ([stuck](#is-the-run-stuck)) |
+| `throttles`, `limit`, `inflight` | throttle answers so far, the request limit (it starts at `--workers` and falls when the service throttles), and requests in flight: [throttling](#throttling) |
+| `order.spill_bytes`, `order.spill_max_bytes`, `order.spill_pressure_since` | rows waiting on disk for the output, their cap, and since when listing has waited on a full cap (present only while it does): [short of disk](#disk) |
 
-Spill is normal. A sorted run of a large bucket spills almost every row once (a median 96 % of rows on the 64
-lists of 20M keys or more: candidate 4, run `c4big`, plain frames), because ranges finish in roughly
-key-uniform order and the output waits for the leftmost one.
+Every field is in [Run report and progress file](reference/run-report.md#progress-file). The directory above
+holds a resumable run; delete it when you are done (`rm -r noaa-all`).
 
-## Three bad patterns
+<a id="a-healthy-run-report"></a>
 
-**Spill refused, workers waiting.** `diagnostics.resources.spill.refused` is above 0 and `diagnostics.resources.budget_wait_ns` is
-large. `diagnostics.resources.free_disk_min_bytes` is close to `diagnostics.resources.spill.reserve_bytes`, or the spill reached
-`diagnostics.resources.spill.max_bytes`. Listing then runs at the output's pace, and on a very large bucket that pace
-can be a small fraction of the listing's: three listings of 8 to 30 billion objects on a 100 GiB disk at 2,048
-workers fell from about 7,000 requests a second to about 10 once the spill cap filled, and were stopped after
-four hours ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
-`diagnostics.resources.spill.refused_ns` is how long spill stood refused; `publish_wait_ns`, `admission_wait_ns` and
-`idle_wait_ns`, with their peaks, say where the workers waited; and the range engine's `awaited.*` counters say
-why the range the output waited for was or was not split
-([counters](internals/counters.md#order-stage-and-encoders-run-summary-top-level)).
-The run does not fail by itself. Once spill has stood refused with workers waiting on it for 2 minutes, swath says so
-on stderr, an error, and again every 30 minutes while it lasts: how long listing has waited, spill and its
-cap, the output's rate, and the remedy; `progress.json` has `order.spill_pressure_since` meanwhile. Left
-alone, the run finishes at the output's pace. On an unattended run, `--spill-wait-timeout 30m` stops it
-instead once the wait lasts that long: exit 74, `cause` `spill_budget`, resumable. Give it disk. With the default
-cap, grow the filesystem under the running process (a cloud persistent disk resized, then its filesystem grown
-online): within seconds the run rereads the free space, the cap rises and listing continues;
-`diagnostics.resources.spill.cap_raises` counts the rises, `max_bytes` is the cap reached and `start_max_bytes` the one the
-run started with. A `--spill-budget` is fixed: stop the run and resume it with a larger one on a disk that has
-the room, `swath resume DIR --spill-budget 200GiB`; a plain `swath resume DIR` keeps the recorded cap, and with
-the default derives it from the free space it finds (the certified spill the stopped run kept counted as
-free). A repeat listing avoids most of this by seeding from the previous dataset ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)).
+## When the run ends
 
-**A stuck frontier.** `diagnostics.resources.max_frontier_stuck_ns` is seconds to minutes. In `progress.json`, `rows_fetched`
-rises while `rows_encoded` and `parts_written` stay flat and `part_age_ms` grows. One range at the front of the output is
-slow: a slow, retried or hung request. Check `inflight.p99_ns` against `inflight.p50_ns` and the retries in
-the report's `diagnostics.source.stats.counters.values`. After `--stall-timeout` (10 min) of no progress the run stops
-with exit 75 and writes every goroutine's stack to `DIR/.swath/stacks-stuck.txt`. Resume it, and keep that file
-if it happens again.
+swath prints its closing lines on stderr:
 
-**Throttling.** `requests.throttles` rises, the counter `limiter.decreases` is above 0, and `progress.json`'s
-`limit` falls below `--workers`. Throttle answers cause no cut while they are under 15 % of the limiter's
-window, the last answers since its last cut (four per worker, at least 256 and at most 4,096); the counter
-`limiter.cuts_suppressed.tolerated` counts those answers. For a quota shared with other clients, set
-`--request-rate N` below it. If a run crawls with the limit near 1 under sustained throttling, use `--no-adaptive-limit --request-rate N` ([Throttling](#throttling)).
+```bash
+swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 -o stofs
+```
+
+```text
+  complete: 5,252 objects, 383 GiB in 1.0s → stofs (1 part, 121 KiB)
+  next: swath show stofs · swath du --from-dataset stofs
+```
+
+The first line is the verdict, what was listed and its size, the time (and from 2 s the rate), and the output
+written. `next:` is what to run next: `swath show` and `swath du --from-dataset` for a committed dataset,
+`swath resume DIR` for a run that can resume. The closing lines print for runs over 1.5 s, runs that write
+output and runs that do not complete; `--no-stats` and `-q` drop them. `--stats` prints them always and adds
+the run's statistics: the requests with the mean and peak in flight, `throttled N · retried N` when there were
+any, the cost estimate where the list price is known, and the process's peak memory
+([a sample](#throttling)).
+
+The five-second run above ended this way:
+
+```text
+  stopped: --max-duration reached; 0 saved, 3,603,746 listed in 5.0s · 720,605 keys/s → noaa-all
+  next: swath resume noaa-all
+swath: deadline: --max-duration reached (swath resume noaa-all --max-duration 0 continues it without a deadline; a plain resume keeps the recorded one)
+```
+
+`saved` is the rows in published parts, which a resume keeps; `listed` is what this run listed. The verdicts
+and what to do:
+
+| Verdict | Exit | What to do |
+|---|---|---|
+| `complete` | 0 | nothing |
+| `partial: N unreadable entries` | 3 | [Entries could not be read](troubleshooting.md#entries-could-not-be-read) |
+| `stopped: --max-duration reached` | 124 | `swath resume DIR`, or run it again |
+| `stopped: no progress within --stall-timeout` | 75 | [Is the run stuck](#is-the-run-stuck) |
+| `stopped: the endpoint cannot be reached` | 75 | [The endpoint cannot be reached](troubleshooting.md#the-endpoint-cannot-be-reached) |
+| `stopped: --spill-wait-timeout reached`, `stopped: the disk is full` | 74 | [Short of disk](#disk) |
+| `interrupted` (Ctrl-C), `interrupted: SIGTERM`, `interrupted: SIGHUP` | 130, 143, 129 | `swath resume DIR` |
+| `failed` | 1 | the error line says why: [Troubleshooting](troubleshooting.md) |
+
+A command that stops before it lists can print its error line alone, without a verdict; the exit status says
+which kind it is: 2 for a command line or an output refused before anything ran (an unknown flag, a non-empty
+`-o` directory), 1 for a failure such as a bucket that does not exist. Only a dataset run of an object store keeps the journal a resume needs; a local directory, a text file and
+`swath du` are run again. Every code is in [Exit codes](reference/exit-codes.md).
+
+**The run report.** A committed dataset has its report in `DIR/run.json`; `--report FILE` writes it for any run,
+on failure too. A few fields answer whether the run was healthy:
+
+```bash
+jq '{class: .outcome.class, complete: .outcome.complete, rows: .output.rows_committed,
+     requests: .requests.http_attempts, throttles: .requests.throttles,
+     peak_rss: .process.peak_rss_bytes, wall_ms: .timings.wall_ms}' stofs/run.json
+```
+
+```json
+{
+  "class": "ok",
+  "complete": true,
+  "rows": 5252,
+  "requests": 32,
+  "throttles": 0,
+  "peak_rss": 63320064,
+  "wall_ms": 968
+}
+```
+
+A healthy run is `ok` and `complete`, with few or no throttles and a peak memory well under the machine's. The
+fields are in [Run report and progress file](reference/run-report.md); its `diagnostics`, which explain a slow
+run in depth, are read in [Reading a run report](internals/counters.md#reading-a-run-report).
 
 ## Throttling
 
-By default, S3, GCS and Azure Blob share an adaptive request limit that starts at `--workers`,
-reduces concurrency under sustained throttling and recovers as answers improve.
-[Request admission](internals/clients.md#request-admission) owns its window, growth rules,
-timeout and latency brakes, and counters.
+**What you see.** The service answers some requests with "slow down" (S3's 503 SlowDown, a 429): in
+`progress.json` `throttles` rises and `limit` falls below `--workers`, the rate drops, and `--stats` ends with
+`throttled N`. This run went through a local test server that answered 30 % of requests with 503 SlowDown;
+`progress.json` every 10 seconds:
 
-- `--no-adaptive-limit` removes that limit. Seed listings and structure probes can run beside the
-  workers, so more than `--workers` requests can be in flight.
-- `swath diag list --adaptive-limit-slow-start` enables an experimental ramp from a small initial limit;
-  it is off by default.
-- `--request-rate N` adds an aggregate rate cap for a quota shared across a fleet. Reservations
-  are spaced; scheduling delays can bunch actual sends.
-- Exhausted engine listing calls requeue while the run lives; admission failures are described
-  under [object-store requests](sources/README.md#object-store-requests). A stall watchdog or deadline can stop
-  a run that keeps failing. An endpoint that has never answered, every connection refused or its host not
-  found, with nothing in the run answered, stops it as stuck after 30 s instead (exit 75, cause `unreachable`;
-  [troubleshooting](troubleshooting.md#the-endpoint-cannot-be-reached)).
+```json
+{"state":"listing","rows_fetched":785000,"throttles":382,"inflight":2,"limit":2,"part_age_ms":4000}
+{"state":"listing","rows_fetched":899000,"throttles":436,"inflight":1,"limit":1,"part_age_ms":8000}
+{"state":"listing","rows_fetched":1009000,"throttles":486,"inflight":1,"limit":1,"part_age_ms":14000}
+```
 
-Measured on the synthetic S3 fake ([measurements](internals/measurements.md#red-team-fixes-2026-11-07)): 1 % and 5 % random
-throttle answers do not move the limit, and a 300 requests/s cap holds it at the cap. Storms and sustained
-throttling are not measured under this rule.
-If a run crawls with `throttles` rising and the report's
-`limiter.decreases` high (`limiter.peak_depth` near `--workers`: the limit fell to about 1), use
-`--no-adaptive-limit` with `--request-rate` for a fixed-rate alternative. These measurements do not establish
-fit for live provider throttling; [request admission](internals/clients.md#request-admission) describes the tuning limits.
+and its closing lines with `--stats`:
 
-## Three flags on a small runner
+```text
+  complete: 2,000,000 objects, 8.18 TiB in 1m18s · 25,542 keys/s → thr (3 parts, 8.36 MiB)
+  next: swath show thr · swath du --from-dataset thr
+  3,479 API calls · in flight avg 1.55 · peak 63
+  throttled 1,062 · retried 1,062
+  peak RSS 276 MiB
+```
 
-On a 1-vCPU machine with 1 to 2 GB of memory the defaults are the place to start. Change these three only
-when the report says so.
+**What it means.** Requests to S3, GCS and Azure Blob pass an adaptive limit that starts at `--workers`, falls
+when the service keeps throttling and rises again as answers come back. Occasional throttles do not lower it.
+Throttled requests are retried: they cost time, not rows.
 
-- **`--workers`** (default 64 for an object store; for a local path 4 per CPU, so 4 here). On one core the
-  sorted output is the limit, so keep the default ([how many workers](size-a-run.md#workers)).
-- **`--sort-buffer`** (default 1/16 of memory, at most 1 GiB). The bytes of rows held in memory between listing
-  and encoding. Memory is the least of physical memory, the cgroup's limit and `GOMEMLIMIT`, and 128 MiB stands
-  in when none is found: a 2 GiB container gets 128 MiB, an 8 GiB host 512 MiB, 16 GiB or more 1 GiB
-  (`diagnostics.sort_buffer`: `reason`, `bound_by` and the limits found). Rows listed ahead of the output past it
-  spill to disk: a listing whose waiting rows fit in the budget never spills. It is
-  not a memory cap, and swath sets none: pages in flight, writers, the tail and the runtime come on top. The
-  writers are admitted against their own allowance, the same 1/16 of memory whatever `--sort-buffer` says
-  (`diagnostics.resources.drain.encoder_allowance_bytes`), so a smaller sort buffer does not mean fewer encoders. The measurements
-  that follow were taken at a fixed 128 MiB budget (`--sort-buffer 128MiB`): sorted Parquet over the 251 production key lists through a 50 ms fake peaked at a median 0.46 GB and at most
-  0.78 GB RSS (`head1`, `7b05605`) and 0.90 GB (`e2b`, `7fb447f8`, on ooni-data, 15.5M keys); six giants of
-  267M to 523M keys peaked at 0.6 to 0.7 GB (`huge2`, `bf5e6d52`). Those runs were on machines of 16 to 32
-  vCPU, and no run has been measured on a 1.8 GB machine, whose default budget is 1/16 of its memory, about
-  110 MiB. If `process.peak_rss_bytes` comes near the machine's memory, lower the budget. If spill is
-  heavy (`diagnostics.resources.spill.rows` near the rows listed) or `diagnostics.resources.budget_wait_ns` is large and memory is free,
-  raise it: past what a listing holds ahead of its output, more buys only tail workers.
-- **`--spill-budget`** and the disk. Rows that are listed ahead of the point the output has reached go to
-  disposable spill files on the output's filesystem. By default spill may use that filesystem's free space
-  after a reserve of at least 1 GiB: half of it when the parts are written there too, all of it for a
-  dataset in a bucket. The default follows the disk: a frame it would refuse re-reads the free space, so a
-  filesystem grown under the running process is used without a restart. Set `--spill-budget`, a fixed cap,
-  when the filesystem is shared with other work. Size the disk as [disk sizing](size-a-run.md#disk-sizing) describes.
+**What to do.**
+
+- A few throttles, with `limit` near `--workers`: nothing.
+- The store's request quota is shared with other clients (other jobs, several swath runs): set
+  `--request-rate N`, requests a second for this run, below your share of it.
+- The service throttles at the default 64 workers: lower `--workers`, which is also the limit's ceiling.
+- The run crawls with `limit` at 1 or 2 for minutes: turn the adaptive limit off and set a fixed rate,
+  `--no-adaptive-limit --request-rate N`. Without the limit each worker waits on one page at a time, and
+  swath's own probes of the key space run beside them, so more than `--workers` requests can be in flight.
+
+Requests that keep failing with the same cause (not only throttles) print a warning once they have done so
+for 10 seconds without any request answered successfully:
+[A warning repeats about failing requests](troubleshooting.md#a-warning-repeats-about-failing-requests).
+
+## Short of memory or disk
+
+<a id="three-flags-on-a-small-runner"></a>
+
+### Memory
+
+**What you see.** `peak RSS` in the `--stats` lines and `process.peak_rss_bytes` in the report. swath sets no
+memory limit of its own: a run that outgrows the machine or the container is killed by the system.
+
+**What it means.** `--sort-buffer` (by default 1/16 of memory, at most 1 GiB; 128 MiB when no memory limit is
+found) bounds the rows a sorted run holds between listing and writing. It is not a cap on the process: pages
+in flight, the Parquet writers (admitted against their own 1/16 of memory) and the Go runtime come on top.
+Memory is the least of the physical memory, the container's limit and `GOMEMLIMIT`.
+
+**What to do.**
+
+- Peak RSS near the machine's memory: lower `--sort-buffer` together with `--workers` and `--encoders`; a
+  smaller sort buffer alone spills more rows to disk without always lowering the peak.
+- Many rows spilled (the report's `diagnostics.resources.spill.rows`, the rows written to spill, near the rows
+  listed) and memory free: raise `--sort-buffer` so more rows wait in memory.
+- On a machine of one vCPU and 1 to 2 GB, start from the defaults: on one core the sorted output is the
+  limit, so keep the default `--workers` ([workers](size-a-run.md#workers)). Peak memory has been measured
+  only on larger machines
+  ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)):
+  read the peak on a representative run first.
+- A warning that spill is in memory:
+
+  ```text
+  swath: warning: rows are spilling to inv/.swath/spill, which is on tmpfs: they are held in memory (outside the peak RSS); write the output to a disk
+  ```
+
+  The output directory (for rows on stdout, `TMPDIR`) is on a memory filesystem, a common `/tmp`: put it on a
+  disk.
+
+How much memory to plan for: [Memory](size-a-run.md#memory).
+
+<a id="three-bad-patterns"></a>
+
+### Disk
+
+**What you see.** `swath list` keeps the rows it listed ahead of its output in spill files on the output's
+filesystem (`DIR/.swath/spill/` for a dataset; beside a text file; in `TMPDIR` for rows on stdout); a large
+bucket spills almost every row once. By default spill may use half the filesystem's free space (all of it for
+a dataset in a bucket), after a reserve of at least 1 GiB. When it is full, listing slows to the pace of the output, `progress.json` shows
+`order.spill_pressure_since`, and after 2 minutes swath says so, again every 30 minutes while it lasts. This
+run went through a local test server with a deliberately small `--sort-buffer 8MiB` and a fixed
+`--spill-budget 2MiB`, which its remedy names:
+
+```text
+swath: spill cap too small: listing has waited on the output for 2m1s: the spill cap cannot hold the rows listed ahead of it (spill 2.00 MiB, cap 2.00 MiB, free-space reserve 1.00 GiB); the output writes 6,403 rows/s; stop the run and resume it with more disk or a larger --spill-budget (swath resume sp2 --spill-budget SIZE), or let it run: it finishes, slowly
+```
+
+With the default cap the remedy reads `the cap follows the spill disk: grow the disk, or free space on it, and
+listing continues`.
+
+**What it means.** The run does not fail: left alone it finishes at the output's pace, which on a very large
+bucket can be hours or days.
+
+**What to do.**
+
+- With the default cap, grow the filesystem under the running process (a cloud disk resized and its
+  filesystem grown online) or free space on it: within seconds the cap rises and listing continues.
+- With `--spill-budget`, which is fixed, stop the run (Ctrl-C) and resume it with a larger one on a disk that
+  has the room: `swath resume DIR --spill-budget 200GiB`. A plain `swath resume DIR` keeps the recorded cap.
+- On an unattended run, `--spill-wait-timeout 30m` stops the run once listing has waited that long, exit 74,
+  resumable. The same test with `--spill-wait-timeout 10s`:
+
+  ```text
+    stopped: --spill-wait-timeout reached; 0 saved, 1,022,591 listed in 12.0s · 85,195 keys/s → sp
+    next: swath resume sp
+  swath: spill cap too small: listing has waited on the output for 12s: the spill cap cannot hold the rows listed ahead of it (spill 1.99 MiB, cap 2.00 MiB, free-space reserve 1.00 GiB); the output writes 43,825 rows/s; stopped by --spill-wait-timeout 10s: resume it with more disk or a larger --spill-budget (swath resume sp --spill-budget SIZE)
+  ```
+
+- A repeat listing of the same bucket spills far less when it starts from the previous dataset
+  ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)).
+- A part, the journal or the manifest that cannot be written because the filesystem or the quota is full
+  stops the run with `stopped: the disk is full`, exit 74: [The disk filled](troubleshooting.md#the-disk-filled-exit-74).
+  Another write failure, such as a read-only filesystem or a permission refused, is `failed`, exit 1.
+
+How much disk to plan for: [Disk sizing](size-a-run.md#disk-sizing).
+
+## Is the run stuck
+
+**What you see.** The objects stop rising and the rate reads 0. While every request fails, the rate gives way
+to `retrying:` and the cause. At half of `--stall-timeout` swath warns. This run went through a local test
+server that stopped answering after a second and a half, with `--stall-timeout 1m` and
+`--progress --progress-interval 15s`:
+
+```text
+  listing · 743,000 objects · 3.04 TiB · 2.0s elapsed · 371,500 keys/s (avg 371,500) · 0 parts · 64 in flight · 887 API calls
+  listing · 743,000 objects · 3.04 TiB · 18.0s elapsed · 0 keys/s (avg 41,278) · 0 parts · 64 in flight · 887 API calls
+  listing · 743,000 objects · 3.04 TiB · 34.0s elapsed · retrying: context deadline exceeded · 1 part · 64 in flight · 951 API calls
+  listing · 743,000 objects · 3.04 TiB · 50.0s elapsed · retrying: context deadline exceeded · 1 part · 64 in flight · 951 API calls
+swath: warning: S3 127.0.0.1:19424: context deadline exceeded (retrying; 65 attempts; the run stops as stuck after 1m0s without progress)
+swath: warning: no progress for 30s (the run is stopped as stuck at 1m0s)
+  listing · 743,000 objects · 3.04 TiB · 1m06s elapsed · retrying: context deadline exceeded · 1 part · 64 in flight · 1,015 API calls
+  listing · 743,000 objects · 3.04 TiB · 1m22s elapsed · retrying: context deadline exceeded · 1 part · 64 in flight · 1,015 API calls
+swath: warning: no progress for 1m2s (stuck_timeouts): stopping the run as stuck
+swath: warning: goroutine dump written to stall/.swath/stacks-stuck.txt
+  stopped: no progress within --stall-timeout; 503,000 saved, 743,000 listed in 1m36s · 7,738 keys/s → stall (1 part, 2.10 MiB)
+  next: swath resume stall
+swath: stuck: no progress within the stall timeout (stuck_timeouts); every request was failing: S3 127.0.0.1:19424: context deadline exceeded (192 attempts)
+```
+
+**What swath does.** Rows listed or written, parts published and pages of entries answered count as
+progress; failed, throttled and hung requests do not, nor a service that answers only empty pages. After
+`--stall-timeout` (10 minutes by default) without progress, swath stops the run with exit 75 and writes every
+goroutine's stack to `DIR/.swath/stacks-stuck.txt`. The cause in the last line, in `DIR/error.json` and in the
+report's `outcome.cause` says what kept rising: `stuck_throttle`,
+`stuck_timeouts`, `stuck_empty_chain` (the service answered only empty pages) or `stuck_no_rows`
+([exit 75](reference/exit-codes.md)). A part published while requests hang counts too: above, the part at
+30 seconds restarted the clock.
+
+**What to do.**
+
+- Resume it once: `swath resume DIR`.
+- Stuck again on the same output: keep `stacks-stuck.txt` and the report, and
+  [report the problem](troubleshooting.md#reporting-a-problem).
+- A service that is slow to answer for minutes at a time: raise `--stall-timeout`.
+- An endpoint that nothing in the run has ever answered, with every connection refused, its host not found or
+  no route to it, stops sooner: after 30 seconds by default, at most half `--stall-timeout` (exit 75, cause
+  `unreachable`). Timeouts and reset connections do not count: they wait for `--stall-timeout`.
+  [The endpoint cannot be reached](troubleshooting.md#the-endpoint-cannot-be-reached).
+
+The objects can also keep rising while the parts stay flat and `part_age_ms` grows: one slow range at the start
+of the key space holds the output back. The run goes on listing ahead, spilling to disk, and writes its parts
+once that range answers; watch the disk ([short of disk](#disk)).
