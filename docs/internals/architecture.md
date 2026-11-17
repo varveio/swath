@@ -87,11 +87,13 @@ pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 `Source.Walk` lists a prefix flat. A store that walks (`live.Walker`) builds a provider of its own for each call,
 over its shared client (S3's `Live.Walk`: the range engine with no seed and no probes), binds it to its schema
 and runs the order stage's unordered count into a sink of package `swath` (`live.Count`: `bind`,
-`order.CountWithSink`, each range's keys checked ascending). The count's workers hand that sink batches of
+`order.CountWithSink`, each range's keys checked ascending, and each run of a range's keys checked apart from every
+other run's before the sink sees it, so no key reaches it twice). The count's workers hand that sink batches of
 entries, which it checks and hands to the caller's function one at a time from the goroutine that called
 `Walk`, each worker waiting until its batch is taken; the extents not read reach it through the count's
-`order.UnreadSink`. `Source.Summarize` walks each subtree target that lies under no other once and looks up
-each exact target.
+`order.UnreadSink`. A walk with a depth uses no engine: it reads the levels by the store's delimiter listing
+(`live.Store.List`, as `Source.Page` does), one request at a time from the calling goroutine. `Source.Summarize`
+walks each subtree target that lies under no other once and looks up each exact target.
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and

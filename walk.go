@@ -60,12 +60,16 @@ var (
 // an UnreadInterval of class UnreadBudget, before Walk returns. A walk
 // that meets more unread extents than it holds at once (65,536) drops the
 // rest and says so with a nil Evidence.Unlocated. MaxHeldBytes and
-// MaxValueBytes do not bound a walk of an object store, and a walk with a
-// MaxDepth is ErrUnsupported. When ctx ends, Walk returns its error. A
-// panic in the walk's workers is returned as an error of no class.
+// MaxValueBytes do not bound a walk of an object store. A walk with a
+// MaxDepth reads one level at a time instead (walkDepth). When ctx ends,
+// Walk returns its error, even when emit has accepted every batch. A panic
+// in the walk's workers is returned as an error of no class.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
+	}
+	if req.MaxDepth > 0 {
+		return s.walkDepth(ctx, req, emit)
 	}
 	walker, ok := s.store.(live.Walker)
 	if !ok {
@@ -100,7 +104,7 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 		return listing.WalkSummary{}, failure(ctx, err)
 	}
 
-	if err := w.flushUnread(); err != nil {
+	if err := emitUnread(ctx, emit, w.takeUnread()); err != nil {
 		return listing.WalkSummary{}, err
 	}
 	ev := evidence(started, finished, reason)
@@ -124,8 +128,6 @@ func checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) erro
 		return invalid("a negative depth or number of workers")
 	case b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0:
 		return invalid("a negative bound")
-	case req.MaxDepth > 0:
-		return fmt.Errorf("%w: a live walk with a depth", listing.ErrUnsupported)
 	}
 	return nil
 }
@@ -262,13 +264,19 @@ func (w *walk) Entries(ctx context.Context, entries []listing.Entry) error {
 	return <-h.done
 }
 
-// check refuses an entry the walk must not emit: outside its prefix, a key
-// holding a NUL, or an object or file without a size (ErrInvalidPage).
+// check refuses an entry the walk must not emit (checkEntries).
 func (w *walk) check(entries []listing.Entry) error {
+	return checkEntries(w.prefix, entries)
+}
+
+// checkEntries refuses an entry a walk of prefix must not emit: outside
+// the prefix, a key holding a NUL, or an object or file without a size
+// (ErrInvalidPage).
+func checkEntries(prefix []byte, entries []listing.Entry) error {
 	for i := range entries {
 		e := &entries[i]
 		switch {
-		case !bytes.HasPrefix(e.Key, w.prefix):
+		case !bytes.HasPrefix(e.Key, prefix):
 			return badPage("a key outside the prefix: %q", e.Key)
 		case bytes.IndexByte(e.Key, 0) >= 0:
 			return badPage("a key holding a NUL byte: %q", e.Key)
@@ -300,16 +308,19 @@ func (w *walk) takeUnread() []listing.Unread {
 	return u
 }
 
-// flushUnread hands emit the extents still waiting once the workers have
-// returned, unreadBatch at a time.
-func (w *walk) flushUnread() error {
-	pending := w.takeUnread()
+// emitUnread hands emit the extents still waiting once a walk has stopped
+// reading, unreadBatch at a time: emit's error, else ctx's once it has
+// ended, whether before a batch or while emit took it.
+func emitUnread(ctx context.Context, emit func(listing.WalkBatch) error, pending []listing.Unread) error {
 	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		n := min(len(pending), unreadBatch)
-		if err := w.emit(listing.WalkBatch{Unread: pending[:n:n]}); err != nil {
+		if err := emit(listing.WalkBatch{Unread: pending[:n:n]}); err != nil {
 			return err
 		}
 		pending = pending[n:]
 	}
-	return nil
+	return ctx.Err()
 }

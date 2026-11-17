@@ -22,6 +22,10 @@ var (
 	// errUnreached is the Reason of a target whose own entry a bound of
 	// the request kept the call from reading.
 	errUnreached = fmt.Errorf("%w: a bound of the request kept the call from reading the target's entry", listing.ErrBudgetExceeded)
+	// errUnlocated is the Reason of a target whose own entry a walk did
+	// not read, after it dropped extents it did not read: absence is not
+	// shown.
+	errUnlocated = fmt.Errorf("%w: the walk did not keep every extent it did not read", listing.ErrBudgetExceeded)
 )
 
 // Summarize counts the entries of opts.Kinds at or under each target and
@@ -35,8 +39,9 @@ var (
 // entries count toward it and toward every target nested in it. A subtree
 // target's State is present when the walk read an object at exactly its
 // key, absent when the walk read where it would be and found none, and
-// unknown when an extent the walk did not read holds it; the root's, the
-// empty key's, is unknown.
+// unknown when an extent the walk did not read holds it, or when the walk
+// dropped extents it did not read (a nil Evidence.Unlocated); the root's,
+// the empty key's, is unknown.
 //
 // opts.Budget bounds the whole call: MaxEntries the entries the walks
 // read and the objects the lookups find, MaxDuration its time. Every walk
@@ -264,12 +269,13 @@ func (s *summary) walk(ctx context.Context, prefix []byte) error {
 	if res.Evidence.Stop != listing.StopCompleted {
 		s.stopped(res.Evidence.Stop)
 	}
-	if res.Evidence.Unlocated == nil {
+	lost := res.Evidence.Unlocated == nil
+	if lost {
 		s.lost = true
 	}
 
 	for j, i := range in.targets {
-		s.out[i] = in.summary(j, s.targets[i].Key, unread)
+		s.out[i] = in.summary(j, s.targets[i].Key, unread, lost)
 	}
 	return nil
 }
@@ -319,8 +325,8 @@ func (n *nested) add(e *listing.Entry, counts []bool) {
 }
 
 // summary is target j's answer, key its key, from what the walk read and
-// the extents it did not read.
-func (n *nested) summary(j int, key []byte, unread []listing.Unread) listing.TargetSummary {
+// the extents it did not read, of which it dropped some when lost is set.
+func (n *nested) summary(j int, key []byte, unread []listing.Unread, lost bool) listing.TargetSummary {
 	ts := listing.TargetSummary{Totals: n.tallies[j].totals()}
 	var own *listing.Unread
 	for k := range unread {
@@ -341,6 +347,8 @@ func (n *nested) summary(j int, key []byte, unread []listing.Unread) listing.Tar
 		ts.State, ts.Self = listing.LookupPresent, n.selves[j]
 	case own != nil:
 		ts.State, ts.Reason = listing.LookupUnknown, unreadReason(own.Class)
+	case lost:
+		ts.State, ts.Reason = listing.LookupUnknown, errUnlocated
 	default:
 		ts.State = listing.LookupAbsent
 	}

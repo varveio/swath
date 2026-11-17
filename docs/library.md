@@ -109,15 +109,22 @@ Your function is called from the goroutine that called `Walk`, one batch at a ti
 until the function returns: copy what you keep. A worker whose batch the function has not taken waits, so a slow
 function slows the walk down, and an error from it stops the walk: `Walk` returns that error once the workers have
 stopped, and calls the function no more. Every entry is checked before it reaches the function: inside the prefix,
-no NUL byte in its key, and a size.
+no NUL byte in its key, and a size (an object S3 lists without one is `listing.ErrInvalidPage`, never a size of
+zero). The ranges are checked too: no key range overlaps another, so no key reaches the function twice.
 
 A budget bounds a walk: `MaxEntries` stops it after the batch that reaches that many entries, `MaxDuration` once
 that time has passed, the function's own time included. A walk a budget stops returns no error: its
 `Evidence.Stop` names the bound, and its last batches hand the function, as `Unread` extents of class `budget`,
 the key intervals `(Key, Hi]` it did not read (an empty `Key` from the prefix's start, an empty `Hi` to its end).
 What the walk handed over and those intervals hold every key under the prefix once, so walking the intervals
-afterwards completes it. A walk whose context ends returns the context's error, and a walk with a depth
-(`MaxDepth`) is `listing.ErrUnsupported`.
+afterwards completes it. A walk whose context ends returns the context's error, even if the function took every
+batch.
+
+A walk with a depth (`MaxDepth`) reads one level of `/` at a time instead, one request at a time whatever
+`Workers` says: the objects within the depth, and each folder at the depth as a `KindPrefix` entry, which counts
+toward no budget and stands for the keys below it. A walk with a depth shows nothing below it. A budget stops it
+between requests; the level it was reading comes back as an `Unread` extent of scope `listing` at the level's
+prefix (the children it handed over are read), and each level it had not begun as a `subtree`.
 
 ```go
 var objects, size int64
@@ -149,7 +156,8 @@ last-modified time, and what is at exactly its key. A target is a subtree (`Subt
 `Key`, which the contract also calls a prefix) or one exact key. The subtrees are walked: one walk for each that lies
 under no other, whose objects count toward it and toward every target nested in it, so nested targets are each
 counted in full and listed once. A subtree target is present when an object has exactly its key, absent when the
-walk read where it would be and found none, and unknown at the root (the empty key). An exact target is a lookup.
+walk read where it would be and found none, and unknown at the root (the empty key), or when its walk dropped
+extents it did not read (below). An exact target is a lookup.
 
 The budget bounds the whole call, every walk taking what is left of it. A target a walk stopped inside counts what
 was read and carries, as its `Unread`, the key intervals inside it that were not: its totals are a lower bound. A
@@ -227,5 +235,4 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 
 ## Not in the library yet
 
-The library answers Page, Lookup, Walk and Summarize on S3. The GCS, Azure and local sources, and a live walk with
-a depth, are not in it yet. A source's request limits hold within one process only.
+The library answers Page, Lookup, Walk and Summarize on S3. The GCS, Azure and local sources are not in it yet. A source's request limits hold within one process only.
