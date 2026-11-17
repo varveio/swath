@@ -32,17 +32,20 @@ gate: it exists so a suspected flake is measured by repetition instead of being 
 `release.yml` ships the Go implementation. It does not trust the `ci.yml`
 run of the tagged commit to have produced the bytes it ships, but it does rely on that commit having
 passed full Go validation. It separately verifies that the tag is an ancestor of `main`, that the
-nested modules' tags of the same version (`reader/vX.Y.Z`, `objfile/vX.Y.Z`) name the same commit,
-and requires
-`go-full-gate` from the exact commit's main push run. It then reruns `go vet`
-and the race tests on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
+tagged `go.mod` requires the nested modules at their tags of the same version (`reader/vX.Y.Z`,
+`objfile/vX.Y.Z`, pushed before it) with no `replace`, and that those tags hold the tagged
+commit's `reader/` and `objfile/` trees, and requires
+`go-full-gate` from the exact commit's main push run. It then builds the root module as an
+outside project does (`GOWORK=off` for the whole workflow, a strict `go mod tidy -diff`), reruns
+`go vet` and the race tests on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
 binaries once into the release archives, builds both images from those archived binaries, pushes
 them by digest, smokes the digests, and only then applies tags and signs.
 [`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
 
 The release's `go-tests` runs the race tests in the shards of `scripts/ci/go-race-shards.sh`,
 read from the table at the tag, one matrix leg per shard and every one on amd64, beside a
-`vet-reader` leg (`go vet`, the table's `--check`, the reader module's race tests); `publish`
+`vet-reader` leg (the outside-project build, `go vet`, the table's `--check`, the reader module's
+race tests); `publish`
 needs every leg. One unsharded run took 19.5 to 25.5 of the about 28 minutes from a tag push to
 the approval prompt, `internal/listing` alone 1,044 to 1,369 s; the slowest shard sets that wait
 now, `cmd` at about 10 minutes in a rehearsal of the job ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
@@ -53,7 +56,7 @@ does not check it: its checklist requires a successful `go-race-nightly` job on 
 released or on one with the same Go sources, a step for a person that no workflow enforces
 ([RELEASING.md](../../../RELEASING.md#cutting-a-release)).
 
-[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. The three modules are one `directories` entry, so a group is one pull request across them: the root requires `objfile` and `reader` by local `replace`, and a bump in one module alone leaves the root's `go.mod` short of what the nested module requires, which fails every `go` command at the root. The Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
+[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. The three modules are one `directories` entry, so a group is one pull request across them and the workspace (`go.work`) that builds them together moves as one. The Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
 
 ## Registry and artifacts
 
@@ -199,8 +202,15 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-xos (OS)`, `go-xos (OS, LEG)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch, macOS and Windows split into legs |
 | `go-fixtures` | the replay fixture tier on the fixtures `bench/replay/fixtures` writes |
 
-The nested modules have their own `go.mod`, so `./...` at the root never reaches them; each needs its
-own job or it is untested.
+The nested modules have their own `go.mod`, so `./...` at the root never reaches them, even in the
+workspace (`go.work`) that joins them to the root; each needs its own job or it is untested. Every
+job but the reader module's builds through that workspace, so the root compiles the nested modules'
+local copies; the reader module requires no other module of the repository and is checked alone
+(`GOWORK=off`), since in the workspace its `TestNoCloudSDK` would read all three modules' graph. `go mod
+tidy` ignores the workspace: at the root it reads the published `reader` and `objfile` versions
+`go.mod` requires, so `go-lint` runs `go mod tidy -e -diff`, which lets through an import of a
+nested-module package not released yet, and the release checks it strictly
+([RELEASING.md](../../../RELEASING.md#cutting-a-release)).
 
 ### Race shards
 

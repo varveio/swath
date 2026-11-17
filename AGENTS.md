@@ -79,8 +79,11 @@ The contributor reference is
 
 - The module `github.com/varveio/swath` is the repository root: the command in `cmd/swath`,
   the replay server in `cmd/swath-replay`, packages under `internal/`. `objfile/` and `reader/`
-  are nested modules with their own `go.mod`, which the root `go.mod` replaces with the local
-  directories. Its launcher and dataset differ from the Java v0.3.2 release.
+  are nested modules with their own `go.mod`; the root `go.mod` requires their released versions and
+  carries no `replace`, and `go.work` at the root joins the three modules so that local builds and CI
+  use the local directories. A release tags them first, then points the root at those tags through a
+  pull request ([`RELEASING.md`](RELEASING.md#cutting-a-release)). Its launcher and dataset differ
+  from the Java v0.3.2 release.
 - [`docs/`](docs/README.md) is the source of truth for the code (architecture, the invariants,
   ordering, Parquet output, providers, testing, CLI); a code change is not done until its
   page there is current. Measurements are recorded, dated, in
@@ -96,7 +99,8 @@ The contributor reference is
   [schemas](docs/internals/parquet-output.md#schemas) and
   [spill codecs](docs/internals/ordering.md#payload-delta-codec).
 - The gate is `go vet ./... && go test -race ./...` at the root and again in `objfile/` and
-  `reader/`; CI runs it sharded. Locally run the tests you change, not the whole suite;
+  `reader/`, there with `GOWORK=off` because its `TestNoCloudSDK` reads `go list -m all`, which in
+  the workspace is all three modules' graph; CI runs it sharded. Locally run the tests you change, not the whole suite;
   repeats go through `go-stress.yml`. Static builds use `CGO_ENABLED=0` (`./build.sh`).
 - A commit that touches Go code needs its selected Go jobs of `ci.yml` green (`go-lint`, `go-docs`, the `go-race`
   shards, `go-nonrace`, `go-build`, `go-xos`, `go-fixtures`; `ci-gate` requires them). Selection
