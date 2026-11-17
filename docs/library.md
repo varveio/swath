@@ -213,10 +213,10 @@ request and a lookup's HeadObject and HeadBucket as metadata requests.
 
 ## Azure Blob Storage
 
-`azblob.Open` takes the account and the container:
+`azblob.Open` takes the account and the container as `ACCOUNT/CONTAINER`:
 
 ```go
-src, err := azblob.Open(ctx, "exampleaccount", "logs", azblob.Options{})
+src, err := azblob.Open(ctx, "exampleaccount/logs", azblob.Options{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -365,13 +365,14 @@ and each lookup as one metadata request, named by the program's key.
 ## Run the command line
 
 A program that needs a whole run, with its flags, output, progress files and exit codes, rather than one page or
-lookup, can run the swath command line itself. `command.Main(ctx, host, args, stdout, stderr)` runs one command
+lookup, can run the swath command line itself. `command.Main(ctx, args, stdin, stdout, stderr)` runs one command
 line (`args` without the program name) and returns its exit code; the swath binary is
 `command.Exit(command.Main(...))` and nothing else. This package links the whole command, its providers and its
 Parquet writer, which `Source` does not.
 
 ```go
-command.Exit(command.Main(context.Background(), "example-host", os.Args[1:], os.Stdout, os.Stderr))
+command.Host = "example-host"
+command.Exit(command.Main(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 ```
 
 `Main` is for a process dedicated to the call, such as a child the host starts for one command line. It sets the
@@ -382,7 +383,7 @@ color, the live progress line) follows the `stdout` and `stderr` given to `Main`
 is not a terminal. `command.Exit` ends the process as the binary does: on Unix, a run a signal stopped dies by that
 signal.
 
-`host` names the program this copy is built into (the binary passes `""`), and `--version` then says so. The version that
+`command.Host` names the program this copy is built into, and `--version` then says so. The version that
 `--version`, the run report, the journal, Parquet `created_by` and the User-Agent give is swath's own: the version
 of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision.
 
