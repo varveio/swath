@@ -693,8 +693,11 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   `--sort-buffer` larger by (workers wanted − `workers`) × `per_worker_bytes` restores the workers the encoders
   and cores allow. Measured: at 16 vCPU 8 workers
   beat 15 (0.75× against 0.81× of the serial build's wall over 64 lists); on sentinel-cogs (1.09B keys, 32
-  cores) 31 workers bought 10 s of a 140 s tail over 8 and cost 3 GB of RSS.
-- **What bounds the tail.** On sentinel-cogs with 31 workers the segments' time split 1,724 s writing
+  cores), on the build that introduced segments (#281, 2026-11-08), 31 workers bought 10 s of a 140 s tail
+  over 8 and cost 3 GB of RSS. On the 0.4.0 release, 1,024 workers, the same bucket's tail took 87 s with 16
+  segment workers (`workers_by` `processors`;
+  [measurements](measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)).
+- **What bounds the tail.** On sentinel-cogs with 31 workers on that build the segments' time split 1,724 s writing
   (the parts' encoding), 714 s reading spill frames and 621 s decoding them: about 68 % of 32 cores through
   the 140 s tail. The tail is CPU-bound on Parquet encoding and spill read-back, near its floor on that
   machine. The next levers are cheaper encoding per row, or overlapping the drain with listing (claiming

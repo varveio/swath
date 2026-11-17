@@ -1806,11 +1806,14 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
 - **Platforms.** Windows refuses journaled runs (no directory sync,
   [durability.md](durability.md)); Windows and macOS run the test suite in CI, but nothing is measured there. Power
   loss is untested.
-- **Scale.** Runs of hours and listings past a billion keys are unmeasured. The largest runs are key lists of
+- **Scale.** The largest benchmarked runs are key lists of
   up to 593M keys through the fake and one live bucket of 1.09 billion objects, at 256 and 1,024 workers on a
   build of 2026-11-07 ([a billion live objects](#a-billion-live-objects-sentinel-cogs-2026-11-07)) and at 1,024
   and 2,048 on the 0.4.0 release
-  ([2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)).
+  ([2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)). Production
+  listings of up to 29.6 billion objects (that one, and two of 10.3 and 8.4 billion, cancelled after four hours on
+  a spill cap too small) are individual runs,
+  not a benchmark ([2026-11-13](#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
 ## Skipped or not measured
