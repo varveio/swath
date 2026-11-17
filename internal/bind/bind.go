@@ -112,15 +112,19 @@ func (b Bound[P]) Prepare(env Env) (*Prepared[P], error) {
 // Count lists without ordering the rows (order.CountWithSink): an
 // unordered listing, whose rows reach sink (nil: none) in validated
 // batches, concurrently from independent ranges. The version counter and
-// the per-prefix totals see the rows before sink does.
+// the per-prefix totals see the rows before sink does, and sink keeps its
+// place in the count all the same: a sink that takes runs
+// (order.RangeSink) is handed them, told their intervals
+// (order.CoveredRun) and the subtrees that end (order.SubtreeSink) as
+// order.CountWithSink would tell it.
 func (l *Prepared[P]) Count(ctx context.Context, sink order.Sink[P]) (order.Stats, error) {
 	observe := sink
 	if l.env.Versions != nil && l.b.v != nil {
-		next := sink
-		if next == nil {
-			next = discard[P]{}
-		}
-		observe = versionSink[P]{Sink: next, counts: l.env.Versions, v: l.b.v}
+		vs := versionSink[P]{counts: l.env.Versions, v: l.b.v}
+		observe = observed(func(_ context.Context, segs [][]schema.Row[P]) error {
+			vs.count(segs)
+			return nil
+		}, observe)
 	}
 	if l.env.Totals != nil {
 		var err error
@@ -150,8 +154,3 @@ func (l *Prepared[P]) Run(ctx context.Context, sink order.Sink[P]) (order.Stats,
 	}
 	return order.Run(ctx, l.p, sink, l.b.s, l.env.Order)
 }
-
-// discard is a sink that keeps nothing.
-type discard[P any] struct{}
-
-func (discard[P]) Write(context.Context, [][]schema.Row[P]) error { return nil }

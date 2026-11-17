@@ -79,7 +79,8 @@ The list clients are built on the vendors' SDK service clients; what is the SDK'
 transitively. The other way round, what providers are built from (`internal/source`, `keyrange`, `objhttp`,
 `tokensource`) imports none of the command's composition (pflag, `registry`, `parquetout`, `textout`, `cli`),
 transitively, nor does a provider's code outside its `register.go`, which still registers it and defines its
-flags: `cli` `TestProviderImportBoundary`.
+flags; their parquet-go arrives only through SeekParquet's reader (`schema` → `reader`): `cli`
+`TestProviderImportBoundary`.
 
 **Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
 inherit the lister's dependencies: `reader` (`github.com/varveio/swath/reader`: the schema ids and their
@@ -114,7 +115,8 @@ budget counts, and the spill codec ([shared payload delta helper](ordering.md#pa
 opens: it erases the range type and returns a `Source` whose `Run` instantiates the order stage and the
 router for `P` (Go has no generic methods, so the binding happens where `P` is known). The binding without
 the writers is `bind.Provider[R, P]`: code that knows `P` lists the provider into a sink of its own
-(`bind.Prepared.Count`, an unordered listing), and `registry.Bound` adds the choice of the run's sink.
+(`bind.Prepared.Count`, an unordered listing; the version counts and the totals observe the rows before it and
+keep its runs, their intervals and its subtrees' ends), and `registry.Bound` adds the choice of the run's sink.
 
 ## Goroutines and ownership
 

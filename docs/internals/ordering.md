@@ -373,7 +373,7 @@ between the children). The report says so: `features.order` false, `spill` absen
 
 `order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
 must neither keep nor change the rows: the versions counts, and `swath du`'s per-prefix totals
-(`registry` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
+(`bind` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
 one entry per run of equal prefix at each level (rows of a range ascend, so consecutive rows share them), then
 merges into the shared tally under one lock, copying a prefix only when it first enters. Addition and maximum
 commute, so the result is the same whatever the ranges' interleaving (`TestTallyMatchesBruteForce`, shuffled
@@ -388,7 +388,7 @@ children in key order, so in an ordered count a run is a contiguous stretch of t
 emits `(lo, c]` and only then the children that split `(c, hi]` (splits are owner-side, a range's children are
 claimable only once its `Expand` returns, [range engine](range-engine.md)); a local directory emits each
 subdirectory as a child right after its own row, which ends the run there. `swath du`'s adaptive view
-(`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
+(`totals.ViewRun`, the `bind` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
 before its last is complete, so it is kept only among the 100 largest complete ones of its depth and is
 otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
 across runs. A `RangeSink`'s run that is an `order.CoveredRun` is also told, in an ordered count whose provider
