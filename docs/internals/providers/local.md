@@ -140,6 +140,27 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   chunk or a continuation, `subtree` for one it never opened, from `Dispose` for the ranges still queued
   (`TestStoppedWalkReportsUnread`). The order stage's `order.SubtreeSink` tells when a directory's subtree
   ended; every report under it was made before.
+- **The library's live source** (`OpenLive`, `live_unix.go`; the public package `local`, Linux and macOS,
+  `listing.ErrUnsupported` elsewhere). A `live.Store` over a held root, for `swath.Source`'s `Page` and
+  `Lookup` ([library](../../library.md#a-local-directory)). Its location, which page tokens are bound to, is
+  the root's device and inode, never a path. A page of a prefix opens its directory as `Lookup` reaches a key's
+  parent (`resolve`, shared: each ancestor with `longpath.Search` and `O_NOFOLLOW`, device-checked, at most two
+  descriptors), then the directory itself `O_RDONLY|O_NOFOLLOW`, the root as `.` so that each page has its own
+  read offset and concurrent pages share nothing, and checks its device too: another device is
+  `listing.ErrOtherDevice`, a symbolic link at the prefix `ErrNotDirectory`, one on the way `ErrUnsupported`
+  (not reached), nothing there `ErrNotFound`; `EACCES`/`EPERM` are `ErrAuth`, `ENAMETOOLONG` `ErrUnsupported`,
+  other errors `ErrUnavailable`, each message naming the level and the caller's prefix, never a name read. It
+  reads the directory whole with `os.File.ReadDir` (an untyped entry typed by `fstatat` relative to it), holds
+  the names that sort after the token's key, priced as `MaxHeldBytes` prices a count's (64 bytes plus the
+  name; past the bound `ErrTooWide`), sorts them with `/` on directories, keeps a name the read returned twice
+  once, and stats only the page's non-directory entries relative to the directory: one gone since is left out,
+  one that is a directory now (its key sorts elsewhere) too, one whose stat fails is `unknown`. A child
+  directory is a common prefix, not statted. The directory's own entry, from `fstat` of its descriptor, is the first page's `Self`.
+  The store's token is the last key the page read, so the next page is the names after it: nothing is held
+  between pages, and a directory changing between them repeats and skips nothing that stayed
+  (`local/local_test.go`: the root's path replaced by a link, a link at and on the way to a prefix, a
+  directory replaced between pages, entries removed and added between pages, a directory past the bound,
+  descriptors after every call, concurrent pages; `TestLiveOtherDevice` through the `lookupFstat` seam).
 - **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on
   macOS) is opened as any other, one name below its parent, so a tree of any depth lists; its children are
   statted and their links read relative to it. A single name past the filesystem's limit fails as an open

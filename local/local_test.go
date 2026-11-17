@@ -1,0 +1,584 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build linux || darwin
+
+package local_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/varveio/swath"
+	"github.com/varveio/swath/local"
+	"github.com/varveio/swath/objfile"
+	"github.com/varveio/swath/reader/listing"
+)
+
+// write makes the file rel below root, and the directories on the way.
+func write(t *testing.T, root, rel string) {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// symlink makes the link rel below root, pointing at target.
+func symlink(t *testing.T, root, target, rel string) {
+	t.Helper()
+	if err := os.Symlink(target, filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// hold opens dir as a caller of Open does, until the test ends.
+func hold(t *testing.T, dir string) *os.File {
+	t.Helper()
+	f, err := os.OpenFile(dir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// open opens the directory f holds as a source, until the test ends.
+func open(t *testing.T, f *os.File, opts local.Options) *swath.Source {
+	t.Helper()
+	src, err := local.Open(f, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { src.Close() })
+	return src
+}
+
+// level pages prefix whole, limit entries a page, and returns each entry
+// as "kind key", Self first as "self kind key".
+func level(ctx context.Context, src *swath.Source, prefix string, limit int) ([]string, error) {
+	var got []string
+	req := listing.PageRequest{Prefix: []byte(prefix), Limit: limit}
+	for {
+		page, err := src.Page(ctx, req)
+		if err != nil {
+			return got, err
+		}
+		if page.Self != nil {
+			got = append(got, fmt.Sprintf("self %v %s", page.Self.Kind, page.Self.Key))
+		}
+		for _, e := range page.Entries {
+			got = append(got, fmt.Sprintf("%v %s", e.Kind, e.Key))
+		}
+		if page.Next == "" {
+			return got, nil
+		}
+		req.Token = page.Next
+	}
+}
+
+// TestPage: a level in byte order of keys with "/" on directories, each
+// child once, at any page size; a child directory is a prefix, any other
+// entry its kind with what lstat gives; the prefix's own directory is the
+// first page's Self.
+func TestPage(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"a-b", "a.b", "a/x", "ab", "e/x/y"} {
+		write(t, root, rel)
+	}
+	symlink(t, root, "a", "ln")
+	if err := unix.Mkfifo(filepath.Join(root, "p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := open(t, hold(t, root), local.Options{})
+	ctx := context.Background()
+
+	want := []string{"file a-b", "file a.b", "prefix a/", "file ab", "prefix e/", "symlink ln", "other p"}
+	for _, limit := range []int{1, 2, 3, 100} {
+		got, err := level(ctx, src, "", limit)
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("limit %d: %q %v, want %q", limit, got, err, want)
+		}
+		got, err = level(ctx, src, "e/", limit)
+		if want := []string{"self dir e/", "prefix e/x/"}; err != nil || !slices.Equal(got, want) {
+			t.Fatalf("e/, limit %d: %q %v, want %q", limit, got, err, want)
+		}
+	}
+
+	page, err := src.Page(ctx, listing.PageRequest{Prefix: []byte("a/"), Limit: 10})
+	if err != nil || len(page.Entries) != 1 || page.Self == nil || page.Next != "" {
+		t.Fatalf("a/: %+v %v", page, err)
+	}
+	f, self := page.Entries[0], page.Self
+	if string(f.Key) != "a/x" || f.Kind != listing.KindFile || *f.Size != 5 || f.AllocatedBytes == nil ||
+		f.LastModified == nil || f.Device == nil || f.Inode == nil || *f.Links != 1 {
+		t.Errorf("a/x: %+v", f)
+	}
+	if self.Kind != listing.KindDir || *self.Device != *f.Device || self.Inode == nil || self.LastModified == nil {
+		t.Errorf("self of a/: %+v", self)
+	}
+	if page.Order != listing.OrderBytes || page.Evidence.Origin != listing.OriginLive || page.Evidence.Stop != listing.StopCompleted {
+		t.Errorf("a/: order %q, evidence %+v", page.Order, page.Evidence)
+	}
+}
+
+// TestPageErrors: a prefix that cannot be listed fails in its class, and
+// the message names no more of the path than the caller's key.
+func TestPageErrors(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "f")
+	write(t, root, "d/g")
+	write(t, root, "locked/x")
+	long := strings.Repeat("n", 300)
+	cases := []struct {
+		prefix string
+		class  error
+	}{
+		{"nope/", listing.ErrNotFound},
+		{"nope/x/", listing.ErrNotFound},
+		{"f/", listing.ErrNotDirectory},
+		{"f/x/", listing.ErrNotFound},
+		{"d/g/", listing.ErrNotDirectory},
+		{long + "/", listing.ErrUnsupported},
+		{"d/" + long + "/x/", listing.ErrUnsupported},
+		{"d", listing.ErrInvalidRequest},
+		{"d//", listing.ErrInvalidRequest},
+		{"./d/", listing.ErrInvalidRequest},
+		{"d/../", listing.ErrInvalidRequest},
+	}
+	if os.Getuid() != 0 {
+		if err := os.Chmod(filepath.Join(root, "locked"), 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(root, "locked"), 0o755) })
+		cases = append(cases, struct {
+			prefix string
+			class  error
+		}{"locked/", listing.ErrAuth}, struct {
+			prefix string
+			class  error
+		}{"locked/x/", listing.ErrAuth})
+	}
+	src := open(t, hold(t, root), local.Options{})
+	for _, c := range cases {
+		_, err := src.Page(context.Background(), listing.PageRequest{Prefix: []byte(c.prefix), Limit: 10})
+		if !errors.Is(err, c.class) || strings.Contains(err.Error(), root) {
+			t.Errorf("%q: %v, want %v", c.prefix, err, c.class)
+		}
+	}
+	if _, err := local.Open(hold(t, root), local.Options{MaxHeldBytes: -1}); !errors.Is(err, listing.ErrInvalidRequest) {
+		t.Errorf("a negative bound: %v", err)
+	}
+	if _, err := local.Open(nil, local.Options{}); !errors.Is(err, listing.ErrInvalidRequest) {
+		t.Errorf("no root: %v", err)
+	}
+	file, err := os.Open(filepath.Join(root, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := local.Open(file, local.Options{}); !errors.Is(err, listing.ErrNotDirectory) {
+		t.Errorf("a file root: %v", err)
+	}
+}
+
+// TestLookup: each of the three answers, by what is at the key and on
+// the way to it.
+func TestLookup(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "f")
+	write(t, root, "d/g")
+	write(t, root, "locked/x")
+	symlink(t, root, "d", "lnd")
+	long := strings.Repeat("n", 300)
+	cases := []struct {
+		key   string
+		state listing.LookupState
+		want  string // present: "kind key"; unknown: the class, "" for none
+	}{
+		{"f", listing.LookupPresent, "file f"},
+		{"d", listing.LookupPresent, "dir d/"},
+		{"d/", listing.LookupPresent, "dir d/"},
+		{"lnd", listing.LookupPresent, "symlink lnd"},
+		{"lnd/", listing.LookupAbsent, ""},
+		{"f/", listing.LookupAbsent, ""},
+		{"f/x", listing.LookupAbsent, ""},
+		{"nope", listing.LookupAbsent, ""},
+		{"nope/x", listing.LookupAbsent, ""},
+		{"lnd/g", listing.LookupUnknown, ""},
+		{long + "/x", listing.LookupUnknown, listing.ErrUnsupported.Error()},
+	}
+	if os.Getuid() != 0 {
+		if err := os.Chmod(filepath.Join(root, "locked"), 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(filepath.Join(root, "locked"), 0o755) })
+		cases = append(cases, struct {
+			key   string
+			state listing.LookupState
+			want  string
+		}{"locked/x", listing.LookupUnknown, listing.ErrAuth.Error()})
+	}
+	src := open(t, hold(t, root), local.Options{})
+	classes := []error{listing.ErrAuth, listing.ErrUnsupported, listing.ErrUnavailable, listing.ErrOtherDevice, listing.ErrNotFound}
+	for _, c := range cases {
+		r, err := src.Lookup(context.Background(), []byte(c.key))
+		if err != nil || r.State != c.state {
+			t.Errorf("%q: %v %v, want %v", c.key, r.State, err, c.state)
+			continue
+		}
+		switch r.State {
+		case listing.LookupPresent:
+			if got := fmt.Sprintf("%v %s", r.Entry.Kind, r.Entry.Key); got != c.want || r.Entry.Size == nil || r.Entry.Inode == nil {
+				t.Errorf("%q: %+v, want %s", c.key, r.Entry, c.want)
+			}
+		case listing.LookupUnknown:
+			class := ""
+			for _, k := range classes {
+				if errors.Is(r.Reason, k) {
+					class = k.Error()
+				}
+			}
+			if r.Reason == nil || class != c.want || strings.Contains(r.Reason.Error(), root) {
+				t.Errorf("%q: reason %v, want class %q", c.key, r.Reason, c.want)
+			}
+		}
+	}
+	for _, bad := range []string{"/f", "d//g", "./f", "d/../f"} {
+		if _, err := src.Lookup(context.Background(), []byte(bad)); !errors.Is(err, listing.ErrInvalidRequest) {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}
+
+// TestRootNotResolvedByPath: after the caller opened the root, its path is
+// moved aside and replaced by a symbolic link to another directory; pages
+// and lookups still answer from the directory the caller opened.
+func TestRootNotResolvedByPath(t *testing.T) {
+	base := t.TempDir()
+	root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")
+	write(t, root, "in/a")
+	write(t, outside, "secret")
+	write(t, outside, "in/secret")
+	f := hold(t, root)
+	if err := os.Rename(root, root+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, base, outside, "root")
+	src := open(t, f, local.Options{})
+	ctx := context.Background()
+
+	if got, err := level(ctx, src, "", 10); err != nil || !slices.Equal(got, []string{"prefix in/"}) {
+		t.Errorf("the root: %q %v", got, err)
+	}
+	if got, err := level(ctx, src, "in/", 10); err != nil || !slices.Equal(got, []string{"self dir in/", "file in/a"}) {
+		t.Errorf("in/: %q %v", got, err)
+	}
+	for key, state := range map[string]listing.LookupState{"in/a": listing.LookupPresent, "secret": listing.LookupAbsent, "in/secret": listing.LookupAbsent} {
+		if r, err := src.Lookup(ctx, []byte(key)); err != nil || r.State != state {
+			t.Errorf("%q: %v %v, want %v", key, r.State, err, state)
+		}
+	}
+}
+
+// TestSymlinkPrefixNotFollowed: a prefix that is a symbolic link, or has
+// one on the way, is not followed: the link itself is no directory, and a
+// prefix through it is not reached, neither listed nor shown absent.
+func TestSymlinkPrefixNotFollowed(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "real/sub/x")
+	symlink(t, root, "real", "lnk")
+	src := open(t, hold(t, root), local.Options{})
+	ctx := context.Background()
+
+	got, err := level(ctx, src, "lnk/", 10)
+	if !errors.Is(err, listing.ErrNotDirectory) || len(got) != 0 {
+		t.Errorf("lnk/: %q %v, want ErrNotDirectory", got, err)
+	}
+	got, err = level(ctx, src, "lnk/sub/", 10)
+	if !errors.Is(err, listing.ErrUnsupported) || errors.Is(err, listing.ErrNotFound) || errors.Is(err, listing.ErrNotDirectory) || len(got) != 0 {
+		t.Errorf("lnk/sub/: %q %v, want ErrUnsupported (not reached)", got, err)
+	}
+	if r, err := src.Lookup(ctx, []byte("lnk/sub/x")); err != nil || r.State != listing.LookupUnknown {
+		t.Errorf("lnk/sub/x: %+v %v, want unknown", r, err)
+	}
+}
+
+// TestReplacedBetweenPages: a directory, or a directory on the way to it,
+// replaced by a symbolic link between two pages of its level is not
+// followed by the next page.
+func TestReplacedBetweenPages(t *testing.T) {
+	for _, c := range []struct {
+		prefix, replaced string
+		class            error
+	}{
+		{"d/", "d", listing.ErrNotDirectory},
+		{"p/d/", "p", listing.ErrUnsupported},
+	} {
+		base := t.TempDir()
+		root, outside := filepath.Join(base, "root"), filepath.Join(base, "outside")
+		for i := range 10 {
+			write(t, root, fmt.Sprintf("%sf%02d", c.prefix, i))
+			write(t, outside, fmt.Sprintf("%sz%02d", c.prefix, i)) // under outside/d/ and outside/p/d/
+		}
+		src := open(t, hold(t, root), local.Options{})
+		ctx := context.Background()
+
+		page, err := src.Page(ctx, listing.PageRequest{Prefix: []byte(c.prefix), Limit: 3})
+		if err != nil || page.Next == "" {
+			t.Fatalf("%s: first page %+v %v", c.prefix, page, err)
+		}
+		at := filepath.Join(root, c.replaced)
+		if err := os.Rename(at, at+".old"); err != nil {
+			t.Fatal(err)
+		}
+		symlink(t, root, filepath.Join(outside, c.replaced), c.replaced)
+		next, err := src.Page(ctx, listing.PageRequest{Prefix: []byte(c.prefix), Limit: 3, Token: page.Next})
+		if !errors.Is(err, c.class) || len(next.Entries) != 0 {
+			t.Errorf("%s replaced by a link: %+v %v, want %v", c.replaced, next.Entries, err, c.class)
+		}
+	}
+}
+
+// TestChangedBetweenPages: a level paged while entries are removed from
+// and added to its directory repeats no key, keeps byte order across
+// pages, and skips no name that stayed, before or after the page boundary.
+func TestChangedBetweenPages(t *testing.T) {
+	root := t.TempDir()
+	for i := range 20 {
+		write(t, root, fmt.Sprintf("c/f%02d", i))
+	}
+	src := open(t, hold(t, root), local.Options{})
+	ctx := context.Background()
+
+	req := listing.PageRequest{Prefix: []byte("c/"), Limit: 5}
+	var keys []string
+	for i := 0; ; i++ {
+		page, err := src.Page(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page.Entries {
+			keys = append(keys, string(e.Key))
+		}
+		if i == 0 { // f00 to f03 returned, after the directory's own entry
+			for _, name := range []string{"f01", "f02", "f07"} {
+				if err := os.Remove(filepath.Join(root, "c", name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range []string{"f00a", "f10a"} {
+				write(t, root, "c/"+name)
+			}
+		}
+		if page.Next == "" {
+			break
+		}
+		req.Token = page.Next
+	}
+
+	if !slices.IsSorted(keys) || len(slices.Compact(slices.Clone(keys))) != len(keys) {
+		t.Fatalf("keys repeat or are out of order: %q", keys)
+	}
+	for i := range 20 {
+		if k := fmt.Sprintf("c/f%02d", i); k != "c/f07" && !slices.Contains(keys, k) {
+			t.Errorf("%s stayed and is not listed: %q", k, keys)
+		}
+	}
+	if !slices.Contains(keys, "c/f10a") || slices.Contains(keys, "c/f07") || len(keys) != 4+15+1 {
+		t.Errorf("an entry added after the boundary is not listed, or one removed before it is: %q", keys)
+	}
+}
+
+// TestTooWide: a directory whose names pass MaxHeldBytes fails its page,
+// as ErrTooWide and listing.ErrUnsupported, and a narrower one pages.
+func TestTooWide(t *testing.T) {
+	root := t.TempDir()
+	for i := range 1000 {
+		write(t, root, fmt.Sprintf("w/f%04d", i))
+	}
+	write(t, root, "n/f")
+	src := open(t, hold(t, root), local.Options{MaxHeldBytes: 10_000}) // about 140 names
+	ctx := context.Background()
+
+	_, err := src.Page(ctx, listing.PageRequest{Prefix: []byte("w/"), Limit: 10})
+	if !errors.Is(err, local.ErrTooWide) || !errors.Is(err, listing.ErrUnsupported) {
+		t.Errorf("w/: %v, want ErrTooWide", err)
+	}
+	if got, err := level(ctx, src, "n/", 10); err != nil || len(got) != 2 {
+		t.Errorf("n/: %q %v", got, err)
+	}
+	if got, err := level(ctx, open(t, hold(t, root), local.Options{}), "w/", 300); err != nil || len(got) != 1001 {
+		t.Errorf("w/ under the default bound: %d entries, %v", len(got), err)
+	}
+}
+
+// openFDs counts the process's open descriptors (Linux: /proc/self/fd;
+// macOS: /dev/fd), the one reading them included.
+func openFDs(t *testing.T) int {
+	t.Helper()
+	dir := "/proc/self/fd"
+	if runtime.GOOS == "darwin" {
+		dir = "/dev/fd"
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(ents)
+}
+
+// TestDescriptorsClosed: each page and lookup closes every descriptor it
+// opened, whether it answers, fails or is cancelled, and leaves the
+// caller's root open.
+func TestDescriptorsClosed(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "a/b/c/f")
+	write(t, root, "f")
+	for i := range 3000 {
+		write(t, root, fmt.Sprintf("w/f%04d", i))
+	}
+	symlink(t, root, "a", "lnk")
+	f := hold(t, root)
+	src := open(t, f, local.Options{MaxHeldBytes: 100_000})
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := context.Background()
+
+	calls := []func() error{
+		func() error { _, err := level(ctx, src, "a/b/c/", 1); return err },
+		func() error { _, err := level(ctx, src, "w/", 10); return err },
+		func() error { _, err := level(ctx, src, "a/b/nope/", 1); return err },
+		func() error { _, err := level(ctx, src, "a/f/", 1); return err },
+		func() error { _, err := level(ctx, src, "lnk/b/", 1); return err },
+		func() error { _, err := level(cancelled, src, "a/b/c/", 1); return err },
+		func() error { _, err := src.Lookup(ctx, []byte("a/b/c/f")); return err },
+		func() error { _, err := src.Lookup(ctx, []byte("lnk/b/c")); return err },
+		func() error { _, err := src.Lookup(cancelled, []byte("a/b/c/f")); return err },
+	}
+	calls[0]() // the runtime's own descriptors open once
+	before := openFDs(t)
+	for i, call := range calls {
+		err := call()
+		if n := openFDs(t); n != before {
+			t.Errorf("call %d (%v): %d descriptors open, %d before", i, err, n, before)
+		}
+	}
+	var s unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &s); err != nil {
+		t.Errorf("the caller's root: %v", err)
+	}
+}
+
+// TestConcurrentPages: pages of one source, of one level and of several,
+// called at once, each read through its own descriptor, answer as they
+// do one at a time.
+func TestConcurrentPages(t *testing.T) {
+	root := t.TempDir()
+	for i := range 200 {
+		write(t, root, fmt.Sprintf("f%03d", i))
+		write(t, root, fmt.Sprintf("d/g%03d", i))
+	}
+	src := open(t, hold(t, root), local.Options{})
+	ctx := context.Background()
+	want := map[string][]string{}
+	for _, prefix := range []string{"", "d/"} {
+		got, err := level(ctx, src, prefix, 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[prefix] = got
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := range 8 {
+		prefix := []string{"", "d/"}[i%2]
+		wg.Go(func() {
+			got, err := level(ctx, src, prefix, 7+i)
+			if err != nil || !slices.Equal(got, want[prefix]) {
+				errs <- fmt.Errorf("%q, limit %d: %d entries, %v", prefix, 7+i, len(got), err)
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+// TestTokens: a token continues only the level of the source and prefix
+// it was issued for.
+func TestTokens(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	for _, root := range []string{a, b} {
+		for i := range 5 {
+			write(t, root, fmt.Sprintf("d/f%d", i))
+			write(t, root, fmt.Sprintf("e/f%d", i))
+		}
+	}
+	src := open(t, hold(t, a), local.Options{})
+	other := open(t, hold(t, b), local.Options{})
+	ctx := context.Background()
+	page, err := src.Page(ctx, listing.PageRequest{Prefix: []byte("d/"), Limit: 2})
+	if err != nil || page.Next == "" {
+		t.Fatalf("%+v %v", page, err)
+	}
+	for name, c := range map[string]struct {
+		src    *swath.Source
+		prefix string
+	}{"another prefix": {src, "e/"}, "another root": {other, "d/"}} {
+		if _, err := c.src.Page(ctx, listing.PageRequest{Prefix: []byte(c.prefix), Limit: 2, Token: page.Next}); !errors.Is(err, listing.ErrInvalidToken) {
+			t.Errorf("%s: %v, want ErrInvalidToken", name, err)
+		}
+	}
+}
+
+// observed records the requests an objfile.Observer is told of.
+type observed struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (o *observed) Begin(r objfile.Request) func(objfile.RequestResult) {
+	return func(res objfile.RequestResult) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		o.seen = append(o.seen, fmt.Sprintf("%v %q failed=%t", r.Kind, r.Name, res.Err != nil))
+	}
+}
+
+func (o *observed) BatchPlanned(int64, int64, int64) {}
+
+func (o *observed) CacheHit(int64) {}
+
+// TestObserved: a page is one list request, a lookup one metadata
+// request, each named by the caller's key.
+func TestObserved(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "d/f")
+	src := open(t, hold(t, root), local.Options{})
+	obs := &observed{}
+	ctx := objfile.WithObserver(context.Background(), obs)
+	src.Page(ctx, listing.PageRequest{Prefix: []byte("d/"), Limit: 10})
+	src.Page(ctx, listing.PageRequest{Prefix: []byte("nope/"), Limit: 10})
+	src.Lookup(ctx, []byte("d/f"))
+	want := []string{`list "d/" failed=false`, `list "nope/" failed=true`, `metadata "d/f" failed=false`}
+	if !slices.Equal(obs.seen, want) {
+		t.Errorf("observed %q, want %q", obs.seen, want)
+	}
+}
