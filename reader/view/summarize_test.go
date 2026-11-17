@@ -196,7 +196,8 @@ func TestSummarizeBudgets(t *testing.T) {
 			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0
 	}
 	unreached := func(s listing.TargetSummary) bool {
-		return unread(s) && s.State == listing.LookupUnknown && s.Self == nil && errors.Is(s.Reason, errUnreached)
+		return unread(s) && s.State == listing.LookupUnknown && s.Self == nil && errors.Is(s.Reason, listing.ErrBudgetExceeded) &&
+			!listing.Retryable(s.Reason)
 	}
 
 	// The entry budget admits the entries at the keys first, a/ and z,

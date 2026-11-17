@@ -52,7 +52,9 @@ type TargetSummary struct {
 	State LookupState
 	// Self is the entry at exactly Key when State is LookupPresent.
 	Self *Entry
-	// Reason says why State is LookupUnknown, as LookupResult.Reason does.
+	// Reason says why State is LookupUnknown, as LookupResult.Reason does:
+	// ErrBudgetExceeded when a bound of the request kept the call from
+	// reading the target's own entry.
 	Reason error
 	// Totals count the target's entries of SummaryOptions.Kinds. An entry
 	// counts toward every target that holds it, so overlapping targets are

@@ -8,8 +8,9 @@ import "errors"
 // The error classes. A call that fails returns an error that matches its
 // class with errors.Is, and may wrap a cause beside it. A budget stop is
 // not an error, and an answer's unknown key is a LookupUnknown with its
-// class as the Reason. The errors of a cancelled ctx are returned as they
-// are, matching no class.
+// class as the Reason, such as ErrBudgetExceeded for a target a budget
+// kept the call from reading. The errors of a cancelled ctx are returned
+// as they are, matching no class.
 var (
 	// ErrInvalidRequest is a request that breaks this contract: a key or
 	// prefix of the wrong form, a NUL in a key, a Limit that is not
@@ -42,6 +43,12 @@ var (
 	// ErrOutOfScope is a question outside an inventory's scope, which the
 	// inventory cannot answer: unknown there, never absent.
 	ErrOutOfScope = errors.New("listing: outside the inventory's scope")
+	// ErrBudgetExceeded is a target that a bound of the request's Budget
+	// kept the call from reading: the Reason of a TargetSummary whose
+	// State is unknown for that cause, never an error a call returns.
+	// Waiting does not change it, so it is not retryable: ask again with
+	// a larger budget, or for fewer targets.
+	ErrBudgetExceeded = errors.New("listing: a budget kept the call from reading the target")
 	// ErrThrottled is a store that kept pushing back past the retry
 	// budget.
 	ErrThrottled = errors.New("listing: throttled")
@@ -61,6 +68,7 @@ var lasting = []error{
 	ErrUnsupported,
 	ErrInvalidPage,
 	ErrOutOfScope,
+	ErrBudgetExceeded,
 }
 
 // Retryable reports whether trying the call again later can succeed: err

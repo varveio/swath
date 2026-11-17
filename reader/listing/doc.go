@@ -63,12 +63,13 @@
 // # Budgets and errors
 //
 // A call that reaches a bound of its request stops without an error and says
-// which in Evidence.Stop. A call that fails returns an error matching one of
-// the classes ErrInvalidRequest to ErrUnavailable with errors.Is, and
-// Retryable says whether trying it again later can succeed. Error messages
-// carry no credential. Every storage request a call makes, retries included,
-// is reported to the storage observer on ctx (objfile.Observer), as dataset
-// reads are.
+// which in Evidence.Stop; a Summarize target whose own entry the bound kept
+// it from reading is unknown with ErrBudgetExceeded as its Reason. A call
+// that fails returns an error matching one of the classes ErrInvalidRequest
+// to ErrUnavailable with errors.Is, and Retryable says whether trying it
+// again later can succeed. Error messages carry no credential. Every storage
+// request a call makes, retries included, is reported to the storage
+// observer on ctx (objfile.Observer), as dataset reads are.
 //
 // # Ownership
 //

@@ -19,7 +19,7 @@ var errRoot = errors.New("view: the root has no entry")
 
 // errUnreached is the Reason of a target whose own entry a bound of the
 // request kept the call from reading.
-var errUnreached = errors.New("view: a bound of the request kept the call from reading the target's entry")
+var errUnreached = wrap(listing.ErrBudgetExceeded, "a bound of the request kept the call from reading the target's entry")
 
 // Summarize counts the entries of opts.Kinds at or under each target and
 // sums their sizes, space on disk and newest change, one TargetSummary per
@@ -29,21 +29,20 @@ var errUnreached = errors.New("view: a bound of the request kept the call from r
 // inventory's scope is unknown with ErrOutOfScope as its Reason, and
 // counts nothing.
 //
-// The call reads in two phases, both within opts.Budget. First the
-// entries at the targets' keys, in target order, with those on the way to
-// a local key when the inventory proves absence: an exact target's totals
-// are those of its own entry. Then the subtrees' rows, in one aggregation
-// through SeekParquet, every counted key's order checked. MaxEntries
-// bounds the rows of both phases together, each counted once however many
-// targets hold it; MaxValueBytes the value pages both read, the first
-// phase's priced before it reads them and the aggregation given what
-// remains; MaxDuration the whole call. A target whose own entry the
-// budget does not reach is unknown, with a Reason that says so, and
-// counts nothing; a subtree whose rows it does not reach counts nothing.
-// Either has one Unread, the whole target's key interval, of class
-// UnreadBudget, and Evidence.Stop names the bound. A counted entry
-// without a size or a time, and a sum that overflows, make that total
-// nil.
+// The call reads in two phases, both within opts.Budget. First the entries
+// at the targets' keys, in target order, with those on the way to a local
+// key when the inventory proves absence: an exact target's totals are those
+// of its own entry. Then the subtrees' rows, in one aggregation through
+// SeekParquet, every counted key's order checked. MaxEntries bounds the rows
+// of both phases together, each counted once however many targets hold it;
+// MaxValueBytes the value pages both read, the first phase's priced before
+// it reads them and the aggregation given what remains; MaxDuration the
+// whole call. A target whose own entry the budget does not reach is unknown,
+// with listing.ErrBudgetExceeded as its Reason, and counts nothing; a
+// subtree whose rows it does not reach counts nothing. Either has one
+// Unread, the whole target's key interval, of class UnreadBudget, and
+// Evidence.Stop names the bound. A counted entry without a size or a time,
+// and a sum that overflows, make that total nil.
 func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	sel, err := inv.checkSummary(targets, opts)
 	if err != nil {
