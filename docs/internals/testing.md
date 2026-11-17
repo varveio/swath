@@ -251,7 +251,8 @@ without `-race`, which needs cgo the runner may lack):
 | leg | race shards | also | build cache |
 |---|---|---|---|
 | `crash` | `crash` | | `go-xos-listing-rest` |
-| `durable-remote` | `durable`, `remote-crash` | | `go-xos-listing-rest` |
+| `durable` | `durable` | | `go-xos-listing-rest` |
+| `remote-crash` | `remote-crash` | | `go-xos-listing-rest` |
 | `listing-rest` | `listing-rest` | | `go-xos-listing-rest` |
 | `cmd-kill` | `cmd-kill` | | `go-xos-cmd` |
 | `cmd` | `cmd` | | `go-xos-cmd` |

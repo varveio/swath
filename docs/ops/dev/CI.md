@@ -247,11 +247,11 @@ beside the other packages on four vCPUs). Its full run is therefore split into l
 shards: a second table in `go-race-shards.sh` names the shards of each leg, the leg runs one
 `go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. Three
 legs of several long shards each made the slowest leg the critical path of every `main` push
-(17.6 minutes median, once 26.5 of its 30-minute limit), so each long shard is now a leg of its own:
-`remote-crash` (about two minutes) rides with `durable`, the shortest of them, and the three `rest*`
-shards share one leg. The leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
+(17.6 minutes median, once 26.5 of its 30-minute limit), so each `internal/listing` and `cmd/swath`
+shard is now a leg of its own (`remote-crash` takes about five minutes there, too long to ride with
+another), and the three `rest*` shards share one leg. The leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
 cache, which the stress Windows runs restore; the other legs use the build cache of their shards
-(the three `internal/listing` legs share one, the two `cmd/swath` legs another). The nightly `go-xos-windows` runs the main module in
+(the four `internal/listing` legs share one, the two `cmd/swath` legs another). The nightly `go-xos-windows` runs the main module in
 the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).

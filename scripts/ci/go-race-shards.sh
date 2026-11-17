@@ -68,12 +68,14 @@ table=(
 # (internal/listing 17 min alone, 28 min beside the other packages, 2026-11-16), and a leg that ran
 # several long shards one after another came within minutes of its limit, so its run is split
 # along the shards above: a leg names shards, comma-separated, and runs one `go test` per shard in
-# order. Every shard is in exactly one leg. `remote-crash` (about two minutes) rides with
-# `durable`, the shortest long shard, and the `rest*` shards share one leg. The leg holding `rest`
-# is the full one: it also vets the module and tests the nested modules.
+# order. Every shard is in exactly one leg. Each `internal/listing` and `cmd/swath` shard is a leg
+# (each takes 5 to 9 min there, `remote-crash` 5 of them, 2026-11-17), and the `rest*` shards
+# share one. The leg holding `rest` is the full one: it also vets the module and tests the nested
+# modules.
 windows=(
   "crash           crash"
-  "durable-remote  durable,remote-crash"
+  "durable         durable"
+  "remote-crash    remote-crash"
   "listing-rest    listing-rest"
   "cmd-kill        cmd-kill"
   "cmd             cmd"
