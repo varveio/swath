@@ -9,6 +9,7 @@ import (
 
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // filtered applies the row filters (package filter) between the provider
@@ -61,6 +62,15 @@ func (f filtered[P]) Planner() source.Planner[any] {
 	return nil
 }
 
+// Dropped forwards the provider's (source.Dropper): the filters drop
+// rows, not ranges.
+func (f filtered[P]) Dropped(r any) (listing.Unread, bool) {
+	if d, ok := f.p.(source.Dropper[any]); ok {
+		return d.Dropped(r)
+	}
+	return listing.Unread{}, false
+}
+
 type filteredDisposer[P any] struct {
 	filtered[P]
 	d source.Disposer[any]
@@ -93,6 +103,14 @@ func (e filterEmitter[P]) Span(lo, hi string, open bool) {
 func (e filterEmitter[P]) Fence(x string, top bool) {
 	if f, ok := e.Emitter.(source.Fencer); ok {
 		f.Fence(x, top)
+	}
+}
+
+// Unread forwards to an Unreader emitter: what was not read was not
+// filtered either.
+func (e filterEmitter[P]) Unread(u listing.Unread) {
+	if ur, ok := e.Emitter.(source.Unreader); ok {
+		ur.Unread(u)
 	}
 }
 

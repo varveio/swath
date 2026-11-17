@@ -38,7 +38,7 @@ type refList struct {
 	Contents              []struct {
 		Key               string
 		ETag              string
-		Size              int64
+		Size              *int64
 		LastModified      refTime
 		StorageClass      string
 		ChecksumAlgorithm []string
@@ -70,8 +70,11 @@ func reference(body []byte) (*Page, error) {
 		if err != nil {
 			return nil, err
 		}
-		o := Object{Key: k, ETag: c.ETag, Size: c.Size, Mtime: c.LastModified.us, StorageClass: c.StorageClass,
+		o := Object{Key: k, ETag: c.ETag, NoSize: c.Size == nil, Mtime: c.LastModified.us, StorageClass: c.StorageClass,
 			ChecksumType: c.ChecksumType, OwnerID: c.Owner.ID, OwnerDisplayName: c.Owner.DisplayName}
+		if c.Size != nil {
+			o.Size = *c.Size
+		}
 		if len(c.ChecksumAlgorithm) > 0 {
 			o.ChecksumAlgorithm = c.ChecksumAlgorithm[0]
 		}

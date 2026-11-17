@@ -436,6 +436,14 @@ across ranges protects against a provider that breaks its tiling and runs on eve
 keeping each finished range's first and last key until its neighbors finish, the tree `Count` exists to
 avoid.
 
+A sink that is an `order.UnreadSink` is told what the listing did not read: each extent a provider reports
+through its emitter (`source.Unreader`, [providers](providers.md#provider-capabilities)) and, at a stop, the
+extent of every range the count drops unexpanded (`source.Dropper`), before the count returns
+(`TestCountTellsUnread`). A library walk is such a sink ([library](../library.md#walks)). For a sink that is an
+`order.Recovering`, a library walk's, a panic in a provider's `Expand` ends the count with an error that names it,
+not the process, its children dropped as at any stop (`TestCountRecoversAPanic`): a library walk runs in its
+host's process. The command's counts let a panic end the process, as they always have.
+
 ### Drawing the view
 
 What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `command`

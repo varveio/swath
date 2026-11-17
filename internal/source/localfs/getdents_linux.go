@@ -146,7 +146,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	}
 	if !fitsOffsets(len(r.prefix), sc) {
 		st.note(&st.ReadErrors, r.path, errTooLarge)
-		p.unread(r.prefix, listing.UnreadListing, listing.UnreadBudget)
+		p.unread(st, r.prefix, listing.UnreadListing, listing.UnreadBudget)
 		p.warnf(source.WarnDirectoryTooLarge, "%s is not listed: %v, more than a listing can sort in memory (counted in read_errors; swath du still counts it)", r.path, errTooLarge)
 		return nil
 	}
@@ -605,7 +605,7 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names, key
 		}
 		if (r.Data.Kind == KindDir) != (e.typ == unix.DT_DIR) {
 			st.note(&st.Changed, path+string(os.PathSeparator)+name, errors.New("type changed during listing"))
-			p.unread(r.Key, listing.UnreadSubtree, listing.UnreadUnstable)
+			p.unread(st, r.Key, listing.UnreadSubtree, listing.UnreadUnstable)
 			*r = Row{}
 			continue
 		}

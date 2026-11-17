@@ -1,20 +1,21 @@
 # The Go library
 
 swath's listing code is also a Go library: a program can open an S3 bucket and ask it, during its own run, for the
-next children of a prefix (a **page**) or for what is at exactly one key (a **lookup**), with no swath process and
-no output files. A `Source` links neither swath's command, its flags nor its Parquet writer. A program can also run
+next children of a prefix (a **page**), for what is at exactly one key (a **lookup**), for everything under a
+prefix (a **walk**) or for the totals under several prefixes (a **summary**), with no swath process and no output
+files. A `Source` links neither swath's command, its flags nor its Parquet writer. A program can also run
 the whole command line ([Run the command line](#run-the-command-line)).
 
 The library is **experimental**: it is implemented and tested, but its API may change in any release.
 
 | Package | What it holds |
 |---|---|
-| `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup` and `Close` |
+| `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk`, `Summarize` and `Close` |
 | `github.com/varveio/swath/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
 | `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 
-Pages and lookups answer from the bucket as it is during the call. To ask the same questions of a saved inventory
+Pages, lookups, walks and summaries answer from the bucket as it is during the call. To ask the same questions of a saved inventory
 instead, open it with the `reader/view` package ([the inventory view](../reader/README.md#the-inventory-view)).
 
 ## Open, page, look up, close
@@ -95,9 +96,106 @@ Without list permission S3 answers a missing key with 403, not 404, so a 403 lea
 A page needs `s3:ListBucket` on the bucket. A lookup needs `s3:GetObject` on the key, and `s3:ListBucket` to show a key
 absent.
 
+## Walks
+
+A walk hands a function of yours every object under a prefix, each once, in no order: the object at exactly the
+prefix included, and the prefix taken literally, as for a page. It lists the prefix flat, one request per thousand
+objects however deep their keys, and in parallel: workers list key ranges at once, and a range splits at a page
+boundary while workers are idle, so a prefix that fits in one page is one request and only a larger one spreads.
+`WalkRequest.Workers` says how many (64 when zero; 1 lists one continuation chain, never split). Each walk keeps its
+own ranges; walks of one `Source` at once share its client and its request limits, nothing else.
+
+Your function is called from the goroutine that called `Walk`, one batch at a time. A batch belongs to the walk
+until the function returns: copy what you keep. A worker whose batch the function has not taken waits, so a slow
+function slows the walk down, and an error from it stops the walk: `Walk` returns that error once the workers have
+stopped, and calls the function no more. Every entry is checked before it reaches the function: inside the prefix,
+no NUL byte in its key, and a size (an object S3 lists without one is `listing.ErrInvalidPage`, never a size of
+zero). The ranges are checked too: no key range overlaps another, so no key reaches the function twice.
+
+A budget bounds a walk: `MaxEntries` stops it after the batch that reaches that many entries, `MaxDuration` once
+that time has passed, the function's own time included. A walk a budget stops returns no error: its
+`Evidence.Stop` names the bound, and its last batches hand the function, as `Unread` extents of class `budget`,
+the key intervals `(Key, Hi]` it did not read (an empty `Key` from the prefix's start, an empty `Hi` to its end).
+What the walk handed over and those intervals hold every key under the prefix once, so walking the intervals
+afterwards completes it. A walk whose context ends returns the context's error, even if the function took every
+batch.
+
+A walk with a depth (`MaxDepth`) reads one level of `/` at a time instead, one request at a time whatever
+`Workers` says: the objects within the depth, and each folder at the depth as a `KindPrefix` entry, which counts
+toward no budget and stands for the keys below it. A walk with a depth shows nothing below it. A budget stops it
+between requests; the level it was reading comes back as an `Unread` extent of scope `listing` at the level's
+prefix (the children it handed over are read), and each level it had not begun as a `subtree`.
+
+```go
+var objects, size int64
+var unread []listing.Unread
+req := listing.WalkRequest{Prefix: []byte("logs/"), Budget: listing.Budget{MaxDuration: time.Minute}}
+res, err := src.Walk(ctx, req, func(b listing.WalkBatch) error {
+	for _, e := range b.Entries {
+		objects++
+		size += *e.Size
+	}
+	for _, u := range b.Unread {
+		unread = append(unread, listing.Unread{Key: bytes.Clone(u.Key), Hi: bytes.Clone(u.Hi), Scope: u.Scope, Class: u.Class})
+	}
+	return nil
+})
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Printf("%d objects, %d bytes\n", objects, size)
+if res.Evidence.Stop != listing.StopCompleted {
+	fmt.Printf("stopped at the %s: %d key intervals not read\n", res.Evidence.Stop, len(unread))
+}
+```
+
+## Summaries
+
+A summary answers, for each of several targets, how many objects lie at or under it, their bytes and their newest
+last-modified time, and what is at exactly its key. A target is a subtree (`Subtree`: every key that begins with
+`Key`, which the contract also calls a prefix) or one exact key. The subtrees are walked: one walk for each that lies
+under no other, whose objects count toward it and toward every target nested in it, so nested targets are each
+counted in full and listed once. A subtree target is present when an object has exactly its key, absent when the
+walk read where it would be and found none, and unknown at the root (the empty key), or when its walk dropped
+extents it did not read (below). An exact target is a lookup.
+
+The budget bounds the whole call, every walk taking what is left of it. A target a walk stopped inside counts what
+was read and carries, as its `Unread`, the key intervals inside it that were not: its totals are a lower bound. A
+target the call never reached is unknown, with `listing.ErrBudgetExceeded` as its reason, counts nothing and is
+unread whole. A total with an `Unread` is never a complete one.
+
+```go
+targets := []listing.Target{
+	{Key: []byte("logs/"), Subtree: true},
+	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, in the same walk
+	{Key: []byte("README")},                    // exact: a lookup
+}
+sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: time.Minute}})
+if err != nil {
+	log.Fatal(err)
+}
+for i, s := range sums {
+	fmt.Printf("%s: %s, %d objects", targets[i].Key, s.State, s.Entries)
+	if s.Bytes != nil {
+		fmt.Printf(", %d bytes", *s.Bytes)
+	}
+	if len(s.Unread) > 0 {
+		fmt.Print(", at least: not all of it was read")
+	}
+	fmt.Println()
+}
+fmt.Println("the call:", ev.Stop)
+```
+
+Both programs are the s3 package's examples ([`Example_walk`, `Example_summarize`](../s3/example_test.go)). A walk
+and a summary need `s3:ListBucket` on the bucket; a summary's exact targets need what a lookup does.
+
 ## Evidence and errors
 
 Every answer carries its evidence: it is live, and was read between the call's start and finish, which it gives.
+A walk's and a summary's also say whether the call completed or which bound stopped it (`Evidence.Stop`), and
+locate every gap as an `Unread` extent; a walk that met more of them than it can hold drops the rest and says so
+with a nil `Evidence.Unlocated`.
 
 A call that fails returns an error that `errors.Is` matches to one of the contract's classes, read from the failure
 as swath's command reads it for its outcome: `ErrAuth` for credentials that do not load or a refusal,
@@ -107,8 +205,8 @@ client's retries are spent, `ErrInvalidPage`, `ErrInvalidToken`, `ErrInvalidRequ
 error. Error messages pass through swath's redaction and carry no credential.
 
 To count or trace the requests a call sends, put an `objfile.Observer` on its context (`objfile.WithObserver`), as
-for dataset reads: every attempt, retries included, is reported to it, a page's as a list request and a lookup's
-HeadObject and HeadBucket as metadata requests.
+for dataset reads: every attempt, retries included, is reported to it, a page's and each of a walk's as a list
+request and a lookup's HeadObject and HeadBucket as metadata requests.
 
 ## Run the command line
 
@@ -137,5 +235,4 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 
 ## Not in the library yet
 
-The library answers Page and Lookup on S3. Walk and Summarize, which list a whole prefix, and the GCS, Azure and
-local sources are not in it yet. A source's request limits hold within one process only.
+The library answers Page, Lookup, Walk and Summarize on S3. The GCS, Azure and local sources are not in it yet. A source's request limits hold within one process only.

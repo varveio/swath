@@ -135,6 +135,9 @@ type Stats struct {
 	HeldBudget int64 `json:"held_budget_dirs,omitempty"`
 	// noSamples keeps note from naming paths (Options.NoPaths).
 	noSamples bool
+	// unreadTo is the Expand's emitter, told what it did not read (unread);
+	// nil when the emitter takes no reports.
+	unreadTo source.Unreader
 }
 
 // DirOpens account for the directories below the root opened relative to
@@ -460,7 +463,10 @@ func (p *Provider) warnf(code, format string, a ...any) {
 	p.warn(code, fmt.Sprintf(format, a...))
 }
 
-var _ source.Provider[Range, Entry] = (*Provider)(nil)
+var (
+	_ source.Provider[Range, Entry] = (*Provider)(nil)
+	_ source.Dropper[Range]         = (*Provider)(nil)
+)
 
 // New validates root and returns a provider for it. A root that is not a
 // directory (a file, as du and ls take one) lists as its one entry, keyed
@@ -529,9 +535,16 @@ func (p *Provider) Stats() Stats {
 // stopped listing's), a continuation's name set included, and reports it
 // not read (unread). It implements source.Disposer.
 func (p *Provider) Dispose(r Range) {
-	p.unreadStopped(r, false)
+	p.unreadStopped(nil, r, false)
 	disposeContinuation(r)
 	p.release(r)
+}
+
+// Dropped is what a stopped listing did not read of r, which it drops
+// unexpanded (source.Dropper): as Dispose reports it.
+func (p *Provider) Dropped(r Range) (listing.Unread, bool) {
+	key, scope, ok := p.stopped(r, false)
+	return listing.Unread{Key: []byte(key), Scope: scope, Class: listing.UnreadBudget}, ok
 }
 
 // release releases what a range holds once expanded or disposed: a chunk's
@@ -548,15 +561,16 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	// before any work included: a range a worker has taken is no longer
 	// queued, so the order stage will not dispose it.
 	defer p.release(r)
+	st := Stats{noSamples: p.opt.NoPaths}
+	st.unreadTo, _ = e.(source.Unreader)
 	if ctx.Err() != nil { // as if disposed
-		p.unreadStopped(r, false)
+		p.unreadStopped(&st, r, false)
 		disposeContinuation(r)
 		return ctx.Err()
 	}
 	if t, ok := e.(source.Subtreer); ok && r.chunk == nil && !p.file {
 		t.Subtree(r.prefix) // a directory's subtree is its subdirectories' ranges, its chunks and their continuations
 	}
-	st := Stats{noSamples: p.opt.NoPaths}
 	var err error
 	if p.file {
 		err = p.expandFile(e, &st)
@@ -566,7 +580,7 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 		err = p.expandPortable(ctx, r, e, &st)
 	}
 	if err != nil {
-		p.unreadStopped(r, st.DirsRead > 0)
+		p.unreadStopped(&st, r, st.DirsRead > 0)
 	}
 	p.mu.Lock()
 	p.stats.add(&st)
@@ -577,28 +591,40 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 // unread reports a place the listing did not read, as a worker meets it:
 // the key of a directory or entry, how much at it was not read and why,
 // in the contract's terms (reader/listing). Every such place is reported
-// here, before the Expand that met it returns, or from Dispose for a
-// range a stopped listing never expanded. Nothing delivers the reports
-// to a caller yet: unreadTo, nil outside tests, is told them.
-func (p *Provider) unread(key string, scope listing.UnreadScope, class listing.UnreadClass) {
+// here, before the Expand that met it returns, to that Expand's emitter
+// (st.unreadTo: an order.UnreadSink's count passes it on), or from
+// Dispose (st nil) for a range a stopped listing never expanded, which
+// the count reports itself (Dropped). p.unreadTo, nil outside tests, is
+// told them all.
+func (p *Provider) unread(st *Stats, key string, scope listing.UnreadScope, class listing.UnreadClass) {
+	if st != nil && st.unreadTo != nil {
+		st.unreadTo.Unread(listing.Unread{Key: []byte(key), Scope: scope, Class: class})
+	}
 	if p.unreadTo != nil {
 		p.unreadTo(key, scope, class)
 	}
 }
 
 // unreadStopped reports a range a stopped listing did not finish
-// (UnreadBudget: the caller's stop): a chunk, a continuation or a
-// directory it opened did not end its enumeration; nothing at or under a
-// directory it never opened was read.
-func (p *Provider) unreadStopped(r Range, opened bool) {
-	if p.file {
-		return
+// (stopped).
+func (p *Provider) unreadStopped(st *Stats, r Range, opened bool) {
+	if key, scope, ok := p.stopped(r, opened); ok {
+		p.unread(st, key, scope, listing.UnreadBudget)
 	}
-	if r.chunk != nil || opened {
-		p.unread(r.prefix, listing.UnreadListing, listing.UnreadBudget)
-		return
+}
+
+// stopped is what a stopped listing (UnreadBudget: the caller's stop) did
+// not read of r: a chunk, a continuation or a directory it opened did not
+// end its enumeration; nothing at or under a directory it never opened
+// was read. A single-file root has nothing more to read.
+func (p *Provider) stopped(r Range, opened bool) (key string, scope listing.UnreadScope, ok bool) {
+	switch {
+	case p.file:
+		return "", "", false
+	case r.chunk != nil || opened:
+		return r.prefix, listing.UnreadListing, true
 	}
-	p.unread(r.prefix, listing.UnreadSubtree, listing.UnreadBudget)
+	return r.prefix, listing.UnreadSubtree, true
 }
 
 // unreadClass says why an open, read or stat that failed with err left a
@@ -633,7 +659,7 @@ var errSymlink = errors.New("a symbolic link, not followed")
 // there.
 func (p *Provider) readFailed(r Range, st *Stats, err error) {
 	st.note(&st.ReadErrors, r.path, err)
-	p.unread(r.prefix, listing.UnreadListing, unreadClass(err))
+	p.unread(st, r.prefix, listing.UnreadListing, unreadClass(err))
 }
 
 // statFailed counts an entry left out because its stat failed (path names
@@ -644,7 +670,7 @@ func (p *Provider) statFailed(key, path string, st *Stats, err error) {
 		return
 	}
 	st.note(&st.StatErrors, path, err)
-	p.unread(key, listing.UnreadSubtree, unreadClass(err))
+	p.unread(st, key, listing.UnreadSubtree, unreadClass(err))
 }
 
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
@@ -662,7 +688,7 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 			if long {
 				name := strings.TrimSuffix(row.Key[len(r.prefix):], "/")
 				st.note(&st.KeyTooLong, r.path+string(os.PathSeparator)+name, fmt.Errorf("its key of %d bytes passes the limit of %d", len(row.Key), maxKeyBytes))
-				p.unread(row.Key, listing.UnreadSubtree, listing.UnreadNameTooLong)
+				p.unread(st, row.Key, listing.UnreadSubtree, listing.UnreadNameTooLong)
 			} else {
 				st.Skipped++
 			}
@@ -682,13 +708,13 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 		switch {
 		case stop:
 			st.OtherDevice++
-			p.unread(row.Key, listing.UnreadSubtree, listing.UnreadOtherDevice)
+			p.unread(st, row.Key, listing.UnreadSubtree, listing.UnreadOtherDevice)
 		case p.prune != nil && p.prune(row.Key):
 			st.PrunedDirs++
 			stop = true
 		case p.opt.MaxDepth > 0 && r.depth >= p.opt.MaxDepth:
 			st.TooDeep++
-			p.unread(row.Key, listing.UnreadSubtree, listing.UnreadTooDeep)
+			p.unread(st, row.Key, listing.UnreadSubtree, listing.UnreadTooDeep)
 			stop = true
 		}
 		if stop {
@@ -937,7 +963,7 @@ func (n *nameSet) drop() {
 // bound on held names: its entries not yet read stay unread.
 func (p *Provider) heldFull(r Range, st *Stats) {
 	st.HeldBudget++
-	p.unread(r.prefix, listing.UnreadListing, listing.UnreadBudget)
+	p.unread(st, r.prefix, listing.UnreadListing, listing.UnreadBudget)
 }
 
 // leftOut says the filters leave out the entry at key (its name below the

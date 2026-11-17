@@ -152,7 +152,7 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	if r.at != p.held {
 		st.DirOpens.fail(reason)
 	}
-	p.unread(r.prefix, listing.UnreadSubtree, unreadClass(err))
+	p.unread(st, r.prefix, listing.UnreadSubtree, unreadClass(err))
 	switch {
 	case errors.Is(err, errOtherDevice):
 		st.OtherDevice++

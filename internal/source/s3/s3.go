@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,8 +67,11 @@ type Options struct {
 	// AllVersions lists every version and delete marker
 	// (ListObjectVersions, NewVersions) instead of the current objects.
 	AllVersions bool
-	Workers     int // parallel: the order stage's worker count (split demand)
-	Client      API // optional; built from the options above when nil
+	// NeedSize refuses an object listed without a size as a protocol
+	// violation (a library walk's); otherwise its size is taken as 0.
+	NeedSize bool
+	Workers  int // parallel: the order stage's worker count (split demand)
+	Client   API // optional; built from the options above when nil
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -281,6 +285,9 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 	out, err := p.client.ListObjectsV2(ctx, in)
 	if err != nil {
 		return nil, err
+	}
+	if p.opt.NeedSize && slices.ContainsFunc(out.Contents, func(o client.Object) bool { return o.NoSize }) {
+		return nil, source.Violation(errors.New("s3: a listed object has no size"))
 	}
 	return &keyrange.Page[Object]{Rows: p.rows(out), Prefixes: out.CommonPrefixes, Truncated: out.IsTruncated,
 		Token: out.NextContinuationToken}, nil
