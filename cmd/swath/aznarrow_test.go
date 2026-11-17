@@ -207,7 +207,9 @@ func TestAzblobIncludeKeepsTheSAS(t *testing.T) {
 // that recorded the whole container for the same command line (as 0.4.0,
 // which did not narrow on Azure, wrote it) is refused by the identity
 // check, exit 2, with advice a user can act on, and the directory is left
-// as it was.
+// as it was. A source mismatch narrowing does not explain (another
+// container whose name the narrowed source extends as a string, another
+// recorded prefix) keeps the identity check's general advice.
 func TestAzblobNarrowedResume(t *testing.T) {
 	captureStderr(t)
 	keys, want, _ := narrowCorpus()
@@ -235,38 +237,45 @@ func TestAzblobNarrowedResume(t *testing.T) {
 		t.Fatalf("resumed: %d keys, want %d", len(got), len(want))
 	}
 
-	old := filepath.Join(t.TempDir(), "ds")
-	crashRun(t, args(old), 2)
-	px.take()
-	st, err = journal.Read(old)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := st.Header.Identity
-	id.Source = slices.Clone(id.Source)
-	for i := range id.Source {
-		if id.Source[i].Name == "source" {
-			id.Source[i].Value = "az://replay/corpus"
-		}
-	}
-	j, err := journal.Create(old, id, st.Header.Argv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, rec := range st.Records {
-		if err := j.Append(rec); err != nil {
+	const upgrade = "(this swath narrows the listing to the --include's literal prefix, which the swath that started the run did not: finish the run with that swath, or start over with swath list --overwrite)"
+	const other = "(start over with swath list --overwrite, or resume with the original settings)"
+	for _, c := range []struct{ recorded, advice string }{
+		{"az://replay/corpus", upgrade}, // 0.4.0's journal: the source as given
+		{"az://replay/corp", other},     // another container, whose name the narrowed source extends as a string
+		{"az://replay/corpus/d", other}, // another prefix than the source names
+	} {
+		old := filepath.Join(t.TempDir(), "ds")
+		crashRun(t, args(old), 2)
+		px.take()
+		st, err := journal.Read(old)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	j.Close()
-	before, _ := os.ReadFile(journal.Path(old))
-	err = dispatch(ctx, []string{"resume", old}, io.Discard)
-	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), "source was az://replay/corpus, now az://replay/corpus/d/") ||
-		!strings.Contains(err.Error(), "finish the run with that swath, or start over with swath list --overwrite") {
-		t.Fatalf("a 0.4.0 journal resumed: %v", err)
-	}
-	if after, _ := os.ReadFile(journal.Path(old)); !bytes.Equal(before, after) || len(px.take()) != 0 {
-		t.Fatal("the refused resume changed the journal or listed")
+		id := st.Header.Identity
+		id.Source = slices.Clone(id.Source)
+		for i := range id.Source {
+			if id.Source[i].Name == "source" {
+				id.Source[i].Value = c.recorded
+			}
+		}
+		j, err := journal.Create(old, id, st.Header.Argv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rec := range st.Records {
+			if err := j.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+		j.Close()
+		before, _ := os.ReadFile(journal.Path(old))
+		err = dispatch(ctx, []string{"resume", old}, io.Discard)
+		if want := "cannot resume: source was " + c.recorded + ", now az://replay/corpus/d/ " + c.advice; exitCode(t, err) != exitUsage || err.Error() != want {
+			t.Fatalf("recorded %s: %v\nwant %s", c.recorded, err, want)
+		}
+		if after, _ := os.ReadFile(journal.Path(old)); !bytes.Equal(before, after) || len(px.take()) != 0 {
+			t.Fatalf("recorded %s: the refused resume changed the journal or listed", c.recorded)
+		}
 	}
 }
 

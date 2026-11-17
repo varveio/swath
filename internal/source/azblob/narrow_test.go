@@ -390,3 +390,80 @@ func TestNarrowedAdmission(t *testing.T) {
 		}
 	}
 }
+
+// TestNarrowedVersionsRestart: with --all-versions and --include
+// 'logs/2026*', the listing narrows to logs/2026, the name of a blob with
+// four entries (a snapshot, a previous version, a soft-deleted previous
+// version, the current version). A run interrupted once that group is
+// published (its checkpoint the prefix itself, the lower edge of the
+// narrowed scope) or after the last selected name, and resumed, lists
+// the rest: the published entries and the resumed ones together are the
+// uninterrupted narrowed listing, entry for entry and in order, which is
+// the whole container's listing filtered; the resume lists nothing of the
+// checkpoint's group again and every request asks for the narrowed
+// prefix or one below it. Pages of 1 and 2 put seams inside groups.
+func TestNarrowedVersionsRestart(t *testing.T) {
+	const name = "logs/2026"
+	entries := versionEntries(slices.DeleteFunc(narrowKeys(), func(k string) bool { return k == name }))
+	for j := range 4 {
+		it := client.Item{Name: name, Size: int64(1_000_000 + j), BlobType: "BlockBlob"}
+		switch j {
+		case 0:
+			it.Snapshot = "2026-01-01T00:00:00.0000000Z"
+		case 1:
+			it.VersionID = "2026-01-02T00:00:00.0000000Z"
+		case 2:
+			it.VersionID, it.Deleted = "2026-01-02T00:00:01.0000000Z", true
+		case 3:
+			it.VersionID, it.IsCurrentVersion = "2026-01-04T00:00:00.0000000Z", true
+		}
+		entries = append(entries, it)
+	}
+	s := narrowCase{include: []string{"logs/2026*"}}.spec(t)
+	prefix, why := s.NarrowPrefix("")
+	if prefix != name || why != filter.Narrowed {
+		t.Fatalf("narrowed to %q (%s)", prefix, why)
+	}
+	for _, page := range []int{1, 2, 1000} {
+		list := func(scope, after string) []string {
+			t.Helper()
+			st := azblobtest.NewEntryStore(entries)
+			st.Short = func(n int) int { return 1 + n%2 }
+			p := versionsEngine(t, st, keyrange.Options{Prefix: scope, Workers: 4, PageSize: page, SplitCoin: coin(int64(page))})
+			var from *string
+			if after != "" {
+				if err := p.Restart(after); err != nil {
+					t.Fatal(err)
+				}
+				from = &after
+			}
+			rows, err := runVersions(t, p, 4, from)
+			if err != nil {
+				t.Fatalf("pages of %d, prefix %q, after %q: %v", page, scope, after, err)
+			}
+			for _, r := range st.Log() {
+				if !strings.HasPrefix(r.In.Prefix, scope) {
+					t.Fatalf("pages of %d, prefix %q, after %q: a request for %q", page, scope, after, r.In.Prefix)
+				}
+			}
+			return versionIDs(keep(t, s, &VersionSchema, rows))
+		}
+		whole, narrowed := list("", ""), list(prefix, "")
+		if !slices.Equal(narrowed, whole) || len(narrowed) < 5 || !strings.HasPrefix(narrowed[3], fmt.Sprintf("%q#", name)) ||
+			strings.HasPrefix(narrowed[4], fmt.Sprintf("%q#", name)) {
+			t.Fatalf("pages of %d: narrowed %q, the whole container filtered %q", page, narrowed, whole)
+		}
+		for _, after := range []string{name, "logs/2026-1x"} {
+			n := 0
+			for n < len(narrowed) && !strings.HasPrefix(narrowed[n], fmt.Sprintf("%q#", after)) {
+				n++
+			}
+			for n < len(narrowed) && strings.HasPrefix(narrowed[n], fmt.Sprintf("%q#", after)) {
+				n++
+			}
+			if got := append(slices.Clone(narrowed[:n]), list(prefix, after)...); !slices.Equal(got, narrowed) {
+				t.Fatalf("pages of %d, resumed after %q: %q, want %q", page, after, got, narrowed)
+			}
+		}
+	}
+}
