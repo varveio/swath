@@ -7,6 +7,11 @@
 See what's taking up space in a bucket or a directory, and save a Parquet inventory you can query without
 listing again. swath reads listing metadata only; it never reads, changes or deletes what it lists.
 
+![swath du s3://1000genomes: the largest prefixes of the bucket at any depth, each under its parent with its size, object count, share of the total as a bar, and newest object](site/readme/hero.png)
+
+Where 697 TiB sits in a public genomics bucket: 477,714 objects totalled in 3.5 seconds on a 4-vCPU cloud VM
+([how this was measured](docs/internals/measurements.md#the-home-pages-lead-view-1000genomes-2026-11-16)).
+
 - `swath du` shows where the bytes are, or totals files and bytes per directory or prefix.
 - `swath list` prints every entry as a table, TSV or JSON lines, or writes a sorted Parquet inventory with a
   manifest that records how complete it is.

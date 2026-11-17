@@ -18,6 +18,7 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | `.vitepress/theme/` | The default theme with Varve's colors and fonts (Inter, Geist Mono, self-hosted from npm), the development-docs notice and the home page's terminal example (`index.ts`); no custom components. |
 | `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, `data/media.json` (the videos the deploy fetches, below), `media/` (the replay's poster) and `runs/noaa-gestofs-pds/index.html` (the home page's run report, below) |
 | `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
+| `readme/` | `hero.png`, the home page's lead terminal example as the repository README shows it, and `render.sh` (with `render.cjs`), which renders it from the built site. Not published. |
 | `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
 
 ## How the documentation is published
@@ -53,7 +54,7 @@ image tag on the site; and a small set of accessibility smoke tests.
 
 To work on the pages with live reload, run `npm ci && npx vitepress dev` in this directory.
 
-## Branding and the social card
+## Branding, the social card and the README image
 
 The colors, fonts and chevron mark are Varve's, from its UI's design tokens (`ui/src/design.css` in the
 Varve repository): the accent petrol for links and buttons, the brand teal for the hero name, the neutral
@@ -65,6 +66,15 @@ varve.io.
 
 ```bash
 site/card/render.sh    # npm ci if needed, Playwright's Chromium, a local HTTP server for the fonts
+```
+
+The repository README opens with the home page's lead terminal example as an image, `readme/hero.png`, because
+GitHub drops the colors of HTML in a README. It is a screenshot of the built home page at twice its CSS size, in
+the dark color scheme with transparent corners, so it reads on GitHub's light and dark themes. After changing
+`HERO` in `.vitepress/theme/index.ts` or the terminal's styles, regenerate it and commit it with the change:
+
+```bash
+site/readme/render.sh  # builds the site into a temporary directory, serves it and screenshots the terminal
 ```
 
 ## The run report
