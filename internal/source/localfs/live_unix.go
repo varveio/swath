@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"slices"
 	"strings"
@@ -108,7 +107,7 @@ func (l *Live) list(ctx context.Context, prefix, token string, limit int) (*live
 	}
 	f := os.NewFile(uintptr(fd), prefix) // it owns fd; its name, the caller's key, is all its errors can name
 	defer f.Close()
-	kids, err := levelNames(ctx, f, after, l.maxHeld)
+	kids, err := levelNames(ctx, f, fd, after, l.maxHeld)
 	if err != nil {
 		return nil, failed(ctx, prefix, err)
 	}
@@ -231,8 +230,8 @@ func levelError(level int, err error) error {
 	return fmt.Errorf("level %d below the root: %w", level, err)
 }
 
-// levelBatch is how many names a level reads, and how many of its entries
-// it stats, between checks for a stop of ctx.
+// levelBatch is how many entries a level stats, and on macOS how many
+// names it reads, between checks for a stop of ctx.
 const levelBatch = 1024
 
 // child is a name a level read: its key below the directory, with "/"
@@ -242,57 +241,53 @@ type child struct {
 	dir bool
 }
 
-// levelNames reads f, a directory, whole and returns the children whose
-// keys sort after after, sorted by key, each once: a name the directory
-// returns twice in one read (renames moving entries in it) is kept once.
-// What it holds is bounded by maxHeld (ErrTooWide). The kind of an entry
-// the filesystem leaves untyped is read relative to f (os.File.ReadDir:
-// fstatat), never by a path.
-func levelNames(ctx context.Context, f *os.File, after string, maxHeld int64) ([]child, error) {
+// levelNames reads f, the directory fd, whole (readLevel) and returns the
+// children whose keys sort after after, sorted by key, each once: a name
+// the directory returns twice in one read (renames moving entries in it)
+// is kept once. What it holds is bounded by maxHeld (ErrTooWide).
+func levelNames(ctx context.Context, f *os.File, fd int, after string, maxHeld int64) ([]child, error) {
 	var kids []child
 	var held int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	err := readLevel(ctx, f, fd, func(name string, dir bool) error {
+		k := child{key: name, dir: dir}
+		if dir {
+			k.key += "/"
 		}
-		ents, err := f.ReadDir(levelBatch)
-		for _, e := range ents {
-			k := child{key: e.Name(), dir: e.IsDir()}
-			if k.dir {
-				k.key += "/"
-			}
-			if k.key <= after {
-				continue
-			}
-			if held += int64(len(k.key)) + heldNameBytes; held > maxHeld {
-				return nil, ErrTooWide
-			}
-			kids = append(kids, k)
+		if k.key <= after {
+			return nil
 		}
-		if err == io.EOF {
-			break
+		if held += int64(len(k.key)) + heldNameBytes; held > maxHeld {
+			return ErrTooWide
 		}
-		if err != nil {
-			var errno unix.Errno
-			if errors.As(err, &errno) {
-				err = errno
-			}
-			return nil, classed(unreadClass(err), fmt.Errorf("reading the directory: %w", err))
-		}
+		kids = append(kids, k)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	slices.SortFunc(kids, func(a, b child) int { return strings.Compare(a.key, b.key) })
 	return slices.CompactFunc(kids, func(a, b child) bool { return a.key == b.key }), nil
 }
 
+// readError is a failed read of a level's directory, in its class.
+func readError(err error) error {
+	var errno unix.Errno
+	if errors.As(err, &errno) {
+		err = errno
+	}
+	return classed(unreadClass(err), fmt.Errorf("reading the directory: %w", err))
+}
+
 // levelEntries adds kids, children of the directory fd at prefix, to lvl:
 // a directory as a common prefix, anything else as its entry, statted
 // relative to fd without following a link. An entry gone since it was
 // read is left out, and so is one that is a directory now, whose key would
-// sort elsewhere; one whose stat fails is of unknown kind.
+// sort elsewhere; one whose stat fails is of unknown kind. A stop of ctx
+// before the first stat, or between batches of them, fails the level.
 func levelEntries(ctx context.Context, fd int, prefix string, kids []child, lvl *live.Level) error {
 	for i, k := range kids {
-		if i%levelBatch == levelBatch-1 && ctx.Err() != nil {
+		if i%levelBatch == 0 && ctx.Err() != nil {
 			return ctx.Err()
 		}
 		key := prefix + k.key
