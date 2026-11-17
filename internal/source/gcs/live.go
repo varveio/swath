@@ -105,8 +105,9 @@ func listed(o *client.Object) listing.Entry {
 // object's metadata says. GCS answers a missing object and a missing
 // bucket with the same 404, so a 404 is absent only once buckets.get shows
 // the bucket is there; a missing bucket and a failed probe leave the key
-// unknown, with the probe's failure class. Any other failure leaves it
-// unknown too, with its class: a 403 is ErrAuth.
+// unknown, with the probe's failure class. Any other failure, a 404
+// without the reason notFound among them, leaves it unknown too, with its
+// class: a 403 is ErrAuth.
 func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	o, err := l.client.Get(ctx, l.bucket, string(key))
 	switch {
@@ -130,10 +131,11 @@ func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, er
 	return unknown(objhttp.Classed(err)), nil
 }
 
-// notFound: GCS answered 404, with or without its reason notFound.
+// notFound: GCS answered 404 with its reason notFound. A 404 without that
+// reason (a proxy's or a wrong path's) says nothing about the object.
 func notFound(err error) bool {
 	var e *client.Error
-	return errors.As(err, &e) && e.Status == http.StatusNotFound
+	return errors.As(err, &e) && e.Status == http.StatusNotFound && e.Reason == "notFound"
 }
 
 func unknown(reason error) listing.LookupResult {

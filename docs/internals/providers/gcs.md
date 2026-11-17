@@ -86,12 +86,12 @@ followed, including with a supplied HTTP client, so they cannot change the resum
 with no range engine. A page is one `objects.list` with `delimiter=/` and `maxResults` at most 1,000: its
 `items` are the objects, its `prefixes` the common prefixes, and a `nextPageToken`, which may come with neither,
 continues the level. A lookup is one `objects.get` (`Client.Get`: the object's metadata, never its data; the name
-escaped whole into the path), and after a 404, which GCS answers for a missing object and a missing bucket alike,
-one `buckets.get` (`Client.Bucket`): absent only when it succeeds, unknown with its class otherwise. Both take the
-billed project and, on Google's endpoint, a fields selector, and run on `List`'s path (`exchange`: token,
-admission, retries, classification, the wire snapshot). Every attempt of the client, retries included, is
-reported to the `objfile.Observer` on its context: a page as a list request of its prefix, `objects.get` and
-`buckets.get` as metadata requests (the bucket's with an empty name). The location a page token is bound to is
+escaped whole into the path), and after a 404 with reason `notFound`, which GCS answers for a missing object and a
+missing bucket alike, one `buckets.get` (`Client.Bucket`): absent only when it succeeds, unknown with its class
+otherwise. Both take the billed project and, on Google's endpoint, a fields selector, and run on `List`'s path
+(`exchange`: token, admission, retries, classification, the wire snapshot). Every attempt of the client, retries
+included, is reported to the `objfile.Observer` on its context: a page as a list request of its prefix,
+`objects.get` and `buckets.get` as metadata requests (the bucket's with an empty name). The location a page token is bound to is
 the bucket and the canonical endpoint. The library's tests are in `gcs/gcs_test.go`, on `gcstest.Strict`, which
 also answers `objects.get` and `buckets.get`.
 

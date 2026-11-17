@@ -158,8 +158,9 @@ otherwise come from Application Default Credentials, as for the command
   carries a token: the level goes on. A zero-length object whose name ends in `/`, such as a folder placeholder,
   is an object like any other: in a page of its own prefix it is the `Self`.
 - A lookup reads the object's metadata (`objects.get`). GCS answers a missing object and a missing bucket with the
-  same 404, so after one the lookup reads the bucket's (`buckets.get`), and the key is absent only when that
-  succeeds. A 403 to either, a missing bucket (`listing.ErrNotFound`) and a probe that fails leave the key unknown.
+  same 404 with reason `notFound`, so after one the lookup reads the bucket's (`buckets.get`), and the key is absent
+  only when that succeeds. A 403 to either, a 404 without that reason, a missing bucket (`listing.ErrNotFound`) and
+  a probe that fails leave the key unknown.
 - A page needs `storage.objects.list` on the bucket. A lookup needs `storage.objects.get`, and
   `storage.buckets.get` to show a key absent: without it a missing key is unknown (`listing.ErrAuth`).
 - A token is bound to the bucket and the endpoint it is read through; the billed project is not part of it.

@@ -366,6 +366,30 @@ func TestLookupUnknown(t *testing.T) {
 	}
 }
 
+// TestLookupUnreasoned404: a 404 to objects.get without GCS's reason
+// notFound (a proxy's "no route") is unknown (ErrUnsupported) and probes
+// nothing, although the bucket would answer.
+func TestLookupUnreasoned404(t *testing.T) {
+	f := gcstest.NewStrict([]string{"a/b"})
+	f.Lean = true
+	sent := &requests{}
+	endpoint := serve(t, sent.record(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() == gcstest.Path+"b/bkt/o/k" {
+			http.Error(w, `{"error":{"code":404,"message":"no route"}}`, http.StatusNotFound)
+			return
+		}
+		f.ServeHTTP(w, r)
+	})))
+
+	r, err := open(t, endpoint, "bkt").Lookup(context.Background(), []byte("k"))
+	if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrUnsupported) || r.Entry != nil {
+		t.Errorf("%+v, %v; want unknown, ErrUnsupported", r, err)
+	}
+	if got, want := sent.list(), []string{"GET /storage/v1/b/bkt/o/k"}; !slices.Equal(got, want) {
+		t.Errorf("requests %q, want %q", got, want)
+	}
+}
+
 // TestOpenRefusals: Open refuses a bucket name of the wrong form, a
 // malformed endpoint and credentials that do not load, each with its
 // class and before any request.
