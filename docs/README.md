@@ -21,7 +21,8 @@ Parquet inventories. Releases are published on the [releases page](https://githu
 - [Total a source](totals.md): `swath du`, the view of where the bytes are, totals per prefix and totals from a
   saved dataset.
 - [Filter rows](filters.md): globs, regular expressions, sizes, times and storage classes.
-- [Run large listings](running.md): one large run, its output directory, outcome and limits.
+- [Run large listings](running.md): list a bucket of your own start to finish: the command, what it prints,
+  stopping and resuming it, where the result is.
   - [Size a run](size-a-run.md): disk, memory and cost.
   - [Watch and tune a run](watch-a-run.md): progress, the closing lines, throttling, memory and disk, a stuck run.
   - [Stop, resume and refresh](resume-and-refresh.md): signals, `swath resume`, overwrite and seeding a refresh.
