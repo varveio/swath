@@ -329,10 +329,9 @@ This section is for reading the parts without swath: DuckDB, Python, Spark.
 
 ## A dataset in a bucket
 
-`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` (or `-o s3://BUCKET/PREFIX`, or
-`-o az://ACCOUNT/CONTAINER/PREFIX`) writes the same dataset straight to Google Cloud Storage (or S3, or Azure
-Blob Storage); nothing of it is written to local disk. How to run, resume and clean up after such a run is in
-[Writing to a bucket](production.md#writing-to-a-bucket). For a reader, the dataset differs in three ways:
+A dataset written to a bucket (`-o gs://BUCKET/PREFIX`, `s3://…` or `az://…`; how to run one is in
+[Writing to a bucket](production.md#writing-to-a-bucket)) holds the same files under `PREFIX/`. For a reader it
+differs in three ways:
 
 - **Part names are unique to a run and an attempt:** `PREFIX/data/RUN/ATTEMPT/part-NNNNN.parquet`, where RUN is
   the run's UUID (kept across its resumes) and ATTEMPT the invocation's id. Ordinals stay dense and in key
@@ -340,16 +339,13 @@ Blob Storage); nothing of it is written to local disk. How to run, resume and cl
   resumed. Take the parts from the manifest's `parts[].path`, never from a listing of `data/`: parts are
   uploaded as they close, before the commit, and `data/` can also hold parts no manifest names (those of a run
   abandoned before its commit, or an upload whose outcome the run could not learn).
-- **The manifest is created, never replaced:** `PREFIX/manifest.json` is written only if absent, so of two runs
-  writing one prefix exactly one commits. Until the manifest exists the prefix holds no dataset, whatever
-  `data/` holds. A prefix that already holds a manifest is refused before the run starts: write each run to a
-  new prefix.
+- **The manifest is created, never replaced:** until `PREFIX/manifest.json` exists the prefix holds no
+  dataset, whatever `data/` holds, and once it exists swath never replaces it.
 - **`cuts.txt` and `run.json` are written only if absent**, after the commit, by the run that committed. An
   object already at either name, which no run of this dataset wrote, is left as it is, and for the cut file the
   run warns that it did not write its own: do not seed from that object.
 
-`DIR`, the work directory, is local and holds what a resume needs; `swath resume DIR` continues the run against
-the recorded destination. The upload, commit and cleanup protocol is in
+The upload, commit and cleanup protocol is in
 [Durability and resume (internals)](internals/durability.md#a-dataset-in-a-bucket).
 
 ## The cut file
@@ -421,8 +417,10 @@ A directory (or object-store prefix) is a swath dataset when all of the followin
 SeekParquet allows only its own members at the top level, in `key` and in each part; a producer's metadata goes
 under `extensions`, by namespace, and swath writes `extensions.swath` only. A SeekParquet dataset without a
 registered schema id or without a valid `extensions.swath` is not a swath dataset; any SeekParquet reader can
-still open it, and generic SeekParquet reads ignore `extensions.swath` entirely. A partial dataset (one that left
-out entries it could not read, or one with filters) is still a swath dataset, and opens and reads like any other.
+still open it, and generic SeekParquet reads ignore `extensions.swath` entirely. A partial dataset (`coverage.complete`
+false: it left out entries it could not read, or stopped before the end of its scope) is still a swath dataset, and
+opens and reads like any other. Filters alone do not make a dataset partial: a listing that finishes with no
+unreadable entries is complete for the filters `coverage.filters` records.
 
 A reader makes two checks, and judges nothing beyond them:
 
