@@ -115,7 +115,7 @@ func TestTotalsMissing(t *testing.T) {
 			"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\te/\n",
 		JSONL: `{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":7,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n" +
 			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n",
-		Table: "  size  files  dirs  last_modified (UTC)  path\n" +
+		Table: "  size  files  dirs  newest (UTC)         path\n" +
 			"   0 B      0     0  -                    e/\n" +
 			">= 7 B      2     0  -                    (total)\n",
 	} {
@@ -126,7 +126,7 @@ func TestTotalsMissing(t *testing.T) {
 	}
 	l.Primary = totals.AllocatedBytes
 	var b bytes.Buffer
-	if err := WriteTotals(&b, Table, l, rows); err != nil || b.String() != "on disk  files  dirs  last_modified (UTC)  path\n    0 B      0     0  -                    e/\n      -      2     0  -                    (total)\n" {
+	if err := WriteTotals(&b, Table, l, rows); err != nil || b.String() != "on disk  files  dirs  newest (UTC)         path\n    0 B      0     0  -                    e/\n      -      2     0  -                    (total)\n" {
 		t.Errorf("on disk: %v %q", err, b.String())
 	}
 }
@@ -202,17 +202,17 @@ func TestTotalsTable(t *testing.T) {
 		want string
 	}{
 		"local": {TotalsLayout{Local: true, Loc: cet}, "" +
-			"    size  files  dirs  last_modified (CET)  path\n" +
+			"    size  files  dirs  newest (CET)         path\n" +
 			"64.0 MiB      2     1  2026-07-02 00:00:00  archive/\n" +
 			"64.0 MiB      1     0  -                      archive/vm/\n" +
 			"64.0 MiB      3     5  2026-11-15 10:30:05  (total)\n"},
 		"allocated": {TotalsLayout{Local: true, Primary: totals.AllocatedBytes, Loc: cet}, "" +
-			" on disk  files  dirs  last_modified (CET)  path\n" +
+			" on disk  files  dirs  newest (CET)         path\n" +
 			"4.00 KiB      2     1  2026-07-02 00:00:00  archive/\n" +
 			"     0 B      1     0  -                      archive/vm/\n" +
 			"12.0 KiB      3     5  2026-11-15 10:30:05  (total)\n"},
 		"bucket": {TotalsLayout{Loc: time.UTC}, "" +
-			"    size  objects  last_modified (UTC)  prefix\n" +
+			"    size  objects  newest (UTC)         prefix\n" +
 			"64.0 MiB        2  2026-07-01 23:00:00  archive/\n" +
 			"64.0 MiB        1  -                      archive/vm/\n" +
 			"64.0 MiB        3  2026-11-15 09:30:05  (total)\n"},
@@ -234,7 +234,7 @@ func TestTableCounts(t *testing.T) {
 	}
 	rows := []totals.Prefix{{Objects: 60010, Size: 1, HasSize: true}}
 	var b bytes.Buffer
-	if err := WriteTotals(&b, Table, TotalsLayout{Loc: time.UTC}, rows); err != nil || b.String() != "size  objects  last_modified (UTC)  prefix\n 1 B   60,010  -                    (total)\n" {
+	if err := WriteTotals(&b, Table, TotalsLayout{Loc: time.UTC}, rows); err != nil || b.String() != "size  objects  newest (UTC)         prefix\n 1 B   60,010  -                    (total)\n" {
 		t.Fatalf("%v %q", err, b.String())
 	}
 	b.Reset()
@@ -254,7 +254,7 @@ func TestTableTotalAndUnreadable(t *testing.T) {
 	}
 	var b bytes.Buffer
 	l := TotalsLayout{Local: true, Loc: time.UTC, Total: `C:\t\photos`}
-	want := "size  files  dirs  last_modified (UTC)  path\n" +
+	want := "size  files  dirs  newest (UTC)         path\n" +
 		"   -      -     -  -                    locked/\n" +
 		"10 B      3     0  -                    ok/\n" +
 		"10 B      3     2  -                    C:\\t\\photos (total)\n"

@@ -12,7 +12,7 @@ swath du -d 1 media
 ```
 
 ```text
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
 64.8 MiB      2     0  2026-11-02 10:30:00  archive/
 6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
