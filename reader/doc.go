@@ -28,7 +28,8 @@
 // IsRefusal recognizes swath semantic errors and SeekParquet data refusals.
 //
 // The subpackage listing holds the contract of the questions swath answers
-// from a live source or an inventory: Page, Lookup, Walk and Summarize.
+// from a live source or an inventory: Page, Lookup, Walk and Summarize. The
+// subpackage view answers them from an opened Dataset.
 //
 // The swath dataset profile is documented in docs/dataset.md in the repository.
 package reader

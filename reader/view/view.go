@@ -1,0 +1,201 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package view
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"time"
+
+	seekparquet "github.com/varveio/seekparquet/go"
+
+	"github.com/varveio/swath/reader"
+	"github.com/varveio/swath/reader/listing"
+)
+
+// Inventory answers the four questions from one opened dataset. It is
+// immutable and safe for concurrent use. It does not own the dataset: the
+// caller closes the reader.Dataset after its last call.
+type Inventory struct {
+	sp *seekparquet.Dataset
+	// rows says how a row of the dataset's schema becomes an Entry.
+	rows rowShape
+	// base is every answer's Evidence, without its Stop.
+	base listing.Evidence
+	// provable: the evidence proves absence inside its scope (Unlocated
+	// is 0).
+	provable bool
+}
+
+// Open returns the inventory of d. It reads nothing. A dataset of versions
+// is refused with listing.ErrUnsupported, as is one whose manifest records
+// no scope; a manifest whose key is not the schema's unique key column is
+// a *reader.SemanticError.
+func Open(d *reader.Dataset) (*Inventory, error) {
+	m := d.Metadata()
+	spec, ok := reader.Schema(m.SchemaID)
+	if !ok {
+		return nil, fmt.Errorf("%w: schema id %q is not one swath writes", listing.ErrUnsupported, m.SchemaID)
+	}
+	if !spec.UniqueKeys {
+		return nil, fmt.Errorf("%w: %s lists versions, whose keys repeat", listing.ErrUnsupported, spec.ID)
+	}
+	if key := m.Manifest.Key; key.Column != spec.Key.Name || !key.Unique {
+		return nil, &reader.SemanticError{Kind: reader.KindSchema, Column: key.Column,
+			Err: fmt.Errorf("the manifest's key; %s's is the unique column %s", spec.ID, spec.Key.Name)}
+	}
+	scope, ok := scopeOf(m)
+	if !ok {
+		return nil, fmt.Errorf("%w: the manifest records no scope", listing.ErrUnsupported)
+	}
+
+	inv := &Inventory{sp: d.SeekParquet(), rows: shapeOf(spec.ID)}
+	sum := sha256.Sum256(m.Manifest.Manifest)
+	inv.base = listing.Evidence{
+		Origin:    listing.OriginInventory,
+		Manifest:  hex.EncodeToString(sum[:]),
+		Published: m.PublishedAt,
+		Scope:     scope,
+		Unlocated: unlocated(m.Coverage),
+	}
+	if c := m.Coverage; c != nil {
+		inv.base.Started, inv.base.Finished = c.ListingStartedAt, c.ListingFinishedAt
+	}
+	inv.provable = inv.base.Unlocated != nil && *inv.base.Unlocated == 0
+	return inv, nil
+}
+
+// scopeOf is the manifest's scope as a key prefix: empty for the whole
+// source. ok is false when the manifest does not state it.
+func scopeOf(m reader.Metadata) (scope []byte, ok bool) {
+	s := m.Scope
+	switch {
+	case s == nil || s.Kind == nil:
+		return nil, false
+	case *s.Kind == "whole":
+		return nil, true
+	case *s.Kind == "prefix" && s.Prefix != nil:
+		return []byte(*s.Prefix), true
+	}
+	return nil, false
+}
+
+// unlocated is the count of entries the listing may lack in its scope: its
+// unreadable entries, when it proves it reached the end of its scope with
+// no filter and no exclusion; nil otherwise.
+func unlocated(c *reader.Coverage) *int64 {
+	switch {
+	case c == nil || c.Complete == nil || c.StopReason == nil || c.Unreadable == nil:
+		return nil
+	case *c.StopReason != "end_of_scope" || *c.Unreadable < 0 || *c.Complete != (*c.Unreadable == 0):
+		return nil
+	case c.Filters == nil || len(c.Filters) != 0 || c.Exclusions == nil || len(c.Exclusions) != 0:
+		return nil
+	}
+	n := *c.Unreadable
+	return &n
+}
+
+// evidence is a copy of the inventory's evidence, the caller's to keep,
+// with stop.
+func (inv *Inventory) evidence(stop listing.StopReason) listing.Evidence {
+	e := inv.base
+	e.Started, e.Finished, e.Published = clone(e.Started), clone(e.Finished), clone(e.Published)
+	e.Scope = bytes.Clone(e.Scope)
+	e.Unlocated = clone(e.Unlocated)
+	e.Stop = stop
+	return e
+}
+
+// inScope reports whether every key at or under key lies in the
+// inventory's scope.
+func (inv *Inventory) inScope(key []byte) bool {
+	return bytes.HasPrefix(key, inv.base.Scope)
+}
+
+// errOutOfScope is the answer to a question outside the scope.
+var errOutOfScope = wrap(listing.ErrOutOfScope, "the key lies outside it")
+
+// wrap is an error of class, for reason.
+func wrap(class error, reason string) error {
+	return fmt.Errorf("%w: %s", class, reason)
+}
+
+// invalid is a request this package refuses.
+func invalid(format string, args ...any) error {
+	return wrap(listing.ErrInvalidRequest, fmt.Sprintf(format, args...))
+}
+
+// checkPrefix refuses a prefix of the wrong form: one holding a NUL, a
+// local one that is not empty or a directory key.
+func (inv *Inventory) checkPrefix(prefix []byte) error {
+	if bytes.IndexByte(prefix, 0) >= 0 {
+		return invalid("the prefix holds a NUL byte")
+	}
+	if inv.rows.local && len(prefix) > 0 && (prefix[len(prefix)-1] != '/' || prefix[0] == '/') {
+		return invalid("a local prefix is empty or a directory's key, relative to the root and ending in /")
+	}
+	return nil
+}
+
+// checkKey refuses a key of the wrong form: empty, holding a NUL, or a
+// local one that is not relative to the root.
+func (inv *Inventory) checkKey(key []byte) error {
+	switch {
+	case len(key) == 0:
+		return invalid("the key is empty")
+	case bytes.IndexByte(key, 0) >= 0:
+		return invalid("the key holds a NUL byte")
+	case inv.rows.local && key[0] == '/':
+		return invalid("a local key is relative to the root")
+	}
+	return nil
+}
+
+// checkBudget refuses a negative bound.
+func checkBudget(b listing.Budget) error {
+	if b.MaxEntries < 0 || b.MaxDuration < 0 || b.MaxHeldBytes < 0 || b.MaxValueBytes < 0 {
+		return invalid("a negative bound")
+	}
+	return nil
+}
+
+// valueBudget is SeekParquet's value budget for MaxValueBytes: -1, no
+// bound, for zero.
+func valueBudget(b listing.Budget) int64 {
+	if b.MaxValueBytes == 0 {
+		return -1
+	}
+	return b.MaxValueBytes
+}
+
+// errTimeBudget is the cause of a call's context ending at its
+// MaxDuration.
+var errTimeBudget = errors.New("view: the call's time budget ended")
+
+// withBudget bounds ctx by a call's MaxDuration, when it sets one.
+func withBudget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeoutCause(ctx, d, errTimeBudget)
+}
+
+// timeUp reports whether op, derived from ctx by withBudget, ended at its
+// time budget while ctx itself goes on.
+func timeUp(ctx, op context.Context) bool {
+	return ctx.Err() == nil && errors.Is(context.Cause(op), errTimeBudget)
+}
+
+func clone[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
