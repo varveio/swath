@@ -5,6 +5,11 @@ Notable changes per release. The human summary of the current release is in the
 
 ## Unreleased
 
+- Azure Blob: an `--include` with a literal leading prefix narrows the listing to that prefix, as on S3 and
+  GCS. A prefix the source URL cannot carry beside its SAS is not narrowed, and the report says so
+  (`invocation.narrowing` `provider_declined_prefix`). An Azure run with such an include that was
+  interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2).
+
 ## 0.4.0
 
 swath lists S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage and local or mounted

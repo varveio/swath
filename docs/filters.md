@@ -92,12 +92,17 @@ swath: --storage-class: a local tree has no storage classes
 
 ## What narrows the listing
 
-On S3 and GCS, when every include has a literal prefix (an anchored glob's text up to its first wildcard, a regex's `^literal`), swath lists only
+On S3, GCS and Azure Blob, when every include has a literal prefix (an anchored glob's text up to its first wildcard, a regex's `^literal`), swath lists only
 the longest prefix common to them. `--include 'logs/2026/0*/**'` on `s3://bucket` lists `logs/2026/0` and
 nothing else: the same rows, fewer requests. A glob without a `/`, or a regex without `^literal`, turns it
-off; excludes never change it. On Azure Blob an include does not reduce what is listed: swath lists the
-whole source and filters the rows, so put the prefix in the source URL (`az://acct/ctr/logs/2026/`) instead.
-Object-store exclusions do not change listing requests.
+off; excludes never change it. On Azure Blob the narrowed prefix goes into the source URL beside its SAS,
+and a prefix the URL cannot carry is not narrowed: a `?` in the prefix when the URL holds a SAS, or text
+after a `?` that would read as a SAS (`--include 'a\?sig=1/**'`). swath then lists the source as given and
+filters the rows, and the report says why. Object-store exclusions do not change listing requests.
+
+Narrowing changes the listed scope, which a dataset given to `--seed-from` must match: a dataset of
+`az://acct/ctr --include 'logs/**'` (scope `logs/`) seeds the same command, not `az://acct/ctr` without the
+include, and the reverse is refused too ([the cut file](dataset.md#the-cut-file)).
 
 Local and mounted trees also avoid traversing subtrees covered by recursive exclude globs, as described
 above. Their run report records the rule classification in `diagnostics.source.stats.pruning` and the directories
@@ -106,8 +111,9 @@ metadata, but it does not enter the directory, so errors below it are not report
 descendants.
 
 The run report says what happened in `invocation.narrowing`: `narrowed` (and `invocation.source` names the
-narrowed prefix), `include_without_prefix`, `no_longer_prefix` (the common prefix does not extend SOURCE's)
-or `provider_lists_root`. `output.rows_filtered` counts observed rows the filters dropped; descendants
+narrowed prefix), `include_without_prefix`, `no_longer_prefix` (the common prefix does not extend SOURCE's),
+`provider_lists_root` (a provider that only lists its root) or `provider_declined_prefix` (the source URL
+cannot carry the prefix, above). `output.rows_filtered` counts observed rows the filters dropped; descendants
 that were never visited are not counted in either `rows_fetched` or `rows_filtered`.
 
 ## Filtered datasets
