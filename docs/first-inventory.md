@@ -96,7 +96,7 @@ media-inventory: complete
   listed    2026-11-15 21:03:25 to 21:03:25 CET (0.0s)
   contents  12 entries, 101 MiB; keys "archive/" .. "videos/trip.mp4"
   coverage  nothing unreadable; no filters; no exclusions
-  storage   1 part, 4.05 KiB of Parquet (SeekParquet format 0 draft 1, schema swath/local-entries/v1)
+  storage   1 part, 4.05 KiB of Parquet (schema swath/local-entries/v1)
 ```
 
 `swath show` reads the manifest, not the rows. The first line is the verdict; then what was listed, when, what
