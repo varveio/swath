@@ -39,10 +39,10 @@ features:
 swath is an open-source command-line tool that lists object stores and filesystems in parallel. It reads
 listing metadata only and never changes what it lists.
 
-In one live run with `--workers 1024`, swath wrote a sorted Parquet inventory of 1.09 billion S3 objects in
-846 seconds (about 14 minutes) on one 32-vCPU VM; a separate count-only run of the same bucket, which wrote
-nothing, took 177 seconds ([how many workers to use](../docs/size-a-run.md#workers)).
-[How this was measured](../docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)
+In one live run with `--workers 1024`, swath 0.4.0 wrote a sorted Parquet inventory of 1.09 billion S3
+objects in 289 seconds (under 5 minutes) on one 32-vCPU VM; a separate count-only run of the same bucket on
+the same VM, which wrote nothing, took 188 seconds ([how many workers to use](../docs/size-a-run.md#workers)).
+[How this was measured](../docs/internals/measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)
 
 ## Download
 

@@ -18,7 +18,8 @@ the flags to change when its report says so, are in [Watch and tune a run](watch
 Start at the default, 64. When a listing at 64 takes longer than you want, the store does not throttle and the
 machine has cores and memory to spare, try 256. What more workers buy depends on the machine, the store and
 the output, so measure your own run: in the runs below a count (`swath du`) kept gaining above 256 on 16 and
-32 vCPUs, while a sorted dataset, whose output sets its pace, may gain nothing above 256. On a machine short of
+32 vCPUs, while a sorted dataset, whose output sets its pace, gained less; on 32 vCPUs the 0.4.0 release
+took longer at 2,048 workers than at 1,024. On a machine short of
 CPU or memory, keep the default or lower it: the ordering, spill and encoders of a sorted run are its limit
 there, not the listing. Lower it, too, when the store throttles at 64 (`progress.json`'s `limit` falls below
 `--workers`: [throttling](watch-a-run.md#throttling)).
@@ -28,10 +29,14 @@ The rule rests on these runs, each an observation on the stated machine and day,
 - At 64 workers a public bucket of 37 million objects was listed into a sorted dataset in 61 seconds on a
   4-vCPU VM, with 52 of the 64 requests in flight on average
   ([measurements](internals/measurements.md#a-public-bucket-for-the-home-page-noaa-gestofs-pds-2026-11-15)).
-- A live bucket of 1.09 billion objects, listed from one 32-vCPU VM in another cloud: at 64 workers neither a
-  count nor a sorted dataset finished within 40 minutes, and the count took 177 s at 1,024 workers. The sorted
-  dataset's runs at 256 and 1,024 workers, and where its output set the pace, are in the
-  [measurements](internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07).
+- A live bucket of 1.09 billion objects, listed from one 32-vCPU VM in another cloud. On a build of
+  2026-11-07, at 64 workers neither a count nor a sorted dataset finished within 40 minutes, and the count took
+  177 s at 1,024 workers; that build's sorted runs at 256 and 1,024 workers, and where its output set the
+  pace, are in the [measurements](internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07).
+  On the 0.4.0 release (2026-11-17) the sorted dataset took 289 s at 1,024 workers and 338 s at 2,048, and the
+  count 188 s at 1,024
+  ([measurements](internals/measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17));
+  no 256-worker run of the release is measured.
 - Through a test service answering in 50 ms, on lists of 20 million keys or more on a 16-vCPU machine, a count
   took 0.31 of its 64-worker time at 256 workers and 0.27 at 512, with 10 % more requests. A sorted dataset of
   143 million keys on 8 vCPUs took 258 s at 64 workers and 170 s at 256. On one core, sorted datasets of 130 to
