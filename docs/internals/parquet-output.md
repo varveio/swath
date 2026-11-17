@@ -240,6 +240,18 @@ warning once. A local file is replaced durably beside the manifest; a bucket's i
 manifest and the parts do not depend on it. A source that takes no prior (not `source.Seeded`: a local tree) gets
 no cut file (`writeCuts` returns at once); an `--overwrite` retires the replaced dataset's with its other entries.
 
+What the file holds follows from that. A cut falls only where a 1,024-row key page the writer filled ends,
+never where the next page continues a key's versions. With R rows a cut, it is the first such page end where the
+dataset's rows reach each multiple of R; R is the least power of two (1: every page end) that keeps the file
+within its bounds, 262,144 lines and 16 MiB. With keys of about 60 bytes that is every page end up to about 250
+million rows, then one cut about every 8,192 rows at 2 billion and every 131,072 at 30 billion, about 16 MB at
+most; longer keys double R sooner. A key holding a line feed cannot be a line: its rows count toward the next
+line, and a dataset whose last key holds one has no cut file. `--seed-from DIR` takes the file as its prior only
+when it is the dataset's own: every line counted, the cuts ascending from the first part's first key, the last
+cut the dataset's last key, each count positive, the counts summing to the manifest's rows, and every cut a key
+the run could list (valid UTF-8, within the provider's key length); otherwise it reads the parts' key page index
+([warm start](range-engine.md)).
+
 ```text
 out/
   data/part-00000.parquet ...   dense, zero-based, five digits (at most 100,000 parts); name order == ordinal

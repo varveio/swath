@@ -42,6 +42,20 @@ limit) live with the provider ([providers.md](providers.md)); the invariants I1â
 | **A frozen identity.** A resume refuses changed schema, writer recipe, part size, key cap or source identity (`*journal.MismatchError`) and a journal of a version it does not read (`*journal.VersionError`): this build writes and reads journal version 1; any other version is refused before recovery changes anything. The metadata readers (`swath show`, `--seed-from`) read a manifest whose `extensions.swath.version` is 1, within `dataset.ManifestLimits`, and refuse any other version or none; `Managed` recognizes any manifest of swath's. | `journal.Check`, a pure function; `journal.Version`. | `TestCheck`, `TestResumeChecksIdentity`, `TestDurableVersions`, `TestInteriorCorruptionFailsClosed`, `TestManifestShape` |
 | **Shutdown order.** On cancellation the drainer stops, wakes all waiters, waits for the workers, then the router closes and waits for its encoders; then the durable spill's K callback is detached and its flusher drained and joined, its ledger closed (its directory removed only after a commit's manifest); an interrupted run (a signal, `--max-duration`, `--stall-timeout`, `--spill-wait-timeout`) gets 15 s, then the process exits with its code, at most 5 s later whatever blocks (diagnostics to stderr are bounded and dropped). | `order.Run`, `listing` (`closeCache`), `cmd/swath`. | cancellation tests, `TestDurableShutdownOrder` |
 
+## Version identifiers
+
+Who changes each identifier, and what forces a new value. The first three reach a dataset's readers, and the
+dataset format states their rules; the last two are private to swath and its resumes. The tool's release
+version moves independently of all of them.
+
+| Identifier | May change without a new value | Forces a new value | Who decides |
+|---|---|---|---|
+| SeekParquet `format_version` / `draft_revision` | [the dataset format](../dataset.md#what-stays-stable-across-versions) | [the dataset format](../dataset.md#what-stays-stable-across-versions) | SeekParquet maintainers, through proposal and conformance review |
+| `schema_id` | [the dataset format](../dataset.md#what-stays-stable-across-versions) | [the dataset format](../dataset.md#what-stays-stable-across-versions) | swath maintainers, with the consumers |
+| `extensions.swath.version` | [the dataset format](../dataset.md#what-stays-stable-across-versions) | [the dataset format](../dataset.md#what-stays-stable-across-versions) | swath maintainers |
+| Writer recipe (`parquetout.Recipe`, in the resume identity) | changes that keep its byte-reproduction promise | a change to how a part is reproduced byte for byte | swath writer maintainers |
+| Journal version (private to a run) | changes that existing recovery reads safely | a representation existing recovery cannot read | swath recovery maintainers |
+
 ## The invariants I1â€“I12
 
 This table owns the load-bearing invariants. Every rule above exists to keep one of them true; a change that
