@@ -32,9 +32,9 @@ gate: it exists so a suspected flake is measured by repetition instead of being 
 `release.yml` ships the Go implementation. It does not trust the `ci.yml`
 run of the tagged commit to have produced the bytes it ships, but it does rely on that commit having
 passed full Go validation. It separately verifies that the tag is an ancestor of `main`, that the
-tagged `go.mod` requires the nested modules at their tags of the same version (`reader/vX.Y.Z`,
-`objfile/vX.Y.Z`, pushed before it) with no `replace`, and that those tags hold the tagged
-commit's `reader/` and `objfile/` trees, and requires
+tagged `go.mod` carries no `replace`, and that the nested-module tags it requires (`reader/vX.Y.Z`,
+`objfile/vX.Y.Z`, each at the version of that module's last change) hold the tagged commit's
+`reader/` and `objfile/` trees, and requires
 `go-full-gate` from the exact commit's main push run. It then builds the root module as an
 outside project does (`GOWORK=off` for the whole workflow, a strict `go mod tidy -diff`), reruns
 `go vet` and the race tests on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's

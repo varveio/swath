@@ -5,28 +5,35 @@
 help:
     @just --list
 
-# A release goes in dependency order, in three steps, none of which commits to main or pushes:
+# A release tags the root module, vVERSION; pushing that tag starts the release workflow. The root's
+# go.mod requires the nested modules (reader, objfile) by version, and each required tag must hold
+# that module's code at the release commit. The nested modules keep their own versions: a release
+# with no nested change is one step,
 #
-#   just release-modules VERSION  tag the nested modules at main's HEAD (reader/vVERSION,
-#                                 objfile/vVERSION); push those tags;
+#   just release VERSION          check the root as an outside project builds it and tag it vVERSION;
+#
+# and a release where a nested module changed since the tag go.mod requires releases it first:
+#
+#   just release-modules VERSION  tag each changed nested module at main's HEAD (DIR/vVERSION);
+#                                 push those tags;
 #   just release-prep VERSION     on a new branch, point the root's go.mod at them and check the
 #                                 root as an outside project builds it; push it, merge its pull
 #                                 request;
-#   just release VERSION          at the merged commit, check again and tag the root (vVERSION);
-#                                 pushing that tag starts the release workflow.
+#   just release VERSION          at the merged commit, as above.
 #
-# VERSION is X.Y.Z or a X.Y.Z-rc.N release candidate; no other pre-release identifiers and no
-# build metadata, matching what the release workflow enforces. The tag is the version's one
-# source: the release workflow stamps it into every binary (build.sh, $SWATH_VERSION), the archive
-# names and the image tags, so there is no version file to bump. Each step runs on a clean checkout
-# of main whose HEAD is on origin/main. An -rc.N release publishes only its own container tags and
-# a GitHub pre-release, and is NOT promoted: the final version is a fresh build. See RELEASING.md.
+# None of them commits to main or pushes. VERSION is X.Y.Z or a X.Y.Z-rc.N release candidate; no
+# other pre-release identifiers and no build metadata, matching what the release workflow enforces.
+# The tag is the version's one source: the release workflow stamps it into every binary (build.sh,
+# $SWATH_VERSION), the archive names and the image tags, so there is no version file to bump. Each
+# step runs on a clean checkout of main whose HEAD is on origin/main. An -rc.N release publishes only
+# its own container tags and a GitHub pre-release, and is NOT promoted: the final version is a fresh
+# build. See RELEASING.md.
 
-# Release step 1: tag the nested modules (reader/vVERSION, objfile/vVERSION) at main's HEAD
+# Tag each nested module that changed since the tag go.mod requires (DIR/vVERSION) at main's HEAD
 release-modules VERSION: (_release-guard VERSION)
     #!/usr/bin/env bash
     set -euo pipefail
-    tags=$(./scripts/ci/verify-release-source.sh module-tags "v{{VERSION}}")
+    tags=$(just _changed-tags "{{VERSION}}")
     tags=${tags//$'\n'/ }
     just _require-new-tags $tags
     ./scripts/ci/verify-release-notes.sh "{{VERSION}}" docs/ops/dev/RELEASE_NOTES.md
@@ -39,7 +46,7 @@ release-modules VERSION: (_release-guard VERSION)
     echo "  git push --atomic origin $tags"
     echo "  just release-prep {{VERSION}}"
 
-# Release step 2: a branch whose one commit points go.mod at the pushed nested tags
+# A branch whose one commit points go.mod at the pushed tags of release-modules
 release-prep VERSION: (_release-guard VERSION)
     #!/usr/bin/env bash
     set -euo pipefail
@@ -47,20 +54,18 @@ release-prep VERSION: (_release-guard VERSION)
     if git rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
         echo "error: branch $branch already exists" >&2; exit 2
     fi
-    just _fetch-module-tags "{{VERSION}}"
+    tags=$(just _changed-tags "{{VERSION}}")
+    tags=${tags//$'\n'/ }
+    just _fetch-tags $tags
     git switch --quiet -c "$branch"
-    for tag in $(./scripts/ci/verify-release-source.sh module-tags "v{{VERSION}}"); do
+    for tag in $tags; do
         path=$(awk '$1 == "module" { print $2; exit }' "${tag%/v*}/go.mod")
         GOWORK=off go get "$path@v{{VERSION}}"
     done
     GOWORK=off go mod tidy
-    if git diff --quiet -- go.mod go.sum; then
-        echo "error: go.mod already requires the nested modules at v{{VERSION}}; run: just release {{VERSION}}" >&2
-        exit 2
-    fi
     just _outside-build
-    git commit --quiet -s -m "release: the root module requires the nested modules at v{{VERSION}}" -- go.mod go.sum
-    ./scripts/ci/verify-release-source.sh modules HEAD refs/tags/ "v{{VERSION}}"
+    git commit --quiet -s -m "release: the root module requires $tags" -- go.mod go.sum
+    ./scripts/ci/verify-release-source.sh modules HEAD refs/tags/
     echo
     echo "Committed $(git rev-parse --short HEAD) on $branch. Push it and open its pull request;"
     echo "once it is merged and main's CI is green at the merge commit, tag the root there:"
@@ -68,13 +73,15 @@ release-prep VERSION: (_release-guard VERSION)
     echo "  gh pr create --fill"
     echo "  just release {{VERSION}}"
 
-# Release step 3: check the root module as an outside project builds it, and tag it vVERSION
+# Check the root module as an outside project builds it, and tag it vVERSION
 release VERSION: (_release-guard VERSION)
     #!/usr/bin/env bash
     set -euo pipefail
     just _require-new-tags "v{{VERSION}}"
-    just _fetch-module-tags "{{VERSION}}"
-    ./scripts/ci/verify-release-source.sh modules HEAD refs/tags/ "v{{VERSION}}"
+    just _fetch-tags $(./scripts/ci/verify-release-source.sh required-tags HEAD)
+    ./scripts/ci/verify-release-source.sh modules HEAD refs/tags/ || {
+        echo "error: if a nested module changed, release it first: just release-modules {{VERSION}}" >&2; exit 2
+    }
     just _outside-build
     ./scripts/ci/verify-release-notes.sh "{{VERSION}}" docs/ops/dev/RELEASE_NOTES.md
     git tag -a "v{{VERSION}}" -m "swath v{{VERSION}}"
@@ -109,6 +116,20 @@ _release-guard VERSION:
         echo "error: HEAD is not on origin/main; push or pull first -- the release workflow refuses a tag outside main" >&2; exit 2
     fi
 
+# The tags DIR/vVERSION of the nested modules whose code changed since the tag go.mod requires, one
+# per line; fails when none did.
+_changed-tags VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _fetch-tags $(./scripts/ci/verify-release-source.sh required-tags HEAD)
+    dirs=$(./scripts/ci/verify-release-source.sh changed HEAD refs/tags/)
+    if [[ -z "$dirs" ]]; then
+        echo "error: no nested module changed since the tag go.mod requires; run: just release {{VERSION}}" >&2; exit 2
+    fi
+    for dir in $dirs; do
+        echo "$dir/v{{VERSION}}"
+    done
+
 # Fails unless none of TAGS exists, locally or on origin.
 _require-new-tags +TAGS:
     #!/usr/bin/env bash
@@ -122,17 +143,17 @@ _require-new-tags +TAGS:
         fi
     done
 
-# Fetches the nested modules' tags of VERSION from origin; fails if one is missing there or a local
-# tag of that name names another object.
-_fetch-module-tags VERSION:
+# Fetches TAGS from origin; fails if one is missing there or a local tag of that name names
+# another object.
+_fetch-tags +TAGS:
     #!/usr/bin/env bash
     set -euo pipefail
     refspecs=()
-    for tag in $(./scripts/ci/verify-release-source.sh module-tags "v{{VERSION}}"); do
+    for tag in {{TAGS}}; do
         refspecs+=("refs/tags/$tag:refs/tags/$tag")
     done
     git fetch --quiet --no-tags origin "${refspecs[@]}" || {
-        echo "error: the nested modules' tags of v{{VERSION}} must be on origin first: just release-modules {{VERSION}}, then push them" >&2
+        echo "error: these tags must be on origin first: {{TAGS}}" >&2
         exit 2
     }
 
