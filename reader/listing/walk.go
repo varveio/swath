@@ -7,14 +7,17 @@ import "time"
 
 // Budget bounds the work of one Walk or Summarize. A call that reaches a
 // bound stops without an error: Evidence.Stop names the bound, and every
-// extent a live call did not finish comes back as an Unread of class
-// UnreadBudget. A negative bound is ErrInvalidRequest.
+// extent the call did not finish comes back as an Unread of class
+// UnreadBudget: a live call's entries, directories and key intervals, an
+// inventory's key intervals. A negative bound is ErrInvalidRequest.
 type Budget struct {
 	// MaxEntries bounds the entries read. A walk counts the entries it
 	// hands to emit, the prefix's own entry included, KindPrefix entries
 	// and Unread excluded. Workers stop at the next batch boundary, so a
 	// walk may deliver up to one batch per worker past the bound, and a
-	// total it cuts short stays a lower bound. Zero sets no bound.
+	// total it cuts short stays a lower bound. An inventory's Summarize
+	// counts the rows it reads at and under its targets, each once, the
+	// entries at exact targets' keys included. Zero sets no bound.
 	MaxEntries int64
 	// MaxDuration bounds the call's time, including the time emit takes.
 	// Zero sets no bound. Unlike a deadline on ctx, which ends the call
@@ -26,13 +29,20 @@ type Budget struct {
 	// lifted, and a directory too wide for it ends as an UnreadListing of
 	// class UnreadBudget.
 	MaxHeldBytes int64
+	// MaxValueBytes bounds the compressed value pages an inventory reads
+	// to decode entries, count and sum (SeekParquet's value budget), in a
+	// Summarize or a page's child totals. Reaching it stops the
+	// call with StopValueBudget. A live source reads no such pages and
+	// ignores it. Zero sets no bound.
+	MaxValueBytes int64
 }
 
 // WalkRequest asks for every entry at or under a prefix.
 type WalkRequest struct {
 	// Prefix is the walk's scope: the keys that begin with it, its own
-	// entry included when it exists. On a local source it is empty, for
-	// the root, or a directory's key.
+	// entry included when it exists. On an object store it is any key
+	// prefix; on a local source it is empty, for the root, or a
+	// directory's key.
 	Prefix []byte
 	// MaxDepth bounds the levels below Prefix the walk reads: 1 reads
 	// Prefix's own entry and its children. Zero reads every level. A walk

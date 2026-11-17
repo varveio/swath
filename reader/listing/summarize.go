@@ -8,8 +8,8 @@ import "time"
 // Target is one thing to summarize: the entry at exactly Key, or, with
 // Subtree, every entry whose key begins with Key, Key's own included. An
 // object at exactly "a/" and everything under "a/" are different targets.
-// On a local source a subtree's Key is empty, for the root, or a
-// directory's key.
+// On an object store a subtree's Key is any key prefix; on a local source
+// it is empty, for the root, or a directory's key.
 type Target struct {
 	// Key is the target's key.
 	Key []byte

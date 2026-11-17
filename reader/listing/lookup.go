@@ -54,7 +54,9 @@ type LookupResult struct {
 	State LookupState
 	// Entry is the entry at the key when State is LookupPresent; nil
 	// otherwise. A local key whose last component is a symbolic link is
-	// present, as a KindSymlink.
+	// present, as a KindSymlink. A local key without a trailing "/" also
+	// names a directory, whose Entry has its directory key ("a" answers
+	// with "a/"); a key ending in "/" names a directory only.
 	Entry *Entry
 	// Reason says why State is LookupUnknown: an error matching one of
 	// the error classes where one applies, such as ErrAuth for an access
