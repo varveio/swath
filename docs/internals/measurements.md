@@ -433,8 +433,9 @@ image as root under `/usr/bin/time -v`, with the disk's usage sampled every 5 s.
 | Go 0.4.0, count (`du -d 0`), 1,024 workers | 0 | 188 | 1,091,741,237 | 1,118,054 (1.02) | 0 / 0 | 1.3 GB | 3,982 | – | – | – |
 
 Wall, peak RSS and CPU are `/usr/bin/time -v`'s (GB here are 10^9 bytes); objects, requests, retries and
-throttles are each tool's report's. Java's report counts no retries; in each Java arm it recorded one attempt
-timeout and no slowdown, 5xx or network throttle event. Disk peak is the most the work filesystem held above
+throttles are each tool's report's. Java's JSON report has no total retry counter: in each Java arm its stderr
+printed `throttled 0 · retried 1 · errors 0`, and its report recorded one attempt timeout and no slowdown, 5xx
+or network throttle event. Disk peak is the most the work filesystem held above
 its level before the arm, in the 5 s samples; the dataset is the published output.
 
 - **Go, 1,024 workers.** The last listing page came at 196 s (`timings.provider_finished_at`); the tail after
@@ -445,16 +446,17 @@ its level before the arm, in the 5 s samples; the dataset is the published outpu
   active 1,122 of 2,048 (peak 2,035 in flight), split depth 55, 32 encoders, 16 segment workers,
   `encoder_wait` 57 s, `budget_wait` 0, spill peak 32.5 GB. CPU averaged 21.1 cores. The 49 s it lost to the
   1,024-worker arm are the tail's (136 s against 87 s).
-- **Java, 1,024 / 2,048.** Listing 306 / 303 s, then the merge 336 / 327 s (`sort.merge_ms`); in flight
-  average 342 / 625, peak 1,024 / 2,048; CPU averaged 13.3 / 15.2 cores. Doubling the concurrency shortened
-  neither the listing nor the merge, and peak RSS went from 8.4 to 17.1 GB.
+- **Java, 1,024 / 2,048.** Listing 305.9 / 302.7 s, then the merge 335.7 / 327.3 s (`sort.merge_ms`): little
+  change between the two runs, one run each. In flight average 342 / 625, peak 1,024 / 2,048; CPU averaged
+  13.3 / 15.2 cores; peak RSS 8.4 / 17.1 GB.
 - **Count.** Mean active 997 of 1,024, split depth 55; 5.8M keys/s over the wall.
 - **Against the earlier records.** Java 0.3.2 at 1,024: 666 s here, 654 s in the scale study. Go at 1,024 on
   `bf5e6d52` (2026-11-07, table above): sorted 846 s with a peak RSS of 2.2 GB and 5 encoders; count 177 s.
 
 One run per arm, cross-cloud: an observation on that VM and that hour, not a rate. The arms ran in a fixed
-order, not interleaved. The object counts differ by a few thousand between arms because the bucket grows; each
-is the tool's own count for its run. The datasets were deleted after each arm and not compared. Why the Go tail
+order, not interleaved. The object counts increased from each arm to the next, from 1,091,734,257 in the first to
+1,091,741,237 in the last (6,980 apart), consistent with a bucket that grows; each is the tool's own count for
+its run. The datasets were deleted after each arm and not compared with each other. Why the Go tail
 took longer at 2,048 workers than at 1,024 is not established by this run.
 
 ### Workers, one core and the study harness (through the fake)
