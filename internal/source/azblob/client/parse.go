@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 
@@ -47,16 +48,31 @@ func (p *ListOutput) continues(sent string) error {
 	return nil
 }
 
-// errorDocument reads code and message from the bounded XML body, stripping
-// its BOM. XML character decoding repairs azcore's headerless code parsing,
-// which does not read CDATA or entity references.
+// errorDocument reads code and message from the bounded body, stripping
+// its BOM: an XML error document, else a JSON one's code, found where
+// azcore finds it ({"error": {...}}, {"odata.error": {...}} or the top
+// level). XML character decoding repairs azcore's headerless code
+// parsing, which does not read CDATA or entity references.
 func errorDocument(body []byte) (code, message string) {
+	body = bytes.TrimPrefix(body, bom)
 	var w struct {
 		Code    string `xml:"Code"`
 		Message string `xml:"Message"`
 	}
-	if xml.Unmarshal(bytes.TrimPrefix(body, bom), &w) != nil {
+	if xml.Unmarshal(body, &w) == nil {
+		return w.Code, w.Message
+	}
+
+	var doc map[string]any
+	if json.Unmarshal(body, &doc) != nil {
 		return "", ""
 	}
-	return w.Code, w.Message
+	for _, k := range []string{"error", "odata.error"} {
+		if inner, ok := doc[k]; ok {
+			doc, _ = inner.(map[string]any)
+			break
+		}
+	}
+	code, _ = doc["code"].(string)
+	return code, ""
 }

@@ -505,10 +505,10 @@ func TestRedactedRefusal(t *testing.T) {
 	}
 }
 
-// TestSDKLogScrubbed: with the SDK's log on (as AZURE_SDK_GO_LOGGING
-// turns it on), an error answer whose body quotes the SAS reaches the log
-// scrubbed of it.
-func TestSDKLogScrubbed(t *testing.T) {
+// TestSDKLogWithheld: with the SDK's log on (as AZURE_SDK_GO_LOGGING
+// turns it on), an error answer whose body quotes the SAS, as sent or as
+// an XML entity, reaches the log without its body.
+func TestSDKLogWithheld(t *testing.T) {
 	var logged strings.Builder
 	azlog.SetListener(func(e azlog.Event, msg string) {
 		if e == azlog.EventResponseError {
@@ -517,7 +517,9 @@ func TestSDKLogScrubbed(t *testing.T) {
 	})
 	t.Cleanup(func() { azlog.SetListener(nil) })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		echoError(w, r, http.StatusForbidden, "AuthenticationFailed")
+		w.Header().Set(headerErrorCode, codeAuthFailed)
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, "<Error><Code>AuthenticationFailed</Code><Message>%s sig&#61;UnexpectedSecret</Message></Error>", r.URL.RawQuery)
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 1}})
@@ -528,8 +530,8 @@ func TestSDKLogScrubbed(t *testing.T) {
 	if _, err := c.List(context.Background(), &ListInput{Container: "c"}); objhttp.Classify(err) != objhttp.ClassAuth {
 		t.Fatalf("class %q: %v", objhttp.Classify(err), err)
 	}
-	if !strings.Contains(logged.String(), "AuthenticationFailed") || sasLeak(logged.String()) != "" {
-		t.Fatalf("SDK log: %q", logged.String())
+	if got := logged.String(); !strings.Contains(got, "AuthenticationFailed") || sasLeak(got) != "" || strings.Contains(got, "UnexpectedSecret") {
+		t.Fatalf("SDK log: %q", got)
 	}
 }
 

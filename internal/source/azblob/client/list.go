@@ -49,8 +49,8 @@ package client
 //     TestArrowColumnTypes). Other columns may have any type: swath does
 //     not read them, so a change there does not fail a listing.
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
-//     (TestRedactedRefusal) and out of an error answer's body before the
-//     SDK's own log can quote it (scrubbed, TestSDKLogScrubbed). The
+//     (TestRedactedRefusal), and an error answer's body kept from the SDK,
+//     whose own log would quote it (withheld, TestSDKLogWithheld). The
 //     command also turns that log off at startup (package command),
 //     whatever AZURE_SDK_GO_LOGGING says.
 //   - merge: the SDK returns a hierarchy page's blobs and prefixes as two
@@ -128,7 +128,7 @@ func (c *Client) services(bodyCap int64) error {
 		opt := &service.ClientOptions{ClientOptions: azcore.ClientOptions{
 			Transport:       &h,
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
-			PerCallPolicies: []policy.Policy{pin{}, scrubbed{c}},
+			PerCallPolicies: []policy.Policy{pin{}, withheld{}},
 			Telemetry:       policy.TelemetryOptions{ApplicationID: buildinfo.UserAgent()}, // swath's token, then the SDK's
 		}}
 		var svc *service.Client
@@ -335,7 +335,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error, container string) error {
 	u := s.safeURL(c, container)
 	if re, ok := errors.AsType[*azcore.ResponseError](err); ok && re.RawResponse != nil {
-		return c.responseError(re.RawResponse, re.ErrorCode, s.answer, u)
+		return c.responseError(re.RawResponse, s.answer, u)
 	}
 	if tl, ok := errors.AsType[*objhttp.TooLargeError](err); ok {
 		return fmt.Errorf("%w: a listing page past %d bytes", ErrBodyCap, tl.Limit)
@@ -615,7 +615,7 @@ func xmlEnvelope(body []byte) error {
 // whether a 200 passed the Guard to the SDK.
 type sent struct {
 	objhttp.Capture
-	answer []byte // an error answer's body as received, kept by scrubbed
+	answer []byte // an error answer's body, kept by withheld
 }
 
 type sentKey struct{}
@@ -657,15 +657,15 @@ func (pin) Do(req *policy.Request) (*http.Response, error) {
 	return req.Next()
 }
 
-// scrubbed is the per-call policy that scrubs the SAS out of an answer the
-// SDK makes an error of (any but a 200) before the SDK reads it: azcore
-// writes that error, its body quoted, to the log AZURE_SDK_GO_LOGGING
-// turns on. The body as received goes to the attempt's sent, for
-// responseError, which scrubs what it decodes. The Guard below has the
-// body in memory, bounded.
-type scrubbed struct{ c *Client }
+// withheld is the per-call policy that keeps the body of an answer the
+// SDK makes an error of (any but a 200) from the SDK: azcore quotes that
+// body, however it encodes the SAS, in the log AZURE_SDK_GO_LOGGING turns
+// on. The body goes to the attempt's sent, for responseError, which reads
+// the code the SDK would have and scrubs it. The Guard below has the body
+// in memory, bounded.
+type withheld struct{}
 
-func (p scrubbed) Do(req *policy.Request) (*http.Response, error) {
+func (withheld) Do(req *policy.Request) (*http.Response, error) {
 	resp, err := req.Next()
 	if err != nil || resp.StatusCode == http.StatusOK {
 		return resp, err
@@ -675,6 +675,6 @@ func (p scrubbed) Do(req *policy.Request) (*http.Response, error) {
 	if s, ok := req.Raw().Context().Value(sentKey{}).(*sent); ok {
 		s.answer = body
 	}
-	resp.Body = io.NopCloser(strings.NewReader(p.c.scrub(string(body))))
+	resp.Body = http.NoBody
 	return resp, err
 }
