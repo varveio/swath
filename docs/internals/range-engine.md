@@ -433,7 +433,7 @@ resume state in provider options. The registered source exposes it through `keyr
 
 `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root
 is one range `(K, ⊤]`, split as on a fresh run. The engine chooses K's longest accepted start bound and drops
-rows through K. Group mode drops every version of K, across pages. `source` `TestRegisteredRestart` checks
+rows through K. Group mode drops every version of K, across pages. `cli` `TestRegisteredRestart` checks
 remaining keys and complete version groups through registry opening; engine resume and crash tests cover
 range tiling and recovery ([durability.md](durability.md)).
 
