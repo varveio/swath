@@ -18,7 +18,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR: main module selected; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(remote-crash)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
-| Release gate | on the tag SHA: the race shards of the main module, every one on amd64, and `go vet`, the shard check and the race tests of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests (SHARD)`, `go-tests (vet-reader)`, `build` |
+| Release gate | on the tag SHA, with the workspace off: the race shards of the main module, every one on amd64, and the main module's build and strict `go mod tidy -diff` as an outside project, `go vet`, the shard check and the race tests of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests (SHARD)`, `go-tests (vet-reader)`, `build` |
 | Release image smoke | the pushed lister digest lists a public S3 prefix over HTTPS, reads the dataset back with DuckDB and resumes it as a no-op; the replay digest serves it | a pushed `v*` tag, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
@@ -81,16 +81,17 @@ suites for changed modules and their dependants, not a guessed subset of individ
 
 | Changed input | Selected Go modules / tiers |
 |---|---|
-| `reader/**` | reader and main (main imports reader via a local replacement) |
+| `reader/**` | reader and main (main builds the local reader through `go.work`) |
 | `objfile/**` | object-file module; main only if a local module dependency is added |
 | `cmd/**`, `internal/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
 | Pages under `docs/` (`docs/**/*.md`) but the light ones below and the provider evidence | the [docs tier](#docs-tier) (`go-docs`) alone; with a main-module input, main instead, whose race shards run the same tests |
 | Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
 | Provider evidence (`docs/replay-provider-*`) | main and the fixture tier (the fixtures are written from it, and client tests read it directly) |
+| `go.work` (the workspace joining the three modules) | main, reader and object-file module, with platforms and images |
 | Shared workflows, actions, CI scripts, toolchain changes, unknown ownership or `ci:full` label | every module and tier |
 
-Dependency closure follows local module references, including test dependencies and replacements.
+Dependency closure follows local module references (a `require` of a nested module's path), including test dependencies.
 A new or removed nested module fails selection until its jobs and ownership are updated. Shared cache
 keys do not create dependency edges. Changing an independent module's dependencies does not select
 unrelated modules. Module dependency changes do request all platform tests for the selected modules;
@@ -142,19 +143,19 @@ runs the tier and prints its command; `UPDATE=1` with that command rewrites the 
 
 | Job | Runs | Runner |
 |---|---|---|
-| `go-lint` | `scripts/ci/check-spdx.sh` (every tracked `.go` file starts with the license header), `go test ./docs` (Markdown links and anchors, and the [docs tier](#docs-tier)'s guard), `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -diff` (`go.mod` and `go.sum` match the imports), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
+| `go-lint` | `scripts/ci/check-spdx.sh` (every tracked `.go` file starts with the license header), `go test ./docs` (Markdown links and anchors, and the [docs tier](#docs-tier)'s guard), `gofmt -l .` (must be empty), `go vet ./...`, `go mod tidy -e -diff` (`go.mod` and `go.sum` match the imports; `-e` because tidy reads the published nested modules, not the workspace's, [CI](../ops/dev/CI.md#go-jobs)), `scripts/ci/go-race-shards.sh --self-test` and `--check` | ubuntu-latest |
 | `go-docs` | `scripts/ci/go-docs-tests.sh`: `go test -count=1 -v -run '^TestDocs'` on the packages whose tests import `./docs` ([docs tier](#docs-tier)); its steps skip unless the docs tier is selected | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a selected main module, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/listing` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
 | `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
-| `go-objfile`, `go-reader` | in the nested module's directory (`objfile`, `reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
+| `go-objfile`, `go-reader` | in the nested module's directory (`objfile`, `reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK in its packages or module graph) and `CGO_ENABLED=0` builds for the five targets. `go-reader` runs with `GOWORK=off`: in the workspace, `go list -m all` is the graph of all three modules, cloud SDKs included, so run the reader's tests locally the same way | ubuntu-latest |
 | `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest for escalated PRs, main and dispatch |
 | `go-xos (windows-latest, LEG)` | full platform runs on Windows, one leg per row of the [Windows legs](#windows-legs): `go test -count=1 -timeout 25m` once per race shard of the leg; the leg holding `rest` also runs `go vet ./...` and the selected nested modules | windows-latest for escalated PRs, main and dispatch |
 | `go-fixtures` | `go run ./bench/replay/fixtures`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
-version `go.mod` names, and two caches. DEPS below is one hash of the `go.mod` and `go.sum` of all three
-modules (the root, `objfile`, `reader`).
+version `go.mod` names, and two caches. DEPS below is one hash of `go.work` and of the `go.mod` and `go.sum`
+of all three modules (the root, `objfile`, `reader`).
 
 | Cache | Path | Key | Restores from |
 |---|---|---|---|
@@ -174,9 +175,9 @@ runs `go mod download all` in all three modules before it can save one: the jobs
 graphs (the reader has no cloud SDK), and the first job to save would otherwise freeze only what it needed,
 which an exact hit never repairs. `all`, not the build list alone: `go mod tidy -diff` in `go-lint` also loads
 the modules only dependencies' tests import (`github.com/google/go-cmp`, for protobuf's). The download runs
-on a copy of the three modules' `go.mod` and `go.sum` in the repository layout (the root module replaces the
-reader with `./reader`, resolved relative to it), since it adds the hashes it fetches to `go.sum` and the
-checkout must stay as committed for `go mod tidy -diff`. It is tried three times, 20 s apart. A job that fails
+on a copy of the three modules' `go.mod` and `go.sum` without `go.work` (each module downloads its own graph,
+the root's with the published `reader` and `objfile` it requires), since it adds the hashes it fetches to
+`go.sum` and the checkout must stay as committed for `go mod tidy -diff`. It is tried three times, 20 s apart. A job that fails
 saves nothing.
 
 Retention: `cache-maintenance.yml` runs [`scripts/ci/cache-prune.sh`](../../scripts/ci/cache-prune.sh)
@@ -405,9 +406,10 @@ before and after the change when it fixes a flake, as #300 does.
 ### Release
 
 `release.yml` runs on a `v*` tag and ships this implementation: `source` (release guard self-tests, tag SHA and
-`main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (one leg per
+`main` ancestry, the tagged `go.mod`'s requirements of the nested modules' tags, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (one leg per
 [race shard](#race-shards) at the tag, every one on amd64, each shard's `-json` stream the
-`go-race-release-SHARD` artifact, and a `vet-reader` leg: `go vet` of the main and reader modules,
+`go-race-release-SHARD` artifact, and a `vet-reader` leg: the main module's outside-project build
+(`go build ./...`, `go mod tidy -diff`; the workflow sets `GOWORK=off`), `go vet` of the main and reader modules,
 `go-race-shards.sh --check` and the race tests of `reader`; its legs' times are in
 [measurements](measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)) and `build` (`scripts/ci/release-assets.sh
 build`: `build.sh` for the five targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64

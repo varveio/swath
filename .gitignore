@@ -55,6 +55,10 @@ site/node_modules/
 site/.vitepress/cache/
 site/.vitepress/dist/
 
+# Checksums the go command writes when it loads the whole workspace graph (`go mod download`,
+# `go list -m all`); builds and tests need none beyond the three go.sum files.
+/go.work.sum
+
 # Go build output (build.sh -o swath, cross builds -o swath-<os>-<arch>, Windows .exe)
 /swath
 /swath-*

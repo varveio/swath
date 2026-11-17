@@ -175,6 +175,10 @@ github.com/twpayne/go-geom v1.7.0 h1:zMHTHNlenoHAc2ZSiHFh7SMoG0Wdw8gF0orBnrBhfjE
 github.com/twpayne/go-geom v1.7.0/go.mod h1:y9Q2YcKKaC2PHXwtRvwEunOPx5Oa+U8aAxPmFvscROk=
 github.com/varveio/seekparquet/go v0.2.0 h1:csr+T//8LlaqURWUywpUKxb59MtmN5vItj1URhccMx8=
 github.com/varveio/seekparquet/go v0.2.0/go.mod h1:g5nssi9SiT83LbIA2P225aJbJUS97rarnQKQ8WzysXc=
+github.com/varveio/swath/objfile v0.4.0 h1:8aO7keMyQ/25o1oKq6SMcLi2UPvO4QyUSdjgefGPlJ0=
+github.com/varveio/swath/objfile v0.4.0/go.mod h1:DZqWTlQIeKX09bA61HPUeMSuLIN8Qs4/qkqfZ9BlsQA=
+github.com/varveio/swath/reader v0.4.0 h1:YsJeKfvSkYSWMszdojCg0DR7qgWLfnrQUg5Q9Qg6VcM=
+github.com/varveio/swath/reader v0.4.0/go.mod h1:BFBnwRWgFMpAtMzgMGFOjXoZ7FZ+4ZAft04NF6TNK38=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 github.com/zeebo/assert v1.3.0 h1:g7C04CbJuIDKNPFHmsk4hwZDO5O+kntRxzaUoNXj+IQ=

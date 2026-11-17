@@ -25,16 +25,16 @@ runs:
         go-version-file: go.mod
         cache: false
 
-    # deps fingerprints the dependency set of all three modules (the root, objfile, reader): the
-    # module cache holds all of them, and a changed manifest can select other versions without
-    # changing a sum file.
+    # deps fingerprints the dependency set of all three modules (the root, objfile, reader) and of
+    # the workspace that joins them (go.work): the module cache holds all of them, and a changed
+    # manifest can select other versions without changing a sum file.
     - name: Locate the Go caches
       id: paths
       shell: bash
       run: |
         echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
         echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-        echo "deps=${{ hashFiles('go.mod', 'go.sum', 'objfile/go.mod', 'objfile/go.sum', 'reader/go.mod', 'reader/go.sum') }}" >> "$GITHUB_OUTPUT"
+        echo "deps=${{ hashFiles('go.work', 'go.mod', 'go.sum', 'objfile/go.mod', 'objfile/go.sum', 'reader/go.mod', 'reader/go.sum') }}" >> "$GITHUB_OUTPUT"
         echo "build=go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}" >> "$GITHUB_OUTPUT"
 
     # The module cache's key names no job and no commit, and a key once saved is never
@@ -67,12 +67,12 @@ runs:
     # `go mod tidy -diff` (go-lint) loads (github.com/google/go-cmp, for protobuf's tests).
     # `go mod download all` adds the hashes of what it fetched to go.sum, which would then fail
     # `go mod tidy -diff`, so it runs on a copy of the three modules' go.mod and go.sum: the module
-    # cache is global, the checkout stays as committed. The copy keeps the repository layout
-    # (the root, objfile/, reader/) because go.mod replaces the reader module with ./reader,
-    # which `go mod download` resolves by reading reader/go.mod relative to the module. The
-    # directories are absolute because the callers' working directories differ. A failed download
-    # (the module proxy resets a stream now and then) is tried again, three times in all, 20 s
-    # apart; a retry fetches only what the module cache still lacks.
+    # cache is global, the checkout stays as committed. The copy has no go.work, so each module
+    # downloads its own graph, the root's with the published reader and objfile it requires, which
+    # its `go mod tidy -diff` loads too. The directories are absolute because the callers' working
+    # directories differ. A failed download (the module proxy resets a stream now and then) is
+    # tried again, three times in all, 20 s apart; a retry fetches only what the module cache
+    # still lacks.
     - name: Download every Go module's dependencies (new module-cache key on main)
       if: steps.modcache-main.outcome == 'success' && steps.modcache-main.outputs.cache-hit != 'true'
       shell: bash

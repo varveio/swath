@@ -82,10 +82,13 @@ columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet 
 dataset, hands on its metadata, checks its schema, and exposes the underlying SeekParquet dataset for reads; the SeekParquet module
 and the standard library only; [../../reader/README.md](../../reader/README.md)) and `objfile` (a dataset in an object
 store opened as files read by byte range, pinned across opens and process restarts, by URI with default
-credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The lister imports
-`reader` through a `replace` to `./reader` in `go.mod`: its producers' schemas are bound to the reader's
-specs (`schema.Bind`), so what swath writes and what a reader decodes are described once. It imports
-`objfile` the same way (`./objfile`) for a dataset written to a bucket: the uploads, the manifest's
+credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The root
+`go.mod` requires both by released version and carries no `replace`, so the root module is importable as a
+library; `go.work` at the repository root joins the three modules, so every build in the repository compiles
+the local `./reader` and `./objfile`, and a release first tags them and then points `go.mod` at those tags
+([RELEASING.md](../../RELEASING.md#versioning)). The lister imports `reader` because its producers' schemas
+are bound to the reader's specs (`schema.Bind`), so what swath writes and what a reader decodes are described
+once. It imports `objfile` for a dataset written to a bucket: the uploads, the manifest's
 conditional creation and the read-back of retained parts go through `objfile/gcs`, `objfile/s3` or `objfile/azblob` and `objfile/remote.OpenDestination`,
 which links `cloud.google.com/go/storage` into the swath binary
 ([durability.md](durability.md#a-dataset-in-a-bucket)). Neither nested module imports the lister or the other nested module.
