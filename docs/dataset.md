@@ -43,8 +43,7 @@ inventory/run.json
   `progress.json`), which `swath resume DIR` continues from. Readers ignore it.
 
 The dataset is a [SeekParquet](https://github.com/varveio/seekparquet) dataset
-([format 1](https://github.com/varveio/seekparquet/blob/go/v0.2.0/spec/format-1.md), the release swath's `go.mod`
-pins), so DuckDB, pandas, Spark or any Parquet reader reads the parts, and a SeekParquet reader can seek by key.
+([format 1](https://github.com/varveio/seekparquet/blob/go/v0.2.0/spec/format-1.md)), so DuckDB, pandas, Spark or any Parquet reader reads the parts, and a SeekParquet reader can seek by key.
 From Go, the [`reader`](../reader/README.md) module opens a dataset and decodes its rows. The order in which a
 run writes these files is in [Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
 
@@ -262,8 +261,10 @@ Under `--metadata names` (no stat) the stat columns are null.
 
 **Totals from a local dataset.** A directory's `size` and `last_modified` are its own, never its subtree's, and
 the root has no row. Summing `size` over every row gives entry bytes, directories' own `st_size` included: not
-the files' content bytes, and not disk usage (`allocated_bytes`). For files only, leave out `kind = 'dir'`, or
-let `swath du --from-dataset DIR` total it. Under `--metadata names` the sizes are null, so a sum is no total.
+the files' content bytes, and not disk usage (`allocated_bytes`). For files only, leave out `kind = 'dir'`. That
+SQL sum counts a hard-linked file once per name; `swath du --from-dataset DIR` counts it once, and
+`swath du --from-dataset DIR --count-links` gives the same sum as the SQL. Under `--metadata names` the sizes are
+null, so a sum is no total.
 
 ## Keys and order
 
@@ -296,10 +297,11 @@ This section is for reading the parts without swath: DuckDB, Python, Spark.
   `is_latest AND NOT is_delete_marker` (S3) or `is_latest` (GCS and Azure Blob), row by row.
 - **Stored order is physical.** `ORDER BY key` alone does not recover the order among equal keys, and a generic
   SQL scan does not promise stored order. To keep a group's order, read the parts in manifest order and number
-  the rows as read, then order by the part's position in the manifest and the row number. For a dataset of
-  `--all-versions` in `versions/`:
+  the rows as read, then order by the part's position in the manifest and the row number. For example, list
+  every version under the same S3 prefix into `versions/`, then read it in stored order:
 
   ```bash
+  swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 --all-versions -o versions
   duckdb -c "
     SET VARIABLE parts = (SELECT list('versions/' || p.path)
                           FROM (SELECT unnest(parts) AS p FROM read_json('versions/manifest.json')));
@@ -363,7 +365,13 @@ to the manifest's rows, and the last line is the dataset's last key:
 ```text
 stofs_2d_glo.20230113/stofs_2d_glo.t00z.northpacific.f051.grib2	1024
 stofs_2d_glo.20230113/stofs_2d_glo.t06z.guam.f141.grib2	1024
+stofs_2d_glo.20230113/stofs_2d_glo.t12z.conus.west.f054.grib2	1024
+stofs_2d_glo.20230113/stofs_2d_glo.t18z.alaska.f144.grib2	1024
+stofs_2d_glo.20230113/stofs_2d_glo.t18z.puertori.f050.grib2	1024
+stofs_2d_glo.20230113/stofs_2d_glo.t18z.puertori.swl.grib2	132
 ```
+
+These six lines are the `inventory` dataset's: their counts sum to its 5,252 rows.
 
 The file stays within 262,144 lines and 16 MiB whatever the dataset's size. It is advisory and outside the
 SeekParquet format: the manifest does not name it, readers ignore it, and a dataset without it is whole. A

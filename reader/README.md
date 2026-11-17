@@ -91,7 +91,7 @@ versions. `Sum` skips null/absent values; request `CountNulls` and `CountAbsent`
 missing values must make an application total unknown. `AggregateOptions.CheckKeys`
 requests selected-key validation. `ValueBudgetBytes` is explicit: zero allows no
 value I/O, -1 is unlimited, and a positive budget bounds unique compressed measure
-and filter extents. For browsing, request `Page` with count and size reductions and
+and filter extents, including dictionaries. For browsing, request `Page` with count and size reductions and
 a caller-selected budget such as 4 MiB. Inspect each result's status before its value.
 The SeekParquet API owns execution, borrowed lifetimes, cancellation and exactness.
 

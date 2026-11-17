@@ -246,11 +246,9 @@ dataset's rows reach each multiple of R; R is the least power of two (1: every p
 within its bounds, 262,144 lines and 16 MiB. With keys of about 60 bytes that is every page end up to about 250
 million rows, then one cut about every 8,192 rows at 2 billion and every 131,072 at 30 billion, about 16 MB at
 most; longer keys double R sooner. A key holding a line feed cannot be a line: its rows count toward the next
-line, and a dataset whose last key holds one has no cut file. `--seed-from DIR` takes the file as its prior only
-when it is the dataset's own: every line counted, the cuts ascending from the first part's first key, the last
-cut the dataset's last key, each count positive, the counts summing to the manifest's rows, and every cut a key
-the run could list (valid UTF-8, within the provider's key length); otherwise it reads the parts' key page index
-([warm start](range-engine.md)).
+line, and a dataset whose last key holds one has no cut file. When `--seed-from DIR` takes the file as its prior,
+and when it reads the parts' key page index instead, is the range engine's warm start
+([range-engine.md](range-engine.md), "Warm start").
 
 ```text
 out/
