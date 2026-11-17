@@ -25,16 +25,16 @@ runs:
         go-version-file: go.mod
         cache: false
 
-    # deps fingerprints the dependency set of all three modules (the root, objfile, reader) and of
-    # the workspace that joins them (go.work): the module cache holds all of them, and a changed
-    # manifest can select other versions without changing a sum file.
+    # deps fingerprints the dependency set of all three modules (the root, objfile, reader): the
+    # module cache holds all of them, and a changed manifest can select other versions without
+    # changing a sum file.
     - name: Locate the Go caches
       id: paths
       shell: bash
       run: |
         echo "gocache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
         echo "gomodcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
-        echo "deps=${{ hashFiles('go.work', 'go.mod', 'go.sum', 'objfile/go.mod', 'objfile/go.sum', 'reader/go.mod', 'reader/go.sum') }}" >> "$GITHUB_OUTPUT"
+        echo "deps=${{ hashFiles('go.mod', 'go.sum', 'objfile/go.mod', 'objfile/go.sum', 'reader/go.mod', 'reader/go.sum') }}" >> "$GITHUB_OUTPUT"
         echo "build=go-build-${{ runner.os }}-${{ runner.arch }}-${{ inputs.key }}" >> "$GITHUB_OUTPUT"
 
     # The module cache's key names no job and no commit, and a key once saved is never

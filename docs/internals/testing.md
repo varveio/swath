@@ -154,8 +154,8 @@ runs the tier and prints its command; `UPDATE=1` with that command rewrites the 
 | `go-fixtures` | `go run ./bench/replay/fixtures`, then the gated tests named in the step's `FIXTURE_TESTS` with `SWATH_REPLAY_FIXTURES` set; a named test that skips or does not run fails the job | ubuntu-latest |
 
 Every job above sets up Go through [`.github/actions/setup-go`](../../.github/actions/setup-go/action.yml): the
-version `go.mod` names, and two caches. DEPS below is one hash of `go.work` and of the `go.mod` and `go.sum`
-of all three modules (the root, `objfile`, `reader`).
+version `go.mod` names, and two caches. DEPS below is one hash of the `go.mod` and `go.sum` of all three
+modules (the root, `objfile`, `reader`).
 
 | Cache | Path | Key | Restores from |
 |---|---|---|---|

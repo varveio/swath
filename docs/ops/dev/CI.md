@@ -315,8 +315,7 @@ the generations and saves each build cache trimmed to what its job used.
 ### Go caches
 
 The [`setup-go`](../../../.github/actions/setup-go/action.yml) composite action, used by every Go
-job, restores two caches. DEPS is one hash of `go.work` and of the `go.mod` and `go.sum` of all
-three modules.
+job, restores two caches. DEPS is one hash of the `go.mod` and `go.sum` of all three modules.
 
 | Cache | Key | Shared by |
 | --- | --- | --- |
