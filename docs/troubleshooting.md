@@ -365,7 +365,8 @@ The limits of this build, and what has not been measured:
   [#577](https://github.com/varveio/swath/issues/577).
 - **Memory:** `--sort-buffer` bounds rows in flight, not resident memory ([Size a run](size-a-run.md#memory)).
 - **Scale:** key lists of up to 593M keys were measured through a key-list fake at 50 ms, and one live bucket
-  of 1.09 billion objects at 256 and 1,024 workers. Production listings of public buckets of billions of
+  of 1.09 billion objects at 256 and 1,024 workers on a build before the release and at 1,024 and 2,048 on
+  0.4.0. Production listings of public buckets of billions of
   objects (35 completed, 50.6 billion objects in all) are individual runs, not a benchmark
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
   other gaps are in [measurements](internals/measurements.md#known-gaps).
