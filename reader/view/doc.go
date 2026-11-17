@@ -22,7 +22,8 @@
 // exclusion; otherwise it is nil. A key is proven absent only when
 // Unlocated is 0, never at or under a local entry of unknown kind
 // (listing.KindUnknown), which may be a directory the listing did not
-// read, and only as of the listing.
+// read, never below a symbolic link, which no listing follows (unknown,
+// with listing.ErrNotDirectory as the Reason), and only as of the listing.
 //
 // An inventory's own gaps are never located. When a bound of the request
 // stops a Walk or a Summarize, the keys it did not reach come back as

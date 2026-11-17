@@ -263,7 +263,8 @@ func TestPageScope(t *testing.T) {
 }
 
 // TestPageMissingDirectory: a local directory the inventory has as another
-// kind is ErrNotDirectory; one it lacks is ErrNotFound when it proves the
+// kind, or below a symbolic link, is ErrNotDirectory; one it lacks is
+// ErrNotFound when it proves the
 // absence, an empty page otherwise, and always at or under an entry of
 // unknown kind; an empty directory is its Self alone.
 func TestPageMissingDirectory(t *testing.T) {
@@ -280,6 +281,13 @@ func TestPageMissingDirectory(t *testing.T) {
 	for _, inv := range []*Inventory{complete, partial} {
 		if _, err := page(inv, "a.txt/"); !errors.Is(err, listing.ErrNotDirectory) {
 			t.Errorf("a file: %v, want ErrNotDirectory", err)
+		}
+	}
+	// A symbolic link is never followed: a directory below one is not
+	// reached, never absent.
+	for _, prefix := range []string{"link/", "link/x/"} {
+		if _, err := page(complete, prefix); !errors.Is(err, listing.ErrNotDirectory) {
+			t.Errorf("%q through a symbolic link: %v, want ErrNotDirectory", prefix, err)
 		}
 	}
 	if p, err := page(partial, "missing/"); err != nil || len(p.Entries) != 0 || p.Self != nil {

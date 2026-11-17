@@ -102,14 +102,17 @@ func TestLookupLocal(t *testing.T) {
 		}
 	}
 	// An entry of unknown kind may be a directory the listing did not
-	// read: nothing at or under it is absent. Under another kind it is.
-	for key, want := range map[string]listing.LookupState{
-		"u/": listing.LookupUnknown, "u/x": listing.LookupUnknown, "u/x/y/": listing.LookupUnknown,
-		"fifo/x": listing.LookupAbsent, "link/x": listing.LookupAbsent,
+	// read: nothing at or under it is absent. A symbolic link is never
+	// followed: nothing below it is reached. Under another kind a key is
+	// absent.
+	for key, want := range map[string]error{
+		"u/": errUnresolvedKind, "u/x": errUnresolvedKind, "u/x/y/": errUnresolvedKind,
+		"link/": listing.ErrNotDirectory, "link/x": listing.ErrNotDirectory, "link/x/y": listing.ErrNotDirectory,
+		"fifo/x": nil, "a.txt/x": nil,
 	} {
 		r, err := inv.Lookup(ctx, []byte(key))
-		if err != nil || r.State != want || (want == listing.LookupUnknown) != errors.Is(r.Reason, errUnresolvedKind) {
-			t.Errorf("Lookup(%q) = %v %v, %v; want %v", key, r.State, r.Reason, err, want)
+		if err != nil || (want == nil) != (r.State == listing.LookupAbsent) || want != nil && (r.State != listing.LookupUnknown || !errors.Is(r.Reason, want)) {
+			t.Errorf("Lookup(%q) = %v %v, %v; want the reason %v", key, r.State, r.Reason, err, want)
 		}
 	}
 	if _, err := inv.Lookup(ctx, nil); !errors.Is(err, listing.ErrInvalidRequest) {
