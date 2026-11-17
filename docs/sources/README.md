@@ -17,6 +17,25 @@ swath reads listings only: it needs permission to list, never to read or write o
 listing sends requests the provider may charge for; the run report estimates their cost on AWS S3 and GCS
 ([Cost](../size-a-run.md#cost)).
 
+## What has run against the real service
+
+Every source is tested against fakes, emulators and replayed recordings ([testing](../internals/testing.md)).
+What has also run against the service itself, as recorded in [measurements](../internals/measurements.md):
+
+| Source | Listing | Every version | A dataset written to it | Credentials |
+|---|---|---|---|---|
+| Local and mounted filesystems | real filesystems; benchmarks on synthetic trees | – | yes | – |
+| Amazon S3 | one bucket of 1.09 billion objects; 35 public buckets of 50.6 billion in all | seven small public buckets | fakes only | anonymous only |
+| S3-compatible stores | MinIO only, where swath can miss keys ([S3-compatible stores](s3.md#s3-compatible-stores)); R2, Ceph and others not run | not run | fakes only | MinIO access keys |
+| Google Cloud Storage | a bucket of 5.1 million objects; public buckets | one small public bucket | yes: the datasets of the 35 S3 buckets | default credentials, anonymous |
+| Azure Blob Storage | a public container of 1.84 million blobs | fakes only | fakes only | anonymous only; SAS, Shared Key and Entra ID not run |
+
+Runs killed and resumed against a real store are the small versioned runs above and MinIO; every other kill and
+resume is tested against fakes and replays. Credential renewal during a run has not been seen against a real
+service. Each source's other limits are under "Limits and known differences" on its page. Before relying on a
+store other than AWS, compare one prefix's object count with an independent listing
+([S3-compatible stores](s3.md#s3-compatible-stores)).
+
 ## Credentials on every object store
 
 Without `--anonymous`, swath uses the provider's credentials and stops before listing (exit 1, cause `auth`)

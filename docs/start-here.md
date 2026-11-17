@@ -25,8 +25,10 @@ directory. It needs no account and no credentials.
   one page of keys after another. swath divides the key space into ranges and lists them in parallel, which
   matters once a bucket holds tens of millions of keys.
 - **Scheduled inventories** (S3 Inventory, GCS Storage Insights, Azure Blob inventory) can cost less than
-  listing the whole bucket again and again, when a daily or weekly report is fresh enough. Use swath when you
-  need the answer now, for a prefix the report does not cover, or for a source without one, such as a local or
-  mounted filesystem.
+  listing the whole bucket again and again, when a daily or weekly report is fresh enough. On AWS, S3
+  Metadata's live inventory table keeps every object of a bucket in a queryable table, typically within an hour
+  of a change, once its initial backfill is done. Use swath when you need the answer now, for a bucket or prefix
+  that has neither set up, for the same dataset across providers, or for a source without one, such as a local
+  or mounted filesystem.
 
 swath only lists: it does not copy data, schedule runs, compare inventories or send alerts.
