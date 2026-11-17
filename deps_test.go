@@ -101,3 +101,42 @@ func TestLibraryImports(t *testing.T) {
 		}
 	}
 }
+
+// TestGCSImports: the gcs package links none of the command and
+// parquet-go only through SeekParquet's reader; it links Google's SDK and
+// no other provider's, and the s3 package does not link Google's.
+func TestGCSImports(t *testing.T) {
+	gcs := deps(t, mod+"/gcs")
+	for _, c := range command {
+		if _, ok := gcs[c]; ok {
+			t.Errorf("%s/gcs links %s", mod, c)
+		}
+	}
+	for path, imports := range gcs {
+		if strings.HasPrefix(path, "github.com/parquet-go/") || slices.Contains(readerEdge, path) {
+			continue
+		}
+		for _, imp := range imports {
+			if strings.HasPrefix(imp, "github.com/parquet-go/") {
+				t.Errorf("%s/gcs links %s through %s, not through SeekParquet's reader", mod, imp, path)
+			}
+		}
+	}
+
+	google := []string{"cloud.google.com/", "google.golang.org/api/"}
+	others := []string{"github.com/aws/", "github.com/Azure/", mod + "/internal/source/s3", mod + "/internal/source/azblob", mod + "/internal/source/localfs"}
+	for path := range gcs {
+		if slices.ContainsFunc(others, func(p string) bool { return strings.HasPrefix(path, p) }) {
+			t.Errorf("%s/gcs links %s", mod, path)
+		}
+	}
+	for path := range deps(t, mod+"/s3") {
+		if slices.ContainsFunc(google, func(p string) bool { return strings.HasPrefix(path, p) }) || strings.HasPrefix(path, mod+"/internal/source/gcs") {
+			t.Errorf("%s/s3 links %s", mod, path)
+		}
+	}
+	// The walk sees what it looks for where it is linked (not vacuous).
+	if _, ok := gcs["google.golang.org/api/storage/v1"]; !ok {
+		t.Error("the walk does not see the GCS SDK in the gcs package")
+	}
+}
