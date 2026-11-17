@@ -201,7 +201,7 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 		if !established(le.Rows) {
 			continue
 		}
-		if fits, err := rows.admit(le.Rows); err != nil || !fits {
+		if fits, err := rows.admit([]seekparquet.RowSpan{le.Rows}); err != nil || !fits {
 			continue
 		}
 		counted = append(counted, i)

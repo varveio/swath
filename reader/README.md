@@ -154,11 +154,12 @@ any release.
 The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those four questions from an opened
 dataset. `view.Open(d)` reads nothing; it refuses a dataset of versions, whose keys repeat, and one whose manifest
 records no scope, with `listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque
-tokens bound to the manifest digest and the prefix and optional child totals within a budget; `Lookup` reads the
-key's row; `Walk` is a range scan, in parallel shards when unbudgeted, or a level-by-level listing to a depth;
-`Summarize` aggregates its subtree targets' rows in one `AggregateRows` call, checking their key order, within
-an entry, value-byte and time budget. An object store's prefix may be any key prefix; a local one is empty or a
-directory key, and a local inventory has no row for its root.
+tokens bound to the manifest digest and the prefix, and optional child totals
+within a budget; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards when unbudgeted, or a
+level-by-level listing to a depth; `Summarize` reads the entries at its targets' keys, then aggregates its subtree
+targets' rows in one `AggregateRows` call, checking their key order, both within one entry, value-byte and time
+budget. An object store's prefix may be any key prefix; a local one is empty or a directory key, and a local
+inventory has no row for its root.
 
 Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes, the
 listing's interval and publication time, its scope, and its count of unreadable entries as `Unlocated` only when

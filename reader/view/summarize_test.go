@@ -145,10 +145,11 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 	}
 }
 
-// TestSummarizeBudgets: a subtree a bound keeps the call from counting
-// counts nothing and is unread as a whole, and Evidence.Stop names the
-// bound; an exact target is counted from its own entry whatever the
-// budget.
+// TestSummarizeBudgets: a target whose own entry a bound keeps the call
+// from reading is unknown and counts nothing, a subtree whose rows it
+// keeps from counting counts nothing, each is unread as a whole, and
+// Evidence.Stop names the bound. The entries at exact targets' keys are
+// within the budget like the subtrees' rows.
 func TestSummarizeBudgets(t *testing.T) {
 	ctx := context.Background()
 	rs := objects()
@@ -159,31 +160,103 @@ func TestSummarizeBudgets(t *testing.T) {
 		return len(s.Unread) == 1 && s.Unread[0].Key == nil && s.Unread[0].Hi == nil && s.Unread[0].Scope == listing.UnreadInterval &&
 			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0
 	}
+	unreached := func(s listing.TargetSummary) bool {
+		return unread(s) && s.State == listing.LookupUnknown && s.Self == nil && errors.Is(s.Reason, errUnreached)
+	}
 
-	// The entry budget admits the subtrees in order while their union
-	// fits: not the root, then a/, and a/c/ inside it adds nothing.
-	sums, e, err := inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 4}})
+	// The entry budget admits the entries at the keys first, a/ and z,
+	// then the subtrees in order while the union fits: not the root, then
+	// a/'s three more rows, and a/c/ inside it adds nothing.
+	sums, e, err := inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 5}})
 	if err != nil || e.Stop != listing.StopEntryBudget || !unread(sums[0]) || sums[1].Entries != 4 || sums[2].Entries != 1 || sums[3].Entries != 1 || len(sums[1].Unread) != 0 {
 		t.Fatalf("entries: %+v, %+v, %v", sums, e, err)
 	}
-	if sums[0].State != listing.LookupUnknown || sums[1].State != listing.LookupPresent {
-		t.Fatalf("entries: states %v, %v", sums[0].State, sums[1].State)
+	if sums[0].State != listing.LookupUnknown || sums[1].State != listing.LookupPresent || sums[3].State != listing.LookupPresent {
+		t.Fatalf("entries: states %v, %v, %v", sums[0].State, sums[1].State, sums[3].State)
 	}
 
+	// Many exact targets: the budget reads one entry; an absent key reads
+	// none, and stays provably absent.
+	var exact []listing.Target
+	for _, r := range rs {
+		exact = append(exact, listing.Target{Key: []byte(r.key)})
+	}
+	exact = append(exact, listing.Target{Key: []byte("missing")})
+	sums, e, err = inv.Summarize(ctx, exact, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 1, MaxValueBytes: 1 << 20}})
+	if err != nil || e.Stop != listing.StopEntryBudget || sums[0].State != listing.LookupPresent || sums[0].Entries != 1 || sums[len(sums)-1].State != listing.LookupAbsent {
+		t.Fatalf("exact entries: %+v, %v", e, err)
+	}
+	for i, s := range sums[1 : len(sums)-1] {
+		if !unreached(s) {
+			t.Fatalf("exact target %d past the entry budget: %+v", i+1, s)
+		}
+	}
+	sums, e, err = inv.Summarize(ctx, exact, listing.SummaryOptions{Budget: listing.Budget{MaxValueBytes: 1}})
+	if err != nil || e.Stop != listing.StopValueBudget || sums[len(sums)-1].State != listing.LookupAbsent || !slices.ContainsFunc(sums, unreached) {
+		t.Fatalf("exact value bytes: %+v, %v", e, err)
+	}
+	for i, s := range sums[:len(sums)-1] {
+		if !unreached(s) {
+			t.Fatalf("exact target %d past the value budget: %+v", i, s)
+		}
+	}
+
+	// The value budget reaches no entry at a key, and no subtree's values;
+	// a/c/ has no entry to read, and is absent.
 	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxValueBytes: 1}})
-	if err != nil || e.Stop != listing.StopValueBudget || !unread(sums[0]) || !unread(sums[1]) || !unread(sums[2]) || sums[3].Entries != 1 || sums[3].State != listing.LookupPresent {
+	if err != nil || e.Stop != listing.StopValueBudget || !unread(sums[0]) || !unreached(sums[1]) || !unread(sums[2]) || sums[2].State != listing.LookupAbsent || !unreached(sums[3]) {
 		t.Fatalf("value bytes: %+v, %+v, %v", sums, e, err)
 	}
 
-	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 4, MaxValueBytes: 1}})
+	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 5, MaxValueBytes: 1}})
 	if err != nil || e.Stop != listing.StopEntryBudget || !slices.ContainsFunc(sums[:3], unread) {
 		t.Fatalf("both: %+v, %+v, %v", sums, e, err)
 	}
 
+	// A value budget both phases fit counts everything.
+	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: int64(len(rs)), MaxValueBytes: 1 << 20}})
+	if err != nil || e.Stop != listing.StopCompleted || sums[0].Entries != int64(len(rs)) || sums[1].Entries != 4 || sums[3].State != listing.LookupPresent {
+		t.Fatalf("enough: %+v, %+v, %v", sums, e, err)
+	}
+
 	slow := openWith(t, dir, newSlowSource(t, dir, 50*time.Millisecond))
 	sums, e, err = slow.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: 5 * time.Millisecond}})
-	if err != nil || e.Stop != listing.StopTimeBudget || !unread(sums[0]) || !unread(sums[3]) || sums[3].State != listing.LookupUnknown {
+	if err != nil || e.Stop != listing.StopTimeBudget || !unread(sums[0]) || !unreached(sums[3]) {
 		t.Fatalf("time: %+v, %+v, %v", sums, e, err)
+	}
+}
+
+// TestSummarizeSharedValueBudget: the value bytes the entries at the
+// targets' keys take come out of what the aggregation may read.
+func TestSummarizeSharedValueBudget(t *testing.T) {
+	ctx := context.Background()
+	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
+	exact := listing.Target{Key: []byte("z")}
+	subtree := listing.Target{Key: []byte("a/c/"), Subtree: true}
+	summarize := func(budget int64, targets ...listing.Target) []listing.TargetSummary {
+		sums, _, err := inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxValueBytes: budget}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sums
+	}
+	// least is the least budget for which target is read in full.
+	least := func(target listing.Target) int64 {
+		lo, hi := int64(1), int64(1<<20)
+		for lo < hi {
+			mid := lo + (hi-lo)/2
+			if len(summarize(mid, target)[0].Unread) == 0 {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		return lo
+	}
+	budget := max(least(exact), least(subtree))
+	sums := summarize(budget, exact, subtree)
+	if sums[0].State != listing.LookupPresent || len(sums[1].Unread) == 0 {
+		t.Errorf("within %d bytes: z %v, the subtree unread %v; want z read and the subtree not", budget, sums[0].State, sums[1].Unread)
 	}
 }
 

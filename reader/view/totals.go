@@ -237,39 +237,41 @@ func sizes(c seekparquet.ColumnView, name string) error {
 	return nil
 }
 
-// rowBudget admits row spans, in order, while the rows of the union of
-// those admitted fit max, so a row several spans hold counts once; a zero
-// max admits every span.
+// rowBudget admits sets of row spans, in order, while the rows of the
+// union of those admitted fit max, so a row several spans hold counts
+// once; a zero max admits every set.
 type rowBudget struct {
-	max  int64
-	rows int64
+	max int64
 	// held is the union admitted: disjoint [lo, hi) ordinals, sorted.
 	held [][2]int64
 }
 
-// admit reports whether span fits, and holds it when it does. A span
-// whose rows are not established is errUnknownSpan.
-func (b *rowBudget) admit(span seekparquet.RowSpan) (bool, error) {
+// admit reports whether every span of spans fits, and then holds them
+// all; a set that does not fit holds none. A span whose rows are not
+// established is errUnknownSpan.
+func (b *rowBudget) admit(spans []seekparquet.RowSpan) (bool, error) {
 	if b.max == 0 {
 		return true, nil
 	}
-	lo, okLo := span.Start.Ordinal()
-	hi, okHi := span.End.Ordinal()
-	if !okLo || !okHi {
-		return false, errUnknownSpan
-	}
-
-	added := hi - lo
-	for _, h := range b.held {
-		if overlap := min(hi, h[1]) - max(lo, h[0]); overlap > 0 {
-			added -= overlap
+	held := slices.Clone(b.held)
+	for _, span := range spans {
+		lo, okLo := span.Start.Ordinal()
+		hi, okHi := span.End.Ordinal()
+		if !okLo || !okHi {
+			return false, errUnknownSpan
 		}
+		held = append(held, [2]int64{lo, hi})
 	}
-	if b.rows+added > b.max {
+	held = merge(held)
+
+	var rows int64
+	for _, h := range held {
+		rows += h[1] - h[0]
+	}
+	if rows > b.max {
 		return false, nil
 	}
-	b.rows += added
-	b.held = merge(append(b.held, [2]int64{lo, hi}))
+	b.held = held
 	return true, nil
 }
 

@@ -16,7 +16,8 @@ type Budget struct {
 	// and Unread excluded. Workers stop at the next batch boundary, so a
 	// walk may deliver up to one batch per worker past the bound, and a
 	// total it cuts short stays a lower bound. An inventory's Summarize
-	// counts the rows it aggregates under its targets. Zero sets no bound.
+	// counts the rows it reads at and under its targets, each once, the
+	// entries at exact targets' keys included. Zero sets no bound.
 	MaxEntries int64
 	// MaxDuration bounds the call's time, including the time emit takes.
 	// Zero sets no bound. Unlike a deadline on ctx, which ends the call
@@ -29,7 +30,8 @@ type Budget struct {
 	// class UnreadBudget.
 	MaxHeldBytes int64
 	// MaxValueBytes bounds the compressed value pages an inventory reads
-	// to count and sum (SeekParquet's value budget). Reaching it stops the
+	// to decode entries, count and sum (SeekParquet's value budget), in a
+	// Summarize or a page's child totals. Reaching it stops the
 	// call with StopValueBudget. A live source reads no such pages and
 	// ignores it. Zero sets no bound.
 	MaxValueBytes int64

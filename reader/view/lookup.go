@@ -68,9 +68,8 @@ func (inv *Inventory) resolve(key []byte, found map[string]*listing.Entry) (list
 
 // entries reads the entries at keys, by their keys, in one planned scan.
 func (inv *Inventory) entries(ctx context.Context, keys [][]byte) (map[string]*listing.Entry, error) {
-	found := map[string]*listing.Entry{}
 	if len(keys) == 0 {
-		return found, nil
+		return map[string]*listing.Entry{}, nil
 	}
 	keys = slices.Clone(keys)
 	slices.SortFunc(keys, bytes.Compare)
@@ -84,9 +83,16 @@ func (inv *Inventory) entries(ctx context.Context, keys [][]byte) (map[string]*l
 	if err != nil {
 		return nil, err
 	}
+	return inv.read(ctx, plan)
+}
+
+// read reads the entries a plan with the view's projection selects, by
+// their keys.
+func (inv *Inventory) read(ctx context.Context, plan *seekparquet.Plan) (map[string]*listing.Entry, error) {
+	found := map[string]*listing.Entry{}
 	d := decoder{rows: inv.rows}
 	var batch []listing.Entry
-	err = plan.Scan(ctx, nil, func(b *seekparquet.Batch) error {
+	err := plan.Scan(ctx, nil, func(b *seekparquet.Batch) error {
 		var err error
 		if batch, err = d.batchEntries(b, batch); err != nil {
 			return err
