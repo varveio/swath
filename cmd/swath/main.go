@@ -48,7 +48,6 @@ import (
 	_ "github.com/varveio/swath/internal/source/azblob"
 	_ "github.com/varveio/swath/internal/source/gcs"
 	_ "github.com/varveio/swath/internal/source/localfs"
-	_ "github.com/varveio/swath/internal/source/s3"
 )
 
 // shutdownGrace bounds the time a stopped run (a signal, the deadline, a

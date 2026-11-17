@@ -9,10 +9,13 @@ import (
 	"github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
-// The tests register both providers (the command does it the same way)
-// and reach their options and stats through these helpers.
+// The tests open the providers by scheme as the command does and reach
+// their options and stats through these helpers.
 
 // S3Config is the S3 provider's options value (Config.Source).
 type S3Config = s3.Options

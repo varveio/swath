@@ -35,7 +35,7 @@ var providers = []string{"s3", "gcs", "azblob", "localfs"}
 // checked without that file. Moving it into this package removes the
 // file, and the entry with it (the test fails while an entry outlives its
 // file).
-var pending = []string{"s3", "gcs", "azblob", "localfs"}
+var pending = []string{"gcs", "azblob", "localfs"}
 
 // readerEdge are the packages that may import parquet-go in a provider's
 // closure: SeekParquet's reader, reached through schema → reader, an edge
