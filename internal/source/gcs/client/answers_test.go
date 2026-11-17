@@ -59,7 +59,8 @@ func padded(n int) string {
 const maxBody = 16 << 20
 
 // answer is the *Error an answer must surface: status, reason, message
-// (a redirect's: "redirect to TARGET (not followed)").
+// (a redirect's: "redirect to TARGET (not followed)", TARGET without its
+// query, which a signed URL's credentials are).
 type answer struct {
 	status          int
 	reason, message string
@@ -92,7 +93,7 @@ func TestAnswers(t *testing.T) {
 	defer other.Close()
 	redirect := func(status int) func(http.ResponseWriter, *http.Request) {
 		return func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, other.URL+"/storage/v1/b/b/o", status)
+			http.Redirect(w, r, other.URL+"/storage/v1/b/b/o?X-Goog-Signature=secret", status)
 		}
 	}
 	// esc is a backslash, spelled out so that the escaped fixtures below
