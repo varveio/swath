@@ -123,13 +123,9 @@ again) are in [The resume is refused](troubleshooting.md#the-resume-is-refused).
 
 ### A dataset in a bucket
 
-A run that writes its dataset to a bucket (`-o s3://BUCKET/PREFIX`, `gs://…` or `az://…`, with
-`--work-dir DIR`) is resumed by its work directory: `swath resume DIR`. Before it lists, the resume reads every
-part already uploaded back from the bucket to check it, so it downloads what was published once. An Azure
-destination's `--output-azure-sas-token` must be given again. A lost work directory cannot be resumed: start
-again at a new prefix. The rest, with what a resume of a run that reached its commit does, is in
-[Writing to a bucket](production.md#writing-to-a-bucket) and
-[on a preemptible or spot machine](production.md#on-a-preemptible-or-spot-machine).
+A run that writes its dataset to a bucket is resumed by its work directory: `swath resume DIR`, with `DIR` the
+`--work-dir` it was given. What the resume downloads, what it needs on another machine and what a lost work
+directory leaves are in [Interrupted, then resumed](production.md#interrupted-then-resumed).
 
 <a id="overwrite-and-refresh"></a>
 
@@ -160,7 +156,8 @@ dataset while the new one is put in place: it reuses the part names (`data/part-
 can find parts missing or replaced. An interrupted installation (a crash, or on Windows
 [another program holding one of its files](troubleshooting.md#the-output-directory-is-refused)) leaves the
 previous dataset or none, never a manifest naming missing parts, until `swath resume DIR` or a new
-`--overwrite` finishes it. A dataset in a bucket is never replaced: write each run to a new prefix.
+`--overwrite` finishes it. A dataset in a bucket is never replaced: write each run to a new prefix
+([writing to a bucket](production.md#writing-to-a-bucket)).
 
 Where readers must always find a dataset, even while a new one is written (a refresh read around the clock),
 write each run to a new directory and never overwrite it. Switch readers through a pointer outside the datasets

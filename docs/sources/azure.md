@@ -64,8 +64,9 @@ listings days apart differ.
 
 ## Writing a dataset to Azure Blob Storage
 
-`swath list SOURCE -o az://ACCOUNT/CONTAINER/PREFIX --work-dir DIR` puts the dataset in a container and keeps
-only spill and the run's metadata in `DIR` ([writing to a bucket](../production.md#writing-to-a-bucket)).
+`-o az://ACCOUNT/CONTAINER/PREFIX --work-dir DIR` writes the dataset to a container; the command, what appears
+in it and how to resume and clean up are in [Writing to a bucket](../production.md#writing-to-a-bucket). What is
+Azure's own:
 
 - **Credentials:** `--output-azure-sas-token TOKEN`, else Entra ID through `DefaultAzureCredential`, whatever
   the source's SAS, account key or `--anonymous`; account keys and connection strings are not taken for a

@@ -337,8 +337,9 @@ S3, GCS, Azure Blob and local datasets independently of the Go reader: swath met
 row counts, key order and the manifest's part bounds, footer stamps and part SHA-256 digests; for Azure also
 the `azure` source kind and every part's column types and nullability, including UTC microsecond timestamps.
 It expects the producer's flat `data/part-NNNNN.parquet` layout and `run.json`, so it is not a general
-validator for a bucket dataset copied locally with its nested run/attempt part paths. Its checks and optional
-reference comparison: [testing.md](testing.md#verifypy).
+validator for a bucket dataset copied locally with its nested run/attempt part paths. A dataset with no parts
+(an empty source) fails it: DuckDB finds no file to read in `data/`, and the script stops with that error,
+exit 1. Its checks and optional reference comparison: [testing.md](testing.md#verifypy).
 
 ## Schemas
 

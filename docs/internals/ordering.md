@@ -726,10 +726,14 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   [measurements](measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)).
 - **What bounds the tail.** On sentinel-cogs with 31 workers on that build the segments' time split 1,724 s writing
   (the parts' encoding), 714 s reading spill frames and 621 s decoding them: about 68 % of 32 cores through
-  the 140 s tail. The tail is CPU-bound on Parquet encoding and spill read-back, near its floor on that
-  machine. The next levers are cheaper encoding per row, or overlapping the drain with listing (claiming
-  nearer the publish frontier), not more workers. Before listing is done nothing changes either: the drainer walks the tree as
-  always, and it asks again each time it has handed rows on while the rule cannot be stated yet.
+  the 140 s tail. On that build the tail was CPU-bound on Parquet encoding and spill read-back, and was
+  judged near its floor on that machine, with cheaper encoding per row or overlapping the drain with listing
+  (claiming nearer the publish frontier) as the next levers, not more workers. The 0.4.0 release measured the
+  same bucket on a 32-vCPU machine with a tail of 87 s (16 segment workers, 32 encoders, at 1,024 listing
+  workers; [measurements](measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)),
+  so 140 s was not the floor on 32 cores; which change shortened it was not measured. Before listing is done
+  nothing changes either: the drainer walks the tree as always, and it asks again each time it has handed rows
+  on while the rule cannot be stated yet.
 - **Where the parts end.** Every spill marker records its frame's rows and their logical bytes
   (`schema.LogicalBytes`, summed when the frame is written); in-memory rows are summed when the rest is
   listed. The cut follows the router's rule exactly: a part closes after the row whose logical bytes bring it
