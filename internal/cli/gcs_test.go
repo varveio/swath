@@ -13,6 +13,7 @@ import (
 
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/keyrange"
 )
@@ -52,11 +53,12 @@ func TestGCSEngineFlagsShared(t *testing.T) {
 	if err := fs.Parse([]string{"--structure", "--anonymous", "--endpoint-url", "http://127.0.0.1:1/storage/v1/", "--request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Open(context.Background(), registry.Request{Root: "gs://bkt", Options: v, Workers: 2}); err != nil {
+	src, err := f.Open(context.Background(), registry.Request{Root: "gs://bkt", Options: v, Workers: 2})
+	if err != nil {
 		t.Fatal(err)
 	}
-	opt, err := v.(*gcsFlagged).options()
-	if err != nil || !opt.Seed || opt.Structure != keyrange.StructureOn || !opt.Anonymous || opt.Endpoint != "http://127.0.0.1:1/storage/v1/" || opt.Timeout.Seconds() != 7 {
-		t.Fatalf("shared flags not applied: %+v (%v)", opt, err)
+	opt := src.(*gcsSource[gcs.Object]).Options()
+	if !opt.Seed || opt.Structure != keyrange.StructureOn || !opt.Anonymous || opt.Endpoint != "http://127.0.0.1:1/storage/v1/" || opt.Timeout.Seconds() != 7 {
+		t.Fatalf("shared flags not applied: %+v", opt)
 	}
 }

@@ -96,6 +96,11 @@ func opened[P any](p *provider[P], s *schema.Schema[P]) (*Opened[P], error) {
 // Bound is the provider bound to its row schema.
 func (o *Opened[P]) Bound() bind.Bound[P] { return o.bound }
 
+// Options is what the listing opened with: the options given, with the
+// account, container and prefix the root names and, where the options had
+// none, the root's SAS.
+func (o *Opened[P]) Options() Options { return o.p.opt }
+
 // Locator records the root without its SAS.
 func (o *Opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "azure", Root: o.p.target(), Container: o.p.opt.Container}

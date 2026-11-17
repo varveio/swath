@@ -77,9 +77,9 @@ func TestAzblobEngineFlagsShared(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opt, err := v.(*azblobFlagged).options("")
-	if err != nil || !opt.Seed || opt.Structure != keyrange.StructureOn || !opt.Anonymous || opt.Timeout.Seconds() != 7 || opt.PageSize != 7 || !opt.Flat {
-		t.Fatalf("flags not applied: %+v (%v)", opt, err)
+	opt := src.(*azblobSource[azblob.Object]).Options()
+	if !opt.Seed || opt.Structure != keyrange.StructureOn || !opt.Anonymous || opt.Timeout.Seconds() != 7 || opt.PageSize != 7 || !opt.Flat {
+		t.Fatalf("flags not applied: %+v", opt)
 	}
 	if got := identityField(src.(source.Identified).Identity(), "flat_asserted"); got != "true" {
 		t.Fatalf("flat_asserted %q", got)

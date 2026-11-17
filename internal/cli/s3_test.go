@@ -288,21 +288,21 @@ func TestS3EngineFlagsShared(t *testing.T) {
 	if err := fs.Parse([]string{"--slow-split", "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--request-timeout", "7s"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2}); err != nil {
+	src, err := f.Open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2})
+	if err != nil {
 		t.Fatal(err)
 	}
-	opt, err := v.(*s3Flagged).options()
-	if err != nil || !opt.Seed || !opt.SlowSplit || !opt.Anonymous || opt.Endpoint != "http://127.0.0.1:1" || opt.Timeout.Seconds() != 7 {
-		t.Fatalf("shared flags not applied: %+v (%v)", opt, err)
+	opt := src.(*s3Source[s3.Object]).Options()
+	if !opt.Seed || !opt.SlowSplit || !opt.Anonymous || opt.Endpoint != "http://127.0.0.1:1" || opt.Timeout.Seconds() != 7 {
+		t.Fatalf("shared flags not applied: %+v", opt)
 	}
+
 	// Defaults (no flags parsed) hold the engine's defaults. Anonymous is set
 	// so the client builds without credentials (none are configured here).
 	o := s3Defaults().(*s3Flagged)
 	o.store = &source.Store{Anonymous: true}
-	if _, err := f.Open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 2}); err != nil {
+	src, err = f.Open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 2})
+	if err != nil || src.(*s3Source[s3.Object]).Options().Seed {
 		t.Fatalf("defaults: %v", err)
-	}
-	if opt, err := o.options(); err != nil || opt.Seed {
-		t.Fatalf("defaults: %+v (%v)", opt, err)
 	}
 }

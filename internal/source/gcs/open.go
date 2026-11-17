@@ -77,6 +77,10 @@ func opened[P any](p *provider[P], s *schema.Schema[P], root string) (*Opened[P]
 // Bound is the provider bound to its row schema.
 func (o *Opened[P]) Bound() bind.Bound[P] { return o.bound }
 
+// Options is what the listing opened with: the options given, with the
+// bucket and prefix the root names.
+func (o *Opened[P]) Options() Options { return o.p.opt }
+
 // Locator records the root as given.
 func (o *Opened[P]) Locator() source.Locator {
 	return source.Locator{Kind: "gcs", Root: o.root, Container: o.p.opt.Bucket}

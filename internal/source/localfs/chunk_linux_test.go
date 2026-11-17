@@ -61,9 +61,11 @@ func TestCancelledChunkReleasesItsFD(t *testing.T) {
 	}
 }
 
-// TestStatCountRaisesProcsAndRestores: a count runs with countProcsFactor
-// processors per CPU at a stat tier and namesCountProcsFactor at the names
-// tier (at most the workers), records it, and restores GOMAXPROCS.
+// TestStatCountRaisesProcsAndRestores: Begin starts a count with
+// countProcsFactor processors per CPU at a stat tier and
+// namesCountProcsFactor at the names tier (at most the workers) and records
+// it, and the end it returns restores GOMAXPROCS (the command's local
+// source ends it when its listing returns: cli TestLocalCountRestoresProcs).
 func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "f"), nil, 0o644); err != nil {
@@ -76,15 +78,30 @@ func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := listOpened(context.Background(), src, nil, true, bind.Env{Order: order.Options{Workers: 64}}, nil); err != nil {
-			t.Fatal(err)
-		}
-		if n := runtime.GOMAXPROCS(0); n != 2 {
-			t.Fatalf("%s: GOMAXPROCS %d after the run, want 2 restored", fields, n)
-		}
 		want := int64(2 * countProcsFactor)
 		if fields == Names {
 			want = 2 * namesCountProcsFactor
+		}
+
+		env := bind.Env{Order: order.Options{Workers: 64}}
+		end, err := src.Begin(nil, nil, true, &env.Order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := runtime.GOMAXPROCS(0); int64(n) != want {
+			t.Fatalf("%s: GOMAXPROCS %d during the count, want %d", fields, n, want)
+		}
+		l, err := src.Bound().Prepare(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.Count(context.Background(), nil); err != nil {
+			t.Fatal(err)
+		}
+		end()
+
+		if n := runtime.GOMAXPROCS(0); n != 2 {
+			t.Fatalf("%s: GOMAXPROCS %d after the end, want 2 restored", fields, n)
 		}
 		if got := src.p.Stats().CountProcs; got != want {
 			t.Fatalf("%s: count_procs %d, want %d", fields, got, want)
