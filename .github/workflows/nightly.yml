@@ -201,11 +201,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # Restores the shared module cache and the build cache of ci.yml's same leg (go-xos for the
-      # full one, go-xos-LEG for the others); saves nothing off a push to main.
+      # full one, the one the shard table names for the others); saves nothing off a push to main.
       - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
-          key: go-xos${{ matrix.scope == 'leg' && format('-{0}', matrix.leg) || '' }}
+          key: ${{ matrix.cache }}
 
       # One `go test` per race shard of the leg, each printed first, going on after a failed one
       # so that every shard reports; the full leg vets the module first.

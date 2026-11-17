@@ -28,6 +28,12 @@
 # shards build them, so a package or test file under `//go:build race` is not invisible to the
 # check. Patterns are anchored and use only the syntax Go's RE2 and grep -E agree on.
 #
+# A row may share another row's build cache (the fifth field) only when both run the same packages
+# on the same runner and the other row keeps its own; --check and --self-test enforce it. Both
+# matrices name each leg's cache key (`cache`): `go-race-SHARD` for the shard that owns it, and for
+# a Windows leg `go-xos` (the full leg), `go-xos-SHARD` when all its shards use SHARD's cache, else
+# `go-xos-LEG`.
+#
 # The heavy shards race on the arm64 runner only: its weaker memory model makes it the better
 # race target, and the same -race suite took ~30 % less time there than on amd64
 # (internal/listing 490 s against 700 s). The nightly full, unsharded race run on amd64 covers
@@ -39,27 +45,38 @@ set -euo pipefail
 arm=ubuntu-24.04-arm
 amd=ubuntu-latest
 # name, runner, packages (-: every package no row names), -run pattern (-: whole packages, or
-# the remainder of a split package)
+# the remainder of a split package), build cache (-: the shard's own; else the shard whose cache
+# it shares). Rows that compile the same packages with the same flags on the same runner can
+# share one cache instead of each growing its own: the `internal/listing` rows build one test
+# binary and their tests build nothing else. The `cmd/swath` rows keep their own: their tests
+# build the swath binary, the kill matrices with the swathtest tag, so their caches differ.
 table=(
-  "crash        $arm ./internal/listing                         ^TestCrashMatrix\$"
-  "durable      $arm ./internal/listing                         ^(TestDurable.*|TestDiskFaultMatrix)\$"
-  "listing-rest $arm ./internal/listing                         -"
-  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$"
-  "cmd          $arm ./cmd/swath                                -"
-  "rest-replay  $amd ./internal/replay/...,./bench/replaydiff   -"
-  "rest-source  $amd ./internal/source/...                      -"
-  "rest         $amd -                                         -"
+  "crash        $arm ./internal/listing                         ^TestCrashMatrix\$                       listing-rest"
+  "durable      $arm ./internal/listing                         ^(TestDurable.*|TestDiskFaultMatrix)\$   listing-rest"
+  "remote-crash $arm ./internal/listing                         ^TestRemoteCrashMatrix\$                 listing-rest"
+  "listing-rest $arm ./internal/listing                         -                                        -"
+  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$      -"
+  "cmd          $arm ./cmd/swath                                -                                        -"
+  "rest-replay  $amd ./internal/replay/...,./bench/replaydiff   -                                        -"
+  "rest-source  $amd ./internal/source/...                      -                                        -"
+  "rest         $amd -                                         -                                        -"
 )
 
-# The Windows legs of ci.yml `go-xos` on a full platform run. Windows runs the suite without -race
-# about three times slower than macOS (internal/listing 17 min alone, 28 min beside the other
-# packages, 2026-11-16), so its run is split along the shards above: a leg names shards,
-# comma-separated, and runs one `go test` per shard in order. Every shard is in exactly one leg. The
-# leg holding `rest` is the full one: it also vets the module and tests the nested modules.
+# The Windows legs of ci.yml `go-xos` on a full platform run, one race shard per leg where the
+# shards are long. Windows runs the suite without -race about three times slower than macOS
+# (internal/listing 17 min alone, 28 min beside the other packages, 2026-11-16), and a leg that ran
+# several long shards one after another came within minutes of its limit, so its run is split
+# along the shards above: a leg names shards, comma-separated, and runs one `go test` per shard in
+# order. Every shard is in exactly one leg. `remote-crash` (about two minutes) rides with
+# `durable`, the shortest long shard, and the `rest*` shards share one leg. The leg holding `rest`
+# is the full one: it also vets the module and tests the nested modules.
 windows=(
-  "listing-rest   listing-rest"
-  "cmd            cmd-kill,cmd"
-  "matrices-rest  crash,durable,rest-replay,rest-source,rest"
+  "crash           crash"
+  "durable-remote  durable,remote-crash"
+  "listing-rest    listing-rest"
+  "cmd-kill        cmd-kill"
+  "cmd             cmd"
+  "rest            rest-replay,rest-source,rest"
 )
 
 # Every package of the module, one ./relative path per line: set by load_packages (go list) or by
@@ -71,6 +88,36 @@ field() {
   local f
   f=$(awk -v n="$2" '{print $n}' <<<"$1")
   if [ "$f" != - ]; then printf '%s' "$f"; fi
+}
+
+# The shard whose build cache shard $1 uses: its fifth field, or itself.
+cache_of() {
+  local row owner
+  for row in "${table[@]}"; do
+    [ "$(field "$row" 1)" = "$1" ] || continue
+    owner=$(field "$row" 5)
+    printf '%s' "${owner:-$1}"
+    return 0
+  done
+  echo "unknown shard: $1" >&2
+  return 2
+}
+
+# The build-cache key name of Windows leg $1: go-xos for the full leg, go-xos-SHARD when every shard
+# of the leg uses SHARD's cache, else go-xos-LEG.
+windows_cache() {
+  local row shard owners
+  local -a shards
+  if [ "$1" = "$(full_leg)" ]; then printf 'go-xos'; return 0; fi
+  for row in "${windows[@]}"; do
+    [ "$(field "$row" 1)" = "$1" ] || continue
+    IFS=, read -ra shards <<<"$(field "$row" 2)"
+    owners=$(for shard in "${shards[@]}"; do cache_of "$shard"; echo; done | sort -u)
+    if [ "$(wc -l <<<"$owners")" = 1 ]; then printf 'go-xos-%s' "$owners"; else printf 'go-xos-%s' "$1"; fi
+    return 0
+  done
+  echo "unknown Windows leg: $1" >&2
+  return 2
 }
 
 # $1 is -race, or empty for the packages of a build without it (the Windows legs, whose runner may
@@ -275,6 +322,22 @@ validate() {
   if dup=$(sed '/^$/d' <<<"$names" | sort | uniq -d) && [ -n "$dup" ]; then
     echo "::error::shard names used twice: $dup"; fail=1
   fi
+  # A shared build cache: the owner exists, keeps its own, and runs the same packages on the same
+  # runner, so the entries one shard saves are the ones the others use.
+  local owner other
+  for row in "${table[@]}"; do
+    name=$(field "$row" 1)
+    owner=$(field "$row" 5)
+    [ -n "$owner" ] || continue
+    other=$(printf '%s\n' "${table[@]}" | awk -v s="$owner" '$1 == s')
+    if [ -z "$other" ]; then
+      echo "::error::shard $name shares the build cache of an unknown shard: $owner"; fail=1
+    elif [ "$(field "$other" 5)" != "" ]; then
+      echo "::error::shard $name shares the build cache of $owner, which shares another's"; fail=1
+    elif [ "$(field "$other" 2)" != "$(field "$row" 2)" ] || [ "$(field "$other" 3)" != "$(field "$row" 3)" ]; then
+      echo "::error::shard $name shares the build cache of $owner, which runs other packages or on another runner"; fail=1
+    fi
+  done
   if [ "$globals" != 1 ]; then
     echo "::error::$globals rows name no package, not 1"; fail=1
   fi
@@ -336,10 +399,10 @@ check() {
   done
   [ "$fail" = 0 ] || return 1
   for row in "${table[@]}"; do
-    echo "shard $(field "$row" 1) ($(field "$row" 2)): $(shard_args "$(field "$row" 1)" | paste -sd' ' -)"
+    echo "shard $(field "$row" 1) ($(field "$row" 2), cache go-race-$(cache_of "$(field "$row" 1)")): $(shard_args "$(field "$row" 1)" | paste -sd' ' -)"
   done
   for row in "${windows[@]}"; do
-    echo "Windows leg $(field "$row" 1): $(field "$row" 2)"
+    echo "Windows leg $(field "$row" 1) (cache $(windows_cache "$(field "$row" 1)")): $(field "$row" 2)"
   done
 }
 
@@ -368,6 +431,11 @@ self_test() {
   expect fail "prefix covering a split"     "s r ./a ^TestX\$" "s-rest r ./a -" "w r ./a/... -" "rest r - -"
   expect fail "split with no remainder"     "s r ./a ^TestX\$" "rest r - -"
   expect fail "-run row with a prefix"      "s r ./a/... ^TestX\$" "s-rest r ./a -" "rest r - -"
+  expect ok   "shared build cache"          "s r ./a ^TestX\$ s-rest" "s-rest r ./a - -" "rest r - -"
+  expect fail "cache of an unknown shard"   "s r ./a ^TestX\$ nope" "s-rest r ./a - -" "rest r - -"
+  expect fail "cache of a sharing shard"    "s r ./a ^TestX\$ t" "t r ./a ^TestY\$ s-rest" "s-rest r ./a - -" "rest r - -"
+  expect fail "cache of other packages"     "s r ./a ^TestX\$ c" "s-rest r ./a - -" "c r ./c - -" "rest r - -"
+  expect fail "cache on another runner"     "s r ./a ^TestX\$ s-rest" "s-rest q ./a - -" "rest r - -"
   table=("x r ./a/...,./c -" "rest r - -")
   got=$(shard_args x | paste -sd' ' -)
   if [ "$got" != "./a ./a/b ./c" ]; then echo "self-test: x expands to '$got', want './a ./a/b ./c'"; fail=1; fi
@@ -401,6 +469,12 @@ self_test() {
   windows=("x a,b" "y rest")
   got=$(full_leg)
   if [ "$got" != y ]; then echo "self-test: the full Windows leg is '$got', want y"; fail=1; fi
+  table=("a r ./a ^TestX\$ b" "b r ./a - -" "c r ./c - -" "rest r - -")
+  windows=("x a,b" "z c" "w a,c" "y rest")
+  got=$(for leg in x z w y; do windows_cache "$leg"; echo; done | paste -sd' ' -)
+  if [ "$got" != "go-xos-b go-xos-c go-xos-w go-xos" ]; then echo "self-test: Windows leg caches are '$got'"; fail=1; fi
+  table=("a r ./a -" "b r ./b -" "rest r - -")
+  windows=("x a,b" "y rest")
   ALL=$(printf '%s\n' ./a ./b ./c ./d)
   got=$(windows_args x)
   if [ "$got" != $'./a\n./b' ]; then echo "self-test: Windows leg x runs '$got'"; fail=1; fi
@@ -415,7 +489,7 @@ case "${1:-}" in
     sep=
     printf '['
     for row in "${table[@]}"; do
-      printf '%s{"shard":"%s","runner":"%s"}' "$sep" "$(field "$row" 1)" "$(field "$row" 2)"
+      printf '%s{"shard":"%s","runner":"%s","cache":"go-race-%s"}' "$sep" "$(field "$row" 1)" "$(field "$row" 2)" "$(cache_of "$(field "$row" 1)")"
       sep=,
     done
     printf ']\n'
@@ -428,7 +502,7 @@ case "${1:-}" in
       leg=$(field "$row" 1)
       scope=leg
       if [ "$leg" = "$full" ]; then scope=full; fi
-      printf '%s{"os":"windows-latest","runner":"windows-latest","scope":"%s","leg":"%s"}' "$sep" "$scope" "$leg"
+      printf '%s{"os":"windows-latest","runner":"windows-latest","scope":"%s","leg":"%s","cache":"%s"}' "$sep" "$scope" "$leg" "$(windows_cache "$leg")"
       sep=,
     done
     printf ']\n'

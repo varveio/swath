@@ -203,8 +203,8 @@ test is selected by exactly one of its rows; whole-package rows are checked for 
 so a row whose packages have no tests passes and runs nothing. `--self-test` checks the table logic
 against synthetic package lists without Go.
 
-The heavy shards (`internal/listing` and `cmd/swath`, split by their crash, durable and kill
-matrices) race on `ubuntu-24.04-arm`. Its weaker memory model makes it the better race target, and
+The heavy shards (`internal/listing` and `cmd/swath`, split by their crash, durable, remote-crash
+and kill matrices) race on `ubuntu-24.04-arm`. Its weaker memory model makes it the better race target, and
 the same suite took about 30 % less time there (`internal/listing` 490 s against 700 s). The
 `rest*` shards stay on amd64: that gain was measured on `internal/listing` only, and the Parquet
 encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `internal/parquetout`
@@ -215,6 +215,16 @@ encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `interna
 In the measured history (2026-11-09, about 200 runs), a warm run took 7–8 minutes and its critical
 path was the single `go-race (rest)` shard at 5.4–8.4 minutes. That shard is now three
 (`rest-replay`, `rest-source`, `rest`); their observations are recorded in [measurements](../../internals/measurements.md).
+By 2026-11-17 the critical path of an ordinary pull request was `go-race (listing-rest)`, whose
+`internal/listing` binary runs its tests one at a time: `TestRemoteCrashMatrix` took 122 of its 430 s,
+so it is a shard of its own, `remote-crash`. A test binary's run time is the floor of its shard;
+splitting a package by `-run` is the lever, and `--check` keeps the split complete.
+
+A row may also name another row's build cache. The shards of `internal/listing` build the same
+test binary with the same flags on the same runner, and their tests build nothing else, so they
+share one cache (`go-race-listing-rest`) instead of growing four copies; `--check` refuses a shared
+cache between rows of different packages or runners. The `cmd/swath` shards keep their own: their
+tests build the swath binary, the kill matrices with the `swathtest` tag, so what each uses differs.
 
 Each leg runs with `-count=1`, because a restored build cache would otherwise replay earlier
 results as `(cached)` instead of racing them, and with a per-package `-timeout` below the job's
@@ -234,9 +244,13 @@ Windows runs the suite without `-race` about three times slower than macOS: once
 crash and kill matrices ran there, its single leg took 32 minutes (`internal/listing` 28 of them,
 beside the other packages on four vCPUs). Its full run is therefore split into legs along the race
 shards: a second table in `go-race-shards.sh` names the shards of each leg, the leg runs one
-`go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. The
-leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
-cache, which the stress Windows runs restore. The nightly `go-xos-windows` runs the main module in
+`go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. Three
+legs of several long shards each made the slowest leg the critical path of every `main` push
+(17.6 minutes median, once 26.5 of its 30-minute limit), so each long shard is now a leg of its own:
+`remote-crash` (about two minutes) rides with `durable`, the shortest of them, and the three `rest*`
+shards share one leg. The leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
+cache, which the stress Windows runs restore; the other legs use the build cache of their shards
+(the three `internal/listing` legs share one). The nightly `go-xos-windows` runs the main module in
 the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
@@ -250,8 +264,14 @@ unselected code cannot have platform-specific behavior.
 
 The Actions cache is limited to 10 GB per repository. In the measured history it held 16.3 GB,
 so entries were evicted continuously; the Go caches were 9.15 GB of that, in 16 per-job entries,
-each carrying its own copy of the same module cache. The current layout removes the duplication
-and bounds the generations.
+each carrying its own copy of the same module cache. Sharing the module cache and pruning old
+generations brought one generation to 4.9 GB (2026-11-09), but by 2026-11-17 the caches held
+10.9 GB again with one generation kept: each job restored its build cache, added what it compiled
+and saved it all, and the go command deletes only entries unused for five days, so every cache grew
+with every commit (the three arm64 `internal/listing` shards' from 78 MB each to 175, 289 and
+1,207 MB). GitHub evicted the least recently used entries, module caches among them, and about half
+of the Go jobs downloaded their modules again. The current layout removes the duplication, bounds
+the generations and saves each build cache trimmed to what its job used.
 
 ### Go caches
 
@@ -261,10 +281,12 @@ job, restores two caches. DEPS is one hash of the `go.mod` and `go.sum` of all t
 | Cache | Key | Shared by |
 | --- | --- | --- |
 | module (`GOMODCACHE`) | `go-mod-OS-ARCH-DEPS` | every job on that OS and architecture |
-| build (`GOCACHE`) | `go-build-OS-ARCH-JOB-DEPS-SHA` | one job, or one race shard |
+| build (`GOCACHE`) | `go-build-OS-ARCH-JOB-DEPS-SHA` | one job, or the race shards and Windows legs the shard table gives one cache |
 
 Only a push to `main` saves; pull requests, and the nightly and stress jobs that use the
-composite, restore `main`'s newest without saving. Pull requests do not save because each would
+composite, restore `main`'s newest without saving. The module cache is saved when the job ends
+(`actions/cache`); the build cache by the job's last step,
+[`save-go-cache`](../../../.github/actions/save-go-cache/action.yml), after it has trimmed it. Pull requests do not save because each would
 add a generation per job that only that pull request can read, and fork pull requests cannot write
 the cache anyway.
 
@@ -274,12 +296,33 @@ try to save the same new key, the first wins and the others log a warning. Becau
 different module graphs (`reader` has no cloud SDK), a `main` job that misses the module key
 downloads every module's whole dependency graph (`go mod download all`, which includes the test
 imports of dependencies that `go mod tidy -diff` loads) before it may save, so the first job to
-finish cannot freeze a partial cache.
+finish cannot freeze a partial cache. The download is tried three times, 20 s apart: the module
+proxy resets a stream now and then, and a `main` run once failed on it.
 
 The build cache differs per job (race or not, target OS and architecture, nested module), so it
 stays per job. It is keyed per commit so that parallel jobs never overwrite one another and each
 `main` commit saves a whole cache; restore falls back to the job's newest entry with the same
 DEPS, then any.
+
+A job saves only the build-cache entries it used. The go command keeps an entry's last use in
+its modification time: a lookup refreshes the time of the entry's index file when that time is at
+least an hour old (`markUsed` and `mtimeInterval` in `cmd/go/internal/cache/cache.go`), and a new
+entry is written with the current time. So `setup-go` sets every restored entry a day back
+([`scripts/ci/go-build-cache.sh`](../../../scripts/ci/go-build-cache.sh) `age`), and
+`save-go-cache` deletes the index files still a day old, then every output that no remaining
+index file names (`trim`). An output's own time is not a use signal: the go command leaves an
+identical existing output untouched when a new action produces it. A day is well short of the
+five days and an hour after which the go command's own trim deletes an entry (`trimLimit`), so
+nothing aged is deleted while the job runs. The trim runs on every event and writes what it kept
+to the step summary, so a pull request shows what `main` would save. The cost: a package one run
+did not build is not in the next run's cache, and is built again when a run needs it.
+
+Jobs that build the same packages with the same flags on one runner share a build-cache key
+rather than each saving a copy: the four `internal/listing` race shards on arm64, and the three
+`internal/listing` Windows legs, as the shard table names them. They race to save one key per
+commit; the first save wins and the others log a warning. That is correct only because every one
+of them would save the same trimmed entries, which is why jobs whose tests build different things
+(the `cmd/swath` shards) keep their own key: a shared one would hold only the first saver's.
 
 Per-commit build keys would grow without bound, so `cache-maintenance.yml` runs
 [`scripts/ci/cache-prune.sh`](../../../scripts/ci/cache-prune.sh) after main CI, on CodeQL
@@ -332,7 +375,7 @@ Everything runs on GitHub-hosted runners. Linux jobs use `ubuntu-latest` (amd64)
 minutes:
 
 - Splitting by job and by shard trades runner count for wall time. Each new shard is one more
-  runner per Go pull request and one more build-cache family on `main`.
+  runner per Go pull request and, unless it shares a cache, one more build-cache family on `main`.
 - Change detection makes an unaffected job cost a checkout and a few seconds.
 - The macOS leg is the one runner whose queue time dominated the run, hence its schedule.
 - The heavy race shards run on arm64 because they are both faster and a better race target there.
@@ -365,12 +408,14 @@ minutes:
   docs tier then runs it with no edit here. A test that reads `docs/` as data (the provider evidence)
   also needs a policy rule that selects its tier for that file.
 - **A new race shard:** add a row to the table in `go-race-shards.sh` and its name to one Windows
-  leg there; run `--self-test` and `--check` locally, and update the shard tables in
+  leg there, and give it its own build cache or that of a row of the same package whose tests
+  build the same things; run `--self-test` and `--check` locally, and update the shard tables in
   `docs/internals/testing.md`.
 - **A new platform:** add a leg to the `go-xos` matrix that `changes` emits, for the events where it
   should run.
-- **A new Go job:** set up Go through `./.github/actions/setup-go` with a unique `key`; its build
-  cache is pruned automatically after the CI workflow completes.
+- **A new Go job:** set up Go through `./.github/actions/setup-go` with a unique `key`, and make
+  `./.github/actions/save-go-cache` its last step (`scripts/ci/test-ci-policy.py` fails a `ci.yml`
+  job without it); its build cache is pruned automatically after the CI workflow completes.
 - **Any change:** a commit that touches Go code needs the Go jobs green, and the owning page
   ([`docs/internals/testing.md`](../../internals/testing.md)) must be
   current in the same change.
