@@ -37,20 +37,20 @@ that the remainder and both children are worth their requests. It then emits `(c
 
 | Package | Role | Imports |
 |---|---|---|
-| `cmd/swath` | the commands (`list`, `du`, `resume`, `show`, `diag list`, `diag count`; `du --from-dataset` reads a committed dataset through `reader` and `registry.DatasetTotals` instead of running a listing); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.Notify` on a channel, the run canceled through `context.WithCancelCause` with the signal as cause (so SIGINT is class `interrupted`, 130, SIGTERM `terminated`, 143, and SIGHUP `terminated`, 129, unless ignored at start (`nohup`); on Unix the process then dies by the signal it got), and a forced exit after the shutdown grace; usage generated from the flag set | listing, registry, cli, journal, dataset; providers only to register them (`_` imports) |
+| `cmd/swath` | the commands (`list`, `du`, `resume`, `show`, `diag list`, `diag count`; `du --from-dataset` reads a committed dataset through `reader` and `registry.DatasetTotals` instead of running a listing); flags into `listing.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*listing.ConfigError` for a bad value or combination), with each provider's own flag group; `signal.Notify` on a channel, the run canceled through `context.WithCancelCause` with the signal as cause (so SIGINT is class `interrupted`, 130, SIGTERM `terminated`, 143, and SIGHUP `terminated`, 129, unless ignored at start (`nohup`); on Unix the process then dies by the signal it got), and a forced exit after the shutdown grace; usage generated from the flag set | listing, registry, cli, journal, dataset; no provider (`cli` registers them) |
 | `internal/listing` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
-| `internal/cli` | the command line's flag table (`Flag`, `Define`, `Described`, the flag values) and help groups; the flag groups the providers share, `StoreGroup` (filling `source.Store`) and `EngineGroup` (filling `keyrange.Common`) | registry, source, keyrange, objhttp, pflag |
+| `internal/cli` | the command line's flag table (`Flag`, `Define`, `Described`, the flag values) and help groups; the flag groups the providers share, `StoreGroup` (filling `source.Store`) and `EngineGroup` (filling `keyrange.Common`); each provider's registration, one file each (`s3.go`, `gcs.go`, `azblob.go`, `localfs.go`): its factory, registered from `init`, its flags and their environment variables and conflicts turned into the provider's options, and the source a run takes (the provider's opened view joined with `registry.From`) | registry, source, keyrange, objhttp, parquetout, pflag, every provider |
 | `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; the optional interfaces (`Identified`, `Resumable`, `Capable`, `Reporter`, `Traced` among them: see [providers.md](providers.md#registry-and-optional-interfaces)) | schema, runtrace |
-| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`Bind[R, P]`, `Run`: a `bind.Bound` whose rows go where the run's `Env` sends them, the part router, a text stream or nowhere); `SchemaInfo`, the producers' schema declarations by id (`Factory.Schemas`), and `DatasetTotals`, the same totals and filters over a committed dataset's rows (`swath du --from-dataset`) | bind, source, schema, order, parquetout, textout, dataset, totals, reader, seekparquet |
+| `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`From`, `Bind[R, P]`, `Run`: a `bind.Bound` whose rows go where the run's `Env` sends them, the part router, a text stream or nowhere); `SchemaInfo`, the producers' schema declarations by id (`Factory.Schemas`), and `DatasetTotals`, the same totals and filters over a committed dataset's rows (`swath du --from-dataset`) | bind, source, schema, order, parquetout, textout, dataset, totals, reader, seekparquet |
 | `internal/bind` | a provider bound to its row schema (`Provider[R, P]`) and listed into a sink its caller supplies: unordered (`Count`, `order.CountWithSink`) or through the order stage (`Run`); the column bindings of the filters, the object bytes, the versions counts and the per-prefix totals between provider and sink. It chooses no sink | source, schema, order, filter, totals |
-| `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath/local-entries/v1`; registers the scheme-less roots | source, schema, registry, cli, dataset, longpath |
+| `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath/local-entries/v1`; `Open`, its opened view, whose `Begin` readies a listing (pruning, a count's processors) | source, schema, bind, dataset, longpath |
 | `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits (demand, rank, admission gates), safe pivots, guards, structure probes, requeue, counters, group mode (a versions listing's repeated keys: groups.go), warm start and a counted prior's plan of tiles (prior.go, plan.go); behind a page fetch and a provider description; `Registered`, the optional interfaces an engine provider gives its registered source; the run trace's events ([trace.md](trace.md)) | source, schema, counters, faults, runtrace, buildinfo |
 | `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
-| `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`; registers `s3://`. With `--all-versions` (`NewVersions`): the ListObjectVersions page fetch, its payload `Version` and schema `swath/s3-versions/v1` (grouped), its native page and continuation token | source, schema, registry, cli, keyrange, s3/client |
-| `internal/source/azblob` | Azure Blob provider on the range engine: flat-namespace admission (Get Account Information), the List Blobs page fetch through the byte-order adapter (one per `Expand`), its row payloads `Object` and `Version` and schemas `swath/azure-objects/v1` and `swath/azure-versions/v1` (grouped: `--all-versions`, `NewVersions`); registers `az://` | source, schema, registry, cli, keyrange, azblob/client, azblob/order |
+| `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`, for `s3://` roots. With `--all-versions` (`NewVersions`): the ListObjectVersions page fetch, its payload `Version` and schema `swath/s3-versions/v1` (grouped), its native page and continuation token; `Open` and `OpenVersions`, its opened view | source, schema, bind, keyrange, s3/client |
+| `internal/source/azblob` | Azure Blob provider on the range engine: flat-namespace admission (Get Account Information), the List Blobs page fetch through the byte-order adapter (one per `Expand`), its row payloads `Object` and `Version` and schemas `swath/azure-objects/v1` and `swath/azure-versions/v1` (grouped: `--all-versions`, `NewVersions`); `Open` and `OpenVersions`, its opened view | source, schema, bind, keyrange, azblob/client, azblob/order |
 | `internal/source/azblob/order` | the byte-order adapter: serves the range engine's queries in byte order over List Blobs' UTF-16 order (spans cut at names at U+E000 and above, lazy splits, page-atomic chains with their own tokens, its `order_*` counters) | source, keyrange, counters, azblob/client, utf16order |
 | `internal/utf16order` | Azure's listing order (UTF-16 code units) on UTF-8 bytes: the comparator the Azure client, the byte-order adapter and the replay's Azure route share | – |
-| `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payloads `Object` and `Generation` and schemas `swath/gcs-objects/v1` and `swath/gcs-generations/v1` (grouped: `--all-versions`, `NewGenerations`); registers `gs://` | source, schema, registry, cli, keyrange, gcs/client |
+| `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payloads `Object` and `Generation` and schemas `swath/gcs-objects/v1` and `swath/gcs-generations/v1` (grouped: `--all-versions`, `NewGenerations`); `Open` and `OpenGenerations`, its opened view | source, schema, bind, keyrange, gcs/client |
 | `internal/source/objhttp` | what all object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client `Meter`, token waits, Guard and capture, transport pool, `Activity` (a client's request activity, each part zero where a supplied client does not count it), route canonicalization; `objhttptest` holds the retry contract all three clients pass | source, counters, tokensource |
 | `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
 | `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, SDK decode checks | objhttp |
@@ -78,9 +78,8 @@ The list clients are built on the vendors' SDK service clients; what is the SDK'
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
 transitively. The other way round, what providers are built from (`internal/source`, `keyrange`, `objhttp`,
 `tokensource`) imports none of the command's composition (pflag, `registry`, `parquetout`, `textout`, `cli`),
-transitively, nor does a provider's code outside its `register.go`, which still registers it and defines its
-flags; their parquet-go arrives only through SeekParquet's reader (`schema` → `reader`): `cli`
-`TestProviderImportBoundary`.
+transitively, nor does any provider, which `cli` registers; their parquet-go arrives only through
+SeekParquet's reader (`schema` → `reader`): `cli` `TestProviderImportBoundary`.
 `internal/order` and `internal/dataset` reach no cloud SDK module either (`internal/order` `TestNoCloudSDK`): a store's
 failure is classed by its `HTTPStatusCode`, which `objfile`'s GCS and Azure writers attach to the errors they report
 (`objfile.WithHTTPStatus`) and the AWS SDK's response errors carry, so `dataset.FailureClass` names no SDK error type.
@@ -117,12 +116,13 @@ and `objfile.Limit` bounds request concurrency. See the
 an S3 row carries no filesystem slots and the reverse. The producer defines `P` and its `schema.Schema[P]`
 beside its code: columns as accessors of `P`, the logical size the router cuts parts by, the heap bytes the
 budget counts, and the spill codec ([shared payload delta helper](ordering.md#payload-delta-codec)). The order stage and the router are generic over `P`; the pipeline
-(`listing`) never names it. The one place that does is `registry.Bind[R, P]`, which a provider calls when it
-opens: it erases the range type and returns a `Source` whose `Run` instantiates the order stage and the
-router for `P` (Go has no generic methods, so the binding happens where `P` is known). The binding without
-the writers is `bind.Provider[R, P]`: code that knows `P` lists the provider into a sink of its own
-(`bind.Prepared.Count`, an unordered listing; the version counts and the totals observe the rows before it and
-keep its runs, their intervals and its subtrees' ends), and `registry.Bound` adds the choice of the run's sink.
+(`listing`) never names it. Two places do, each where `P` is known (Go has no generic methods): a provider's
+opener binds the provider to its schema (`bind.Provider[R, P]`, which erases the range type), and the
+command's composition joins that binding with the writers (`registry.From`), a `Source` whose `Run`
+instantiates the order stage and the router for `P`. Code that knows `P` lists the bound provider into a sink
+of its own (`bind.Prepared.Count`, an unordered listing; the version counts and the totals observe the rows
+before it and keep its runs, their intervals and its subtrees' ends), and `registry.Bound` adds the choice of
+the run's sink.
 
 ## Goroutines and ownership
 
@@ -165,15 +165,17 @@ returns the run report with every error, and `--report -` prints it on failure t
 ## How a provider plugs in
 
 Implement `source.Provider[R, P]` for a range type `R` and a row payload `P`, define `P`'s
-`schema.Schema[P]`, and register a `registry.Factory` from `init` whose `Open` returns the opened source: a
-struct embedding `registry.Bind(provider, &schema)` and, for a provider on the range engine, `keyrange.Registered`
-set to the same provider (its `Listed` and the engine's optional interfaces, promoted), with the provider's own
-`Locator`, `Identity`, `Capabilities`, `Report` and, on its own service, `Tariff` (see
-[providers.md](providers.md)). The factory also declares the provider's flags (its own, and
-the shared groups it names: the store's and range engine's),
-which of them a resume may change, its secrets, its help entries and its root form; the command derives its flag
-set, help, resume rules and redaction from the registered factories and names no provider. The command imports
-the package for that registration only; `listing` does the rest. The [provider integration checklist](providers.md#adding-a-provider)
+`schema.Schema[P]`, and export a typed opener, `Open(ctx, root, Options)`, which returns the provider's opened
+view: the provider bound to its schema (`Bound`, from `bind.Provider`) and, for a provider on the range engine,
+`keyrange.Registered` set to the same provider (its `Listed` and the engine's optional interfaces, promoted),
+with the provider's own `Locator`, `Identity`, `Capabilities`, `Report` and, on its own service, `Tariff` (see
+[providers.md](providers.md)). The provider imports no flag package, registry or writer. Its registration is
+one file in `internal/cli`, which registers a `registry.Factory` from `init`: the provider's flags (its own,
+and the shared groups it names: the store's and range engine's), which of them a resume may change, its
+secrets and its root form, the conversion of the parsed flags into the provider's options, and an `Open` that
+calls the provider's and returns the view joined with `registry.From(view.Bound())`. The command derives its
+flag set, help, resume rules and redaction from the registered factories and names no provider; it imports
+`internal/cli`, not the provider, and `listing` does the rest. The [provider integration checklist](providers.md#adding-a-provider)
 lists reader, verifier, test and dependency touch points outside the provider directory. Restart belongs to
 [the engine](range-engine.md#resume); Azure's per-expansion adapter lifetime belongs to
 [its provider](providers/azblob.md#order-the-byte-order-adapter).
