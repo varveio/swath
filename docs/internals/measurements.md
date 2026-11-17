@@ -335,6 +335,9 @@ lists):
 | `--spill-max` 2 × the row budget | **8 of 64** | 275 | 62 % | 13 % | 8 | 15,442 | 1.02 | 8 |
 | kill at 40 % then `swath resume` | 64 of 64 | 71 | 95 % | 67 % | 0 | 0 | 1.02 | 64 |
 
+The longest stretch in which the order stage handed nothing on (`max_frontier_stuck_ns`) was a median 0.28 s and
+at most 1 s over these runs (run `c4big`), the resumed and spill-capped arms included.
+
 Under today's ordered emission a healthy sorted run of a large list holds most of its rows ahead of the
 publish frontier and spills nearly all of them once: work stealing finishes ranges in roughly key-uniform
 order, so the leftmost unfinished range holds the drain until listing is nearly over (an earlier sweep of

@@ -71,6 +71,82 @@ emitter says whether the drain is at the range, `source.Awaiter`) take the split
 page of a range the output waits for; every one but `awaited.open_pages` sums to `awaited.pages`. They are read
 for the report only: no decision reads whether a range is awaited.
 
+## Reading a run report
+
+How to explain a slow or unhealthy run from its `progress.json` and its report. The user page,
+[Watch and tune a run](../watch-a-run.md), keeps the few values a user acts on; this section is the full reading.
+`diagnostics.resources` holds the order stage's counters (the table below), the provider's counters are
+`diagnostics.source.stats.counters.values`; `progress.json` carries the live values under `order`.
+
+**The drain after listing.** On a sorted run the provider can finish long before the last row is handed on:
+parallel listing finishes ranges in roughly key-uniform order, so most rows wait ahead of the frontier (spilled)
+until the leftmost range ends, and are then replayed in order. `timings.provider_finished_at` is when the provider
+finished; `listing_finished_at` when the order stage ended; `drain.tail_ns` the interval between, the part of the
+run in which only the drain was left. In it idle workers read and decode spilled frames ahead of the drainer
+(`drain.read_ahead`) and more encoders are admitted ([encoders](../size-a-run.md#resources-and-their-flags)). What
+the drainer did: `replay_read_ns` and `ahead_wait_ns` (the spill), `order_check_ns`, `sink_write_ns` (the encoders,
+with `encoder_wait_ns`), over the whole run, not the tail alone; and in the tail, the workers'
+`worker_idle_after_provider_finished_ns`. A tail that is most of the run with `sink_write_ns` most of the drainer's
+time is encoder-bound; with `replay_read_ns` or `ahead_wait_ns`, spill-bound.
+
+| Signal | Healthy | Act when |
+|---|---|---|
+| `part_age_ms` | under a minute | several minutes: no part has been published for that long |
+| `order.spill_bytes` | the spill held now: on an unseeded sorted run of a large list it grows toward most of the rows listed, since such a run spills nearly every row once (a median 96 % of rows on lists of 20M keys or more, [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)); seeded from a counted prior, it stays near the frontier window's rows (`window`) | near `spill.max_bytes` or the filesystem's free space: the next frames are refused and listing slows to the drain |
+| `order.nodes`, `order.markers` | tens to hundreds | tens of thousands and rising: a deep speculative tree behind a slow frontier |
+| `order.ahead_rows`, `peak_ahead_rows` (report) | anywhere up to the rows listed: ranges finish in roughly key-uniform order, so most rows of a large sorted run wait ahead of the frontier until listing nearly ends (a median 71 % at peak on lists of 20M keys or more, same measurements). The set is bounded by `--spill-budget`, not by `--sort-buffer`; a count holds none | not by itself; read it with `spill.refused`, `budget_wait_ns` and `max_frontier_stuck_ns` |
+| `spill.refused` (report) | 0 | above 0: the spill cap or the disk's reserve refused frames and emitters waited; with a large `budget_wait_ns` the listing ran at the drain's rate (a cap of 2 × the row budget left 56 of 64 large lists unfinished after 900 s: [measurements](measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)) |
+| `max_frontier_stuck_ns` (report) | a few attempt round trips: a median 0.28 s and at most 1 s on measured sorted runs of 20M keys or more at 50 ms pages, spill-capped ones included (same measurements) | seconds to minutes: the range at the frontier stopped handing rows on (a slow, retried or hung request); an interrupted run reports its last stall too. A spill-capped run that crawls shows in `budget_wait_ns`, not here |
+| `peak_heap_live_bytes` against `invocation.sort_buffer_bytes` (report) | the budget plus the encoders' allowance and the pages in flight | far beyond: memory the budget does not see |
+| `spill.fs_type` (report) | a disk filesystem | `tmpfs`: spill is memory; write the output (for stdout, point `TMPDIR`) to a disk |
+| `output.text.sink_wait_ns` against `timings.listing_ms` (report) | a fraction | near it: the order stage spends the run handing rows on (one formatter: formatting them; more: their queue full); rows wait behind it, spill grows and workers idle. More `--encoders`, if the budget carries them; `output_wait_ns` near the listing time instead: the compressor or the disk is the limit |
+| `order.spill_pressure_since` | absent | present: spill has been refused, with workers waiting on it (in publish or at admission), since then: the spill cap is full (with the default cap, the disk: grow it and listing continues), or free space is down to the reserve; at 2 minutes the run says so on stderr (`spill_pressure`), and `--spill-wait-timeout` stops it |
+| `rows_fetched` against `rows_encoded`, both per second | similar | listed far ahead of encoded: work fetched that cannot be published yet |
+| `advance` | rising | flat while `answered` rises: alive but not progressing; `empty_chain_pages` rising: the service answers only empty pages, and the watchdog stops the run (75, `stuck_empty_chain`) after `--stall-timeout` |
+| `throttles` | flat | rising steadily: the limiter's counters below |
+| `inflight` against `limit` | `limit` near `--workers`, `inflight` near `limit` | `limit` falling: the service throttles; `inflight` far below `limit`: the engine has too little work in parallel |
+| `budget_wait_ns` (report) | near 0 with spill on | large: workers blocked on a full sort buffer |
+| `mean_active` against mean in flight (report) | both near `--workers` | active high, in flight low: requests held by the limiter or admission |
+| `inflight.p99_ns` against `inflight.p50_ns` (report) | a few times p50 | p99 tens of times p50: a tail of slow attempts (timeouts, a throttled route) |
+| `inflight.latency_overflow` (report) | 0 | above 0: attempts of 18 min 20 s or longer; a percentile among them reads 9223372036854775807, open-ended, not a measured bound |
+| `idle_demand_ns` against `busy_ns` (report) | small | comparable: workers sat idle with work wanted; the split policy could not hand out work (see the split counters) |
+| exit 75 on the same output | never twice | a second 75 in a row needs a person |
+
+**A healthy report** of a sorted listing of a million keys or more:
+
+| Field | Normal |
+|---|---|
+| `outcome.class` | `ok` (exit 0), with `outcome.complete` true; for the whole source, also no filters in the dataset's coverage ([check](../results.md#coverage-and-unreadable-entries)) |
+| `diagnostics.efficiency.http_attempts_per_1k_rows` | 1.0 to 1.4. On lists under a million keys, up to about 2 (the seed and first splits are a large share of a few hundred requests) |
+| `spill.refused` | 0 |
+| `budget_wait_ns` | 0 or close to it |
+| `max_frontier_stuck_ns` | a few request round trips (the measured median and bound in the table above) |
+
+Spill is normal: a sorted run of a large bucket spills almost every row once, because ranges finish in roughly
+key-uniform order and the output waits for the leftmost one.
+
+**Spill refused, workers waiting.** `spill.refused` is above 0 and `budget_wait_ns` is large;
+`free_disk_min_bytes` is close to `spill.reserve_bytes`, or the spill reached `spill.max_bytes`. Listing then
+runs at the output's pace, and on a very large bucket that pace can be a small fraction of the listing's
+([billion-scale spill](measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
+`spill.refused_ns` is how long spill stood refused; `publish_wait_ns`, `admission_wait_ns` and `idle_wait_ns`,
+with their peaks, say where the workers waited; and the range engine's `awaited.*` counters say why the range the
+output waited for was or was not split. With the default cap, `spill.cap_raises` counts the rises of a cap that
+followed a disk grown under the run, `max_bytes` is the cap reached and `start_max_bytes` the one the run started
+with. A plain `swath resume DIR` keeps a recorded `--spill-budget`, and with the default derives the cap from the
+free space it finds, the certified spill the stopped run kept counted as free
+([durable spill](ordering.md#durable-spill)).
+
+**A stuck frontier.** `max_frontier_stuck_ns` is seconds to minutes. In `progress.json`, `rows_fetched` rises
+while `rows_encoded` and `parts_written` stay flat and `part_age_ms` grows: one range at the front of the output
+is slow, a slow, retried or hung request. Read `inflight.p99_ns` against `inflight.p50_ns` and the retries in the
+provider's counters.
+
+**Throttling.** `requests.throttles` rises, `limiter.decreases` is above 0, and `progress.json`'s `limit` falls
+below `--workers`; `limiter.peak_depth` near `--workers` means the limit fell to about 1, and `limiter.limit` is
+where it ended. Throttle answers under 15 % of the limiter's window cause no cut; `limiter.cuts_suppressed.tolerated` counts
+them ([request admission](clients.md#request-admission) has the rule).
+
 ## Order stage and encoders (run summary, top level)
 
 | Key | Unit | Meaning |

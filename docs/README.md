@@ -23,7 +23,7 @@ Parquet inventories. Releases are published on the [releases page](https://githu
 - [Filter rows](filters.md): globs, regular expressions, sizes, times and storage classes.
 - [Run large listings](running.md): one large run, its output directory, outcome and limits.
   - [Size a run](size-a-run.md): disk, memory and cost.
-  - [Watch and tune a run](watch-a-run.md): progress, the signals to read, throttling, the flags to change.
+  - [Watch and tune a run](watch-a-run.md): progress, the closing lines, throttling, memory and disk, a stuck run.
   - [Stop, resume and refresh](resume-and-refresh.md): signals, `swath resume`, overwrite and seeding a refresh.
   - [List every version](all-versions.md): versions, generations, snapshots and delete markers.
 - [Run on a schedule](production.md): a scheduled run under a supervisor, a dataset written to a
