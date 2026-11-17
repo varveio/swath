@@ -8,7 +8,7 @@ Notable changes per release. The human summary of the current release is in the
 - Azure Blob: an `--include` with a literal leading prefix narrows the listing to that prefix, as on S3 and
   GCS. A prefix the source URL cannot carry beside its SAS is not narrowed, and the report says so
   (`invocation.narrowing` `provider_declined_prefix`). An Azure run with such an include that was
-  interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2).
+  interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2) (#621).
 
 ## 0.4.0
 
