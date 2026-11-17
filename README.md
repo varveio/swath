@@ -18,7 +18,7 @@ filesystems ([what each supports](https://swath.varve.io/docs/sources/)).
 ## Install
 
 Download swath 0.4.0 for Linux, macOS or Windows from the
-[releases page](https://github.com/varveio/swath/releases) and verify it as
+[releases page](https://github.com/varveio/swath/releases) and put it on your `PATH` as
 [Install](https://swath.varve.io/docs/install.html) describes, or run the image `ghcr.io/varveio/swath:0.4.0`.
 swath is pre-1.0, so flags and schemas can still change between releases. To build from source with Go 1.26.3
 or later:

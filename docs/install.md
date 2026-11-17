@@ -1,15 +1,15 @@
 # Install
 
-swath is one static binary with nothing else to install. Download a release, verify it, and put `swath` on
-your `PATH`.
+swath is one static binary with nothing else to install. Download a release and put `swath` on your `PATH`;
+[verifying the download](#verify-the-download) first is optional.
 
 The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
 Coming from 0.3.2: the command line and the dataset format are new
 ([moving from 0.3.2](https://github.com/varveio/swath/releases/tag/v0.4.0)).
 
-## Download a release
+## Install a release
 
-For 0.4.0, choose the archive for your platform:
+For 0.4.0, the archive for each platform is:
 
 | Platform | Archive |
 |---|---|
@@ -24,27 +24,17 @@ Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` 
 [`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0.spdx.json))
 and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
 
-Each block below downloads with the [GitHub CLI](https://cli.github.com/) (`gh`), verifies, extracts, installs
-and runs the installed binary's `--version`. A failed check stops it before anything is extracted or installed;
-`gh attestation verify` fails so, with exit 4, when `gh` is not logged in.
-The cosign step proves that `SHA256SUMS` came from swath's release workflow, the checksum proves the archive matches it, and
-the attestation records the build that produced it.
+Each block below downloads the archive for your machine, extracts it, installs `swath` and runs the installed
+binary's `--version`. It needs no account and no other tools.
 
 ### Linux
-
-With the [GitHub CLI](https://cli.github.com/) (`gh`) installed and logged in (`gh auth login`), and
-[cosign](https://docs.sigstore.dev/) installed:
 
 ```bash
 VERSION=0.4.0
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+URL=https://github.com/varveio/swath/releases/download/v$VERSION
 ARCHIVE=swath-$VERSION-linux-$ARCH.tar.gz
-gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
-cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS &&
-sha256sum --check --ignore-missing SHA256SUMS &&
-gh attestation verify "$ARCHIVE" --repo varveio/swath &&
+curl -fLO "$URL/$ARCHIVE"
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
 install -m 755 "swath-$VERSION-linux-$ARCH/swath" ~/.local/bin/ &&
@@ -70,19 +60,14 @@ command -v swath && swath --version
 
 ### macOS
 
-With the GitHub CLI and cosign installed (`brew install gh cosign`) and `gh` logged in (`gh auth login`); the
-block picks the Apple silicon or the Intel archive:
+The block picks the Apple silicon or the Intel archive:
 
 ```bash
 VERSION=0.4.0
 ARCH=$(uname -m | sed 's/x86_64/amd64/')
+URL=https://github.com/varveio/swath/releases/download/v$VERSION
 ARCHIVE=swath-$VERSION-darwin-$ARCH.tar.gz
-gh release download "v$VERSION" --repo varveio/swath --pattern "$ARCHIVE" --pattern 'SHA256SUMS*' &&
-cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS &&
-grep " $ARCHIVE\$" SHA256SUMS | shasum -a 256 --check &&
-gh attestation verify "$ARCHIVE" --repo varveio/swath &&
+curl -fLO "$URL/$ARCHIVE"
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
 install -m 755 "swath-$VERSION-darwin-$ARCH/swath" ~/.local/bin/ &&
@@ -91,41 +76,108 @@ install -m 755 "swath-$VERSION-darwin-$ARCH/swath" ~/.local/bin/ &&
 
 Then put `~/.local/bin` on your `PATH` as on [Linux](#linux) (zsh, the macOS default shell, reads
 `~/.zshrc`), and check with `command -v swath && swath --version`. The macOS binaries are not yet signed with
-an Apple Developer ID or notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with `gh` or `curl`, as above,
-runs as it is. Gatekeeper refuses a binary downloaded with a browser: after verifying, clear its quarantine
+an Apple Developer ID or notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with
+`curl`, as above, runs as it is. Gatekeeper refuses a binary downloaded with a browser: clear its quarantine
 attribute, `xattr -d com.apple.quarantine swath-0.4.0-darwin-ARCH/swath`, with `arm64` on Apple silicon
 and `amd64` on Intel.
 
 ### Windows
 
-In PowerShell, with the GitHub CLI installed and logged in (`gh auth login`):
+In PowerShell:
 
 ```powershell
 $Version = "0.4.0"
+$Url = "https://github.com/varveio/swath/releases/download/v$Version"
 $Archive = "swath-$Version-windows-amd64.zip"
-gh release download "v$Version" --repo varveio/swath --pattern $Archive --pattern "SHA256SUMS*"
-$Sum = Select-String -Path SHA256SUMS -SimpleMatch "  $Archive"
-$Ok = $Sum -and ((Get-FileHash $Archive -Algorithm SHA256).Hash -eq $Sum.Line.Split(" ")[0])
-if ($Ok) { gh attestation verify $Archive --repo varveio/swath; $Ok = $LASTEXITCODE -eq 0 }
-if ($Ok) {
-  Expand-Archive $Archive -DestinationPath . -Force
-  $Bin = "$env:LOCALAPPDATA\Programs\swath"
-  New-Item -ItemType Directory -Force $Bin | Out-Null
-  Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
-  & "$Bin\swath.exe" --version
-} else { Write-Error "verification failed: do not use $Archive" }
+curl.exe -fLO "$Url/$Archive"
+Expand-Archive $Archive -DestinationPath . -Force
+$Bin = "$env:LOCALAPPDATA\Programs\swath"
+New-Item -ItemType Directory -Force $Bin | Out-Null
+Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
+& "$Bin\swath.exe" --version
 ```
 
-Then add `%LOCALAPPDATA%\Programs\swath` to your user `PATH` (Settings, "Edit environment variables for your
-account") and open a new terminal. This block checks the checksum and the attestation but not the signature
-on `SHA256SUMS`. To check that too, install cosign for Windows and run this in the same PowerShell session and
-directory; do not use the binary if it fails:
+`curl.exe` comes with Windows 10 (version 1803 and later) and Windows 11; write it with `.exe`, because in
+Windows PowerShell `curl` is another name for `Invoke-WebRequest`. Then add `%LOCALAPPDATA%\Programs\swath`
+to your user `PATH` (Settings, "Edit environment variables for your account") and open a new terminal.
+
+## Verify the download
+
+Verifying is optional. Do it when you need proof that the archive is the one swath's release workflow built
+and published, for example before installing it on shared or production machines. Verify after downloading
+and before installing: run your platform's install block up to and including its `curl` line, then the
+checks below in the same shell and directory, then the rest of the block. If a check fails, do not install
+the archive.
+
+The checks are listed lightest first. Start by downloading `SHA256SUMS` and its signature bundle next to the
+archive:
+
+```bash
+curl -fL -O "$URL/SHA256SUMS" -O "$URL/SHA256SUMS.sigstore.json"
+```
+
+On Windows, in PowerShell:
+
+```powershell
+curl.exe -fL -O "$Url/SHA256SUMS" -O "$Url/SHA256SUMS.sigstore.json"
+```
+
+### Checksum
+
+Needs nothing else installed. It proves that the archive is the file `SHA256SUMS` lists, not a damaged or
+altered copy; the [signature](#signature) proves who published `SHA256SUMS`.
+
+On Linux, it prints the archive's name and `OK`:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+On macOS:
+
+```bash
+grep " $ARCHIVE\$" SHA256SUMS | shasum -a 256 --check
+```
+
+On Windows, `Get-FileHash` computes the checksum:
+
+```powershell
+$Sum = Select-String -Path SHA256SUMS -SimpleMatch "  $Archive"
+$Ok = $Sum -and ((Get-FileHash $Archive -Algorithm SHA256).Hash -eq $Sum.Line.Split(" ")[0])
+if ($Ok) { "OK" } else { Write-Error "checksum mismatch: do not use $Archive" }
+```
+
+### Signature
+
+Needs [cosign](https://docs.sigstore.dev/). It proves that `SHA256SUMS` was signed by swath's release
+workflow for this release's tag, so with the checksum it ties the archive to that workflow. It prints
+`Verified OK`:
+
+```bash
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+```
+
+On Windows, in PowerShell:
 
 ```powershell
 cosign verify-blob --bundle SHA256SUMS.sigstore.json `
   --certificate-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$Version" `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 ```
+
+### Build attestation
+
+Needs the [GitHub CLI](https://cli.github.com/) (`gh`), logged in (`gh auth login`); without a login it fails
+with exit 4. It checks the archive itself against the attestation swath's release workflow recorded for it,
+which names the build that produced it:
+
+```bash
+gh attestation verify "$ARCHIVE" --repo varveio/swath
+```
+
+On Windows, `gh attestation verify $Archive --repo varveio/swath`.
 
 ## Container images
 

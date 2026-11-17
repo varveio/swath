@@ -48,7 +48,7 @@ within 40 minutes.
 ## Download
 
 The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
-Download the archive for your platform, verify it and put `swath` on your `PATH`, or run the container image
+Download the archive for your platform and put `swath` on your `PATH`, or run the container image
 `ghcr.io/varveio/swath:0.4.0`. [Install](../docs/install.md) has the steps.
 
 ## Try a public bucket
