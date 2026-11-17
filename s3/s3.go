@@ -22,7 +22,9 @@ import (
 
 // Options configure an S3 source. The zero value reaches AWS's own
 // service with the credentials, profile and region the environment
-// resolves, as the AWS CLI does.
+// resolves, as the AWS CLI does. With an IAM Identity Center (SSO)
+// profile the AWS SDK may refresh its token cache on disk
+// (~/.aws/sso/cache), as the AWS CLI does.
 type Options struct {
 	// Region is the bucket's region, which requests are signed for. Empty
 	// takes AWS_REGION, AWS_DEFAULT_REGION or the profile's, else
