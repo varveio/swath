@@ -148,4 +148,4 @@ whether the listing was complete ([swath du](totals.md#totals-from-a-saved-datas
 - [Understand your results](results.md): scope, sizes, hard links, coverage and time.
 - [Sources](sources/README.md): list an S3, GCS or Azure Blob bucket the same way.
 - [Query an inventory](query.md): read the saved inventory with DuckDB, pandas or Spark.
-- [Run large listings](running.md): size, watch, stop and resume a long run.
+- [Run large listings](running.md): list a bucket of your own start to finish.
