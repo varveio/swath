@@ -255,7 +255,11 @@ func (w *walker) level(ctx context.Context, prefix []byte, depth int) error {
 				pending = append(pending, e)
 			}
 			if le.CommonPrefix != nil && !w.inv.rows.local {
-				pending = append(pending, listing.Entry{Key: le.CommonPrefix, Kind: listing.KindPrefix})
+				e, err := prefixEntry(le.CommonPrefix, listing.KindPrefix)
+				if err != nil {
+					return err
+				}
+				pending = append(pending, *e)
 			}
 		}
 		if err := w.hand(pending); err != nil {

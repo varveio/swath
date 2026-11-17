@@ -124,7 +124,8 @@ func TestEmptyInventory(t *testing.T) {
 
 // TestRowFaults: a value swath never writes is refused when the view reads
 // it, never handed on or counted: by Walk and Page, and by Summarize where
-// it sums the value (a key's form is not one).
+// it sums the value (a key's form is not one). A common prefix holding a
+// NUL is refused as its rows' keys are.
 func TestRowFaults(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -138,6 +139,7 @@ func TestRowFaults(t *testing.T) {
 		{"a directory without its slash", fixture{id: reader.LocalV1, rows: []rec{{key: "a", kind: "dir"}}}, reader.ErrRow},
 		{"a file with a slash", fixture{id: reader.LocalV1, rows: []rec{{key: "a/", kind: "file"}}}, reader.ErrRow},
 		{"a NUL in a key", fixture{id: reader.S3ObjectsV1, rows: []rec{{key: "a\x00b", size: ptr[int64](1)}}}, listing.ErrInvalidPage},
+		{"a NUL in a common prefix", fixture{id: reader.S3ObjectsV1, rows: []rec{{key: "a\x00/b", size: ptr[int64](1)}}}, listing.ErrInvalidPage},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			inv := open(t, write(t, c.f))
@@ -147,6 +149,12 @@ func TestRowFaults(t *testing.T) {
 			}
 			if _, err := inv.Page(ctx, listing.PageRequest{Limit: 5}); !errors.Is(err, c.want) {
 				t.Errorf("Page = %v, want %v", err, c.want)
+			}
+			if c.want == listing.ErrInvalidPage {
+				_, err := inv.Walk(ctx, listing.WalkRequest{MaxDepth: 1}, func(listing.WalkBatch) error { return nil })
+				if !errors.Is(err, c.want) {
+					t.Errorf("Walk to depth 1 = %v, want %v", err, c.want)
+				}
 			}
 			if c.want == listing.ErrInvalidPage || strings.Contains(c.name, "slash") {
 				return

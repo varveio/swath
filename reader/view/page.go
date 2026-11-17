@@ -155,12 +155,21 @@ func (inv *Inventory) listedEntry(le seekparquet.ListEntry) (*listing.Entry, err
 		e, err := d.entry(ownedRow(le.Row))
 		return &e, err
 	case !inv.rows.local:
-		return &listing.Entry{Key: le.CommonPrefix, Kind: listing.KindPrefix}, nil
+		return prefixEntry(le.CommonPrefix, listing.KindPrefix)
 	case le.Exact != nil:
 		e, err := d.entry(ownedRow(le.Exact))
 		return &e, err
 	}
-	return &listing.Entry{Key: le.CommonPrefix, Kind: listing.KindDir}, nil
+	return prefixEntry(le.CommonPrefix, listing.KindDir)
+}
+
+// prefixEntry is the entry of a common prefix with no row of its own, a
+// key the listing made from its rows' keys: checked as a row's key is.
+func prefixEntry(key []byte, kind listing.Kind) (*listing.Entry, error) {
+	if bytes.IndexByte(key, 0) >= 0 {
+		return nil, errNULKey
+	}
+	return &listing.Entry{Key: key, Kind: kind}, nil
 }
 
 // missingDirectory explains a local directory key with no row and nothing
