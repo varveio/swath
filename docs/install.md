@@ -19,22 +19,17 @@ For 0.4.0, the archive for each platform is:
 | macOS, Apple silicon | [`swath-0.4.0-darwin-arm64.tar.gz`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-darwin-arm64.tar.gz) |
 | Windows, x86-64 | [`swath-0.4.0-windows-amd64.zip`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0-windows-amd64.zip) |
 
-Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` on Windows), `LICENSE`,
-`NOTICE` and `THIRD_PARTY_NOTICES` in a `swath-0.4.0-OS-ARCH/` directory. The release also carries
-[`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0.spdx.json))
-and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
-
 Each block below downloads the archive for your machine, extracts it, installs `swath` and runs the installed
-binary's `--version`. It needs no account and no other tools.
+binary's `--version`, and stops at the first step that fails. It needs no GitHub account, no `gh` and no
+cosign.
 
 ### Linux
 
 ```bash
 VERSION=0.4.0
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-URL=https://github.com/varveio/swath/releases/download/v$VERSION
 ARCHIVE=swath-$VERSION-linux-$ARCH.tar.gz
-curl -fLO "$URL/$ARCHIVE"
+curl -fLO "https://github.com/varveio/swath/releases/download/v$VERSION/$ARCHIVE" &&
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
 install -m 755 "swath-$VERSION-linux-$ARCH/swath" ~/.local/bin/ &&
@@ -46,8 +41,6 @@ The last line prints the version and the commit it was built from, a 40-digit ha
 ```text
 swath 0.4.0 (COMMIT)
 ```
-
-Every run report carries the same in `build`; keep it with any result you may need to investigate.
 
 To run it as `swath`, put `~/.local/bin` first on your `PATH`: add this line to your shell's startup file
 (`~/.bashrc` for bash, `~/.zshrc` for zsh), and run it in the current shell too. Then check that `swath`
@@ -65,21 +58,21 @@ The block picks the Apple silicon or the Intel archive:
 ```bash
 VERSION=0.4.0
 ARCH=$(uname -m | sed 's/x86_64/amd64/')
-URL=https://github.com/varveio/swath/releases/download/v$VERSION
 ARCHIVE=swath-$VERSION-darwin-$ARCH.tar.gz
-curl -fLO "$URL/$ARCHIVE"
+curl -fLO "https://github.com/varveio/swath/releases/download/v$VERSION/$ARCHIVE" &&
 tar -xzf "$ARCHIVE" &&
 mkdir -p ~/.local/bin &&
 install -m 755 "swath-$VERSION-darwin-$ARCH/swath" ~/.local/bin/ &&
 "$HOME/.local/bin/swath" --version
 ```
 
-Then put `~/.local/bin` on your `PATH` as on [Linux](#linux) (zsh, the macOS default shell, reads
-`~/.zshrc`), and check with `command -v swath && swath --version`. The macOS binaries are not yet signed with
-an Apple Developer ID or notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with
-`curl`, as above, runs as it is. Gatekeeper refuses a binary downloaded with a browser: clear its quarantine
-attribute, `xattr -d com.apple.quarantine swath-0.4.0-darwin-ARCH/swath`, with `arm64` on Apple silicon
-and `amd64` on Intel.
+Then put `~/.local/bin` on your `PATH` as on [Linux](#linux), but in `~/.zshrc` for zsh, the macOS default
+shell, or in `~/.bash_profile` for bash, which on macOS does not read `~/.bashrc` in a new terminal. Check with
+`command -v swath && swath --version`. The macOS binaries are not yet signed with an Apple Developer ID or
+notarized ([#420](https://github.com/varveio/swath/issues/420)). A download with `curl`, as above, runs as it
+is. Gatekeeper refuses a binary downloaded with a browser: clear its quarantine attribute,
+`xattr -d com.apple.quarantine swath-0.4.0-darwin-ARCH/swath`, with `arm64` on Apple silicon and `amd64` on
+Intel.
 
 ### Windows
 
@@ -87,40 +80,66 @@ In PowerShell:
 
 ```powershell
 $Version = "0.4.0"
-$Url = "https://github.com/varveio/swath/releases/download/v$Version"
 $Archive = "swath-$Version-windows-amd64.zip"
-curl.exe -fLO "$Url/$Archive"
-Expand-Archive $Archive -DestinationPath . -Force
 $Bin = "$env:LOCALAPPDATA\Programs\swath"
-New-Item -ItemType Directory -Force $Bin | Out-Null
-Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
-if ($?) { & "$Bin\swath.exe" --version }
+curl.exe -fLO "https://github.com/varveio/swath/releases/download/v$Version/$Archive"
+if ($LASTEXITCODE -ne 0) { Write-Error "download failed: $Archive" } else { & {
+  $ErrorActionPreference = "Stop"
+  Expand-Archive $Archive -DestinationPath . -Force
+  New-Item -ItemType Directory -Force $Bin | Out-Null
+  Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
+  & "$Bin\swath.exe" --version
+} }
 ```
 
 `curl.exe` comes with Windows 10 (version 1803 and later) and Windows 11; write it with `.exe`, because in
 Windows PowerShell `curl` is another name for `Invoke-WebRequest`. Then add `%LOCALAPPDATA%\Programs\swath`
 to your user `PATH` (Settings, "Edit environment variables for your account") and open a new terminal.
 
+Every run report carries the same version and commit in `build`; keep it with any result you may need to
+investigate. With `swath` on your `PATH`, continue with [Your first inventory](first-inventory.md).
+
 ## Verify the download
 
 Verifying is optional. Do it when you need proof that the archive is the one swath's release workflow built
 and published, for example before installing it on shared or production machines. Verify after downloading
-and before installing: run your platform's install block up to and including its `curl` line, then the
-checks below in the same shell and directory, then the rest of the block. If a check fails, do not install
-the archive.
+and before installing: download the archive and the checksum files below, run the checks in the same shell
+and directory, then install the archive you checked. If a check fails, do not install it.
 
-The checks are listed lightest first. Start by downloading `SHA256SUMS` and its signature bundle next to the
-archive:
+Each archive holds `swath`, `swath-replay` (a replay server for testing; `.exe` on Windows), `LICENSE`,
+`NOTICE` and `THIRD_PARTY_NOTICES` in a `swath-0.4.0-OS-ARCH/` directory. The release also carries
+[`SHA256SUMS`](https://github.com/varveio/swath/releases/download/v0.4.0/SHA256SUMS), an SPDX SBOM ([`swath-0.4.0.spdx.json`](https://github.com/varveio/swath/releases/download/v0.4.0/swath-0.4.0.spdx.json))
+and a keyless cosign signature bundle (`.sigstore.json`) for each of them.
+
+### Download
+
+On Linux and macOS, download the archive for your machine, `SHA256SUMS` and its signature bundle:
 
 ```bash
-curl -fL -O "$URL/SHA256SUMS" -O "$URL/SHA256SUMS.sigstore.json"
+VERSION=0.4.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+URL=https://github.com/varveio/swath/releases/download/v$VERSION
+ARCHIVE=swath-$VERSION-$OS-$ARCH.tar.gz
+curl -fLO "$URL/$ARCHIVE" &&
+curl -fLO "$URL/SHA256SUMS" &&
+curl -fLO "$URL/SHA256SUMS.sigstore.json"
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-curl.exe -fL -O "$Url/SHA256SUMS" -O "$Url/SHA256SUMS.sigstore.json"
+$Version = "0.4.0"
+$Url = "https://github.com/varveio/swath/releases/download/v$Version"
+$Archive = "swath-$Version-windows-amd64.zip"
+$Bin = "$env:LOCALAPPDATA\Programs\swath"
+curl.exe -fLO "$Url/$Archive"
+if ($LASTEXITCODE -eq 0) { curl.exe -fLO "$Url/SHA256SUMS" }
+if ($LASTEXITCODE -eq 0) { curl.exe -fLO "$Url/SHA256SUMS.sigstore.json" }
+if ($LASTEXITCODE -ne 0) { Write-Error "download failed" }
 ```
+
+The checks below are listed lightest first.
 
 ### Checksum
 
@@ -170,14 +189,45 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json `
 ### Build attestation
 
 Needs the [GitHub CLI](https://cli.github.com/) (`gh`), logged in (`gh auth login`); without a login it fails
-with exit 4. It checks the archive itself against a build attestation recorded in swath's repository, which
-names the workflow and the commit that built it:
+with exit 4. It proves that the archive itself was built by swath's release workflow for this release's tag,
+from the build attestation that workflow recorded:
 
 ```bash
-gh attestation verify "$ARCHIVE" --repo varveio/swath
+gh attestation verify "$ARCHIVE" --repo varveio/swath \
+  --cert-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$VERSION"
 ```
 
-On Windows, `gh attestation verify $Archive --repo varveio/swath`.
+On Windows, in PowerShell:
+
+```powershell
+gh attestation verify $Archive --repo varveio/swath `
+  --cert-identity "https://github.com/varveio/swath/.github/workflows/release.yml@refs/tags/v$Version"
+```
+
+### Install the checked archive
+
+On Linux and macOS:
+
+```bash
+tar -xzf "$ARCHIVE" &&
+mkdir -p ~/.local/bin &&
+install -m 755 "swath-$VERSION-$OS-$ARCH/swath" ~/.local/bin/ &&
+"$HOME/.local/bin/swath" --version
+```
+
+On Windows, in PowerShell:
+
+```powershell
+& {
+  $ErrorActionPreference = "Stop"
+  Expand-Archive $Archive -DestinationPath . -Force
+  New-Item -ItemType Directory -Force $Bin | Out-Null
+  Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
+  & "$Bin\swath.exe" --version
+}
+```
+
+Then put `swath` on your `PATH` as the install steps for your platform describe.
 
 ## Container images
 
