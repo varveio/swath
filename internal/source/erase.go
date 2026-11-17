@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // Erase adapts a provider of ranges R to Provider[any, P], so the order
@@ -48,6 +49,16 @@ func (e erased[R, P]) Replay(r any) (int, bool) {
 		return 0, false
 	}
 	return rp.Replay(rr)
+}
+
+// Dropped forwards the provider's Dropper (nothing without it).
+func (e erased[R, P]) Dropped(r any) (listing.Unread, bool) {
+	d, ok := e.p.(Dropper[R])
+	rr, isR := r.(R)
+	if !ok || !isR {
+		return listing.Unread{}, false
+	}
+	return d.Dropped(rr)
 }
 
 // Planner forwards the provider's Planning (nil without it).
@@ -98,6 +109,13 @@ func (t typed[R, P]) Fence(x string, top bool) {
 func (t typed[R, P]) Subtree(prefix string) {
 	if s, ok := t.e.(Subtreer); ok {
 		s.Subtree(prefix)
+	}
+}
+
+// Unread forwards to an Unreader emitter.
+func (t typed[R, P]) Unread(u listing.Unread) {
+	if ur, ok := t.e.(Unreader); ok {
+		ur.Unread(u)
 	}
 }
 

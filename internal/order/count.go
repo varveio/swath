@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // Count expands every range of p and counts its rows without ordering them:
@@ -49,6 +51,7 @@ func CountWithSink[R, P any](ctx context.Context, p source.Provider[R, P], count
 	defer cancel(nil)
 	c := &counter[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, counted: counted, g: opt.Gauges, sink: sink}
 	c.runs, _ = sink.(RangeSink[P])
+	c.unreads, _ = sink.(UnreadSink)
 	if c.trees, _ = sink.(SubtreeSink[P]); c.trees != nil {
 		c.subs = []*subtree{{pending: 1}}
 	}
@@ -130,6 +133,17 @@ type SubtreeSink[P any] interface {
 	SubtreeEnd(prefix string)
 }
 
+// UnreadSink is a count's sink also told of what the listing did not read:
+// each extent a provider reports through its emitter (source.Unreader) as
+// it meets it, and, at a stop, what its ranges did not finish: the rest of
+// a range whose Expand returned early, as the provider reports it, and
+// the extent of each range the count drops unexpanded (source.Dropper),
+// before the count returns. It is called concurrently, and keeps the
+// extent's keys.
+type UnreadSink interface {
+	Unread(u listing.Unread)
+}
+
 // subtree is a range in the tree a count expands, for a SubtreeSink.
 type subtree struct {
 	parent  *subtree
@@ -145,6 +159,7 @@ type counter[R, P any] struct {
 	sink    Sink[P]
 	runs    RangeSink[P]   // the sink, if it takes runs
 	trees   SubtreeSink[P] // the sink, if it is told of subtrees ending; subs then parallels stack
+	unreads UnreadSink     // the sink, if it is told what was not read
 	subs    []*subtree
 	opt     Options
 	counted *atomic.Int64
@@ -187,7 +202,7 @@ func (c *counter[R, P]) worker() {
 		c.busy++
 		c.mu.Unlock()
 		e := &countEmitter[R, P]{c: c, node: node}
-		err := c.p.Expand(c.ctx, r, e)
+		err := c.expand(r, e)
 		e.end(true)
 		c.mu.Lock()
 		c.busy--
@@ -222,6 +237,19 @@ func (c *counter[R, P]) worker() {
 	}
 }
 
+// expand expands r, a panic in the provider's Expand returned as the
+// count's error: a library count runs in its host's process, which one
+// listing's panic must not end. What the provider holds stays as the
+// panic left it.
+func (c *counter[R, P]) expand(r R, e *countEmitter[R, P]) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("order: a range's listing panicked: %v\n%s", v, debug.Stack())
+		}
+	}()
+	return c.p.Expand(c.ctx, r, e)
+}
+
 // settle counts node's Expand done and returns the prefixes of the
 // subtrees that ended with it, the deepest first (c.mu held).
 func (c *counter[R, P]) settle(node *subtree) []string {
@@ -237,9 +265,17 @@ func (c *counter[R, P]) settle(node *subtree) []string {
 	return ended
 }
 
-// dispose releases the ranges queued and never expanded (a stopped run);
-// called after the workers have returned.
+// dispose releases the ranges queued and never expanded (a stopped run),
+// first telling an UnreadSink each one's extent; called after the workers
+// have returned.
 func (c *counter[R, P]) dispose() {
+	if d, ok := c.p.(source.Dropper[R]); ok && c.unreads != nil {
+		for _, r := range c.stack {
+			if u, ok := d.Dropped(r); ok {
+				c.unreads.Unread(u)
+			}
+		}
+	}
 	if d, ok := c.p.(source.Disposer[R]); ok {
 		for _, r := range c.stack {
 			d.Dispose(r)
@@ -336,6 +372,14 @@ func (e *countEmitter[R, P]) Child(r R) error {
 		return context.Cause(e.c.ctx)
 	}
 	return nil
+}
+
+// Unread hands an extent the range did not read to an UnreadSink
+// (source.Unreader), and drops it for any other sink.
+func (e *countEmitter[R, P]) Unread(u listing.Unread) {
+	if e.c.unreads != nil {
+		e.c.unreads.Unread(u)
+	}
 }
 
 // Subtree takes the prefix the range owns (source.Subtreer).

@@ -9,6 +9,7 @@ import (
 
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // Sizes is the object bytes a listing emitted. Measured says the schema
@@ -75,6 +76,14 @@ func (s sized[P]) Planner() source.Planner[any] {
 	return nil
 }
 
+// Dropped forwards the provider's (source.Dropper).
+func (s sized[P]) Dropped(r any) (listing.Unread, bool) {
+	if d, ok := s.p.(source.Dropper[any]); ok {
+		return d.Dropped(r)
+	}
+	return listing.Unread{}, false
+}
+
 type sizedDisposer[P any] struct {
 	sized[P]
 	d source.Disposer[any]
@@ -106,6 +115,13 @@ func (e sizeEmitter[P]) Span(lo, hi string, open bool) {
 func (e sizeEmitter[P]) Fence(x string, top bool) {
 	if f, ok := e.Emitter.(source.Fencer); ok {
 		f.Fence(x, top)
+	}
+}
+
+// Unread forwards to an Unreader emitter.
+func (e sizeEmitter[P]) Unread(u listing.Unread) {
+	if ur, ok := e.Emitter.(source.Unreader); ok {
+		ur.Unread(u)
 	}
 }
 

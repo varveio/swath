@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // ErrProtocol marks a violation of the listing contract that the engine
@@ -70,6 +71,29 @@ type Provider[R, P any] interface {
 // will never expand, when a run is cancelled or fails.
 type Disposer[R any] interface {
 	Dispose(r R)
+}
+
+// Unreader is an Emitter told of an extent its range did not read, in the
+// terms of the listing contract (reader/listing): a directory or entry, or
+// a key interval, with its scope and why. The extent's keys pass to the
+// emitter. A provider reports each extent as it meets it, before the
+// Expand that met it returns, and, when that Expand returns early, what it
+// did not finish of its range, of class UnreadBudget: a stop is the
+// caller's, and after a failure the count's error stands. It may call
+// Unread from several goroutines at once. A count whose sink is an
+// order.UnreadSink passes the extents on; any other emitter ignores them,
+// and an adapter between a provider and the order stage forwards them.
+type Unreader interface {
+	Unread(u listing.Unread)
+}
+
+// Dropper is a provider that says what a range the order stage drops
+// unexpanded at a stop would have read: its extent, of class UnreadBudget,
+// which a count tells an order.UnreadSink before it disposes the range;
+// ok is false for a range that reads nothing. It reads r and releases
+// nothing (Disposer does).
+type Dropper[R any] interface {
+	Dropped(r R) (u listing.Unread, ok bool)
 }
 
 // Fencer is an Emitter that accepts coverage fences, the declarations a
