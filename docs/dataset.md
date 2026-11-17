@@ -28,8 +28,8 @@ A directory (or object-store prefix) is a swath dataset when all of the followin
 
 A SeekParquet dataset without a registered schema id or without a valid `extensions.swath` is not a swath
 dataset. Any SeekParquet reader can still open it, and generic SeekParquet reads ignore `extensions.swath`
-entirely. A swath dataset can also be partial: a listing stopped by `--max-keys`, or one with filters, is still
-a swath dataset, and opens and reads like any other.
+entirely. A swath dataset can also be partial: one that left out entries it could not read, or one with
+filters, is still a swath dataset, and opens and reads like any other.
 
 The reader opens and reads; it does not judge a dataset. Its operations (the `reader` names are given; other
 readers make the same distinctions):
@@ -216,7 +216,7 @@ module's. JSON readers must not depend on that order.
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | Nothing is missing: the listing reached the end of its scope and `unreadable` is 0. Filters and exclusions are recorded beside it; they do not make it false | the application |
-| `coverage.stop_reason` | `end_of_scope` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys`, `unreported`, ...) | the application |
+| `coverage.stop_reason` | `end_of_scope` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys` only in a diagnostic sample, `unreported`, ...) | the application |
 | `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) | the application |
 | `coverage.filters` | The filters the run applied, one object each: `filter`, the option's name in snake case (`include`, `include_regex`, `exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`, and the local options that leave entries out, `one_file_system` and `no_dirs`), and `value`, as given (each pattern and storage class its own object), a time as RFC 3339 in UTC with six fraction digits (`--modified-since 7d` as the time it named), `null` for an option that takes no value | the application |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |

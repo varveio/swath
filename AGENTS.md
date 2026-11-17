@@ -8,9 +8,8 @@ Read this before changing swath. General contribution rules are in
 swath is a command-line tool for parallel listing and inventory of large object stores
 and filesystems. The Go implementation on `main` supports local and mounted
 filesystems, S3, GCS and Azure Blob flat namespaces, with size summaries and sorted
-Parquet output. It is published as release candidates for 0.4.0 (the newest is v0.4.0-rc.2);
-the latest final release is the S3-focused Java v0.3.2, which Go replaces at 0.4.0. The Java implementation is no longer on `main`; it is preserved at
-the tag `java-final`.
+Parquet output. 0.4.0 is the latest release and the first from the Go implementation; the Java
+implementation is preserved at the tag `java-final`.
 
 Start with [`README.md`](README.md) and the [user guide](docs/start-here.md). The website,
 swath.varve.io, is a VitePress build of `docs/` and the home page in `site/`

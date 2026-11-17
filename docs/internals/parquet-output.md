@@ -298,6 +298,38 @@ before anything is listed (`TestOverwriteRemovesTheCommitFirst`).
 - **swath's Java reader** does not open these datasets, by design (no sort stamps, no reserved columns).
 - **DuckDB** (`verify.py`) reads any part; nothing depends on it beyond standard Parquet.
 
+## Validating a dataset
+
+The user pages check a copied dataset's parts against the manifest's SHA-256 digests and read its coverage
+with `swath show` ([query.md](../query.md#verify-a-dataset)). The format, key order and pages take one of two
+validators, run by hand on a local copy.
+
+**SeekParquet's validator** ([the "Validating" section of its `go/README.md`](https://github.com/varveio/seekparquet)).
+From the root of a SeekParquet checkout that includes `cmd/seekparquet` and supports this dataset's format
+(format version 0, draft revision 1): swath pins `github.com/varveio/seekparquet/go v0.2.0` in `go.mod`, the
+release that fixed draft revision 1; use that release (tag `go/v0.2.0`) or a later one with a matching format.
+
+```bash
+go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \
+go -C go run ./cmd/seekparquet validate --level full /path/to/dataset
+```
+
+`digest` streams each part with a declared SHA-256 and compares its bytes with the manifest's digest;
+swath declares one for every part. `full` separately checks the format, key order and decoded pages
+(including the structural and profile levels); it does not check digests or swath's extension and
+schema semantics. Neither proves that the listing covers the source intended. The validator exits 0 when all
+requested levels complete, 1 when any level fails, and 2 when validation is incomplete, cannot run, or the
+arguments are invalid. With `go run`, a nonzero validator status is printed as `exit status N`; the `go`
+command itself exits 1. CI runs the same validator levels ([testing.md](testing.md#seekparquet-conformance)).
+
+**`verify.py`**, from the repository root with DuckDB installed: `python3 verify.py /path/to/dataset`. It checks
+S3, GCS, Azure Blob and local datasets independently of the Go reader: swath metadata, schema-specific rules,
+row counts, key order and the manifest's part bounds, footer stamps and part SHA-256 digests; for Azure also
+the `azure` source kind and every part's column types and nullability, including UTC microsecond timestamps.
+It expects the producer's flat `data/part-NNNNN.parquet` layout and `run.json`, so it is not a general
+validator for a bucket dataset copied locally with its nested run/attempt part paths. Its checks and optional
+reference comparison: [testing.md](testing.md#verifypy).
+
 ## Schemas
 
 Schemas are data (`schema.Schema[P]`: name, id, the key type, then columns with type, required flag, an

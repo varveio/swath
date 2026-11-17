@@ -34,8 +34,8 @@ const (
 	plainHelpWidth = 80
 )
 
-// docStyle is the help as docs/commands/ holds it: the long form, the widest,
-// no styling.
+// docStyle is the help as docs/internals/diagnostics.md holds it: the long
+// form, the widest, no styling.
 var docStyle = helpStyle{width: maxHelpWidth, long: true}
 
 // styleFor is the help's style on w: on a terminal its width (at most

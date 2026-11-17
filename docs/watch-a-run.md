@@ -150,10 +150,8 @@ fit for live provider throttling; [request admission](internals/clients.md#reque
 On a 1-vCPU machine with 1 to 2 GB of memory the defaults are the place to start. Change these three only
 when the report says so.
 
-- **`--workers`** (default 64 for an object store; for a local path 4 per CPU, so 4 here). Listing waits on request round trips, not the CPU. On one core the sorted
-  output (ordering, spill and one Parquet encoder) is the limit, so more workers do not help there. Raise it
-  (128, 256) only on a machine with spare cores and a service that does not throttle. Lower it if the service
-  throttles at 64.
+- **`--workers`** (default 64 for an object store; for a local path 4 per CPU, so 4 here). On one core the
+  sorted output is the limit, so keep the default ([how many workers](size-a-run.md#workers)).
 - **`--sort-buffer`** (default 1/16 of memory, at most 1 GiB). The bytes of rows held in memory between listing
   and encoding. Memory is the least of physical memory, the cgroup's limit and `GOMEMLIMIT`, and 128 MiB stands
   in when none is found: a 2 GiB container gets 128 MiB, an 8 GiB host 512 MiB, 16 GiB or more 1 GiB

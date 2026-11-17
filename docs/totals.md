@@ -1,8 +1,9 @@
 # Total a source
 
-`swath du` totals a source's objects (a local tree's files), their bytes and their newest time, per prefix
-down to a depth; on a terminal it draws the view of where the bytes are; it can also read the same totals
-back from a saved dataset. The rows' fields and the care their totals
+`swath du SOURCE` shows where the bytes are: on a terminal it draws the view, the largest prefixes and objects
+(a local tree's directories and files) at any depth; in a pipe it prints the total row only. With `-d N` it
+totals the objects, their bytes and their newest time per prefix down to N levels, a table or rows for
+scripts. It can also read the same totals back from a saved dataset. The rows' fields and the care their totals
 need are in [Output](output.md#du-rows); every option is in [swath du](commands/swath-du.md).
 
 ## The view
@@ -194,8 +195,8 @@ dataset's: `"photos": photos-inventory was listed from /data/photos; give a path
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
 and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unreadable entries`, or `--max-keys
 reached` for a diagnostic `swath diag list` sample), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
-the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset whose listing did not complete, such as a
-diagnostic `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
+the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset that left out entries it could not read (`coverage.unreadable`), or is
+otherwise partial, prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. The dataset counts the
 unreadable entries but does not record which directories they were, so it cannot mark their rows: such a
 directory's row shows 0 (in every format) where the live `swath du` shows `-` or null. A file with several hard links

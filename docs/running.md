@@ -7,7 +7,6 @@ that stop it. Running it unattended, on a schedule and under a supervisor, is
 ```bash
 swath list s3://bucket/prefix/ -o /data/inv-2026-11-10 \
   --seed-from /data/inv-2026-11-09 \
-  --report /var/log/swath/inv-2026-11-10.attempt-1.json \
   --max-duration 6h
 ```
 
@@ -33,11 +32,14 @@ Each question a long run raises has its own page:
   the listed root or contain it; a new or empty directory inside the root is accepted (the listing skips it),
   but `--overwrite` of an output inside the root is refused, and a non-empty one is refused saying so: write
   to a new directory outside the root.
-- **The outcome of record** is the exit code plus the report written to `--report FILE` when the attempt ends,
-  on failure too. Give each attempt a fresh path outside the output directory (or remove the old file first).
-  The report's `outcome` holds `class`, `exit_code`, `resumable`, `cause`, `complete`, `stop_reason` and, when
-  the outcome could not be written to `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt.
-  Its schema: [Run report and progress file](reference/run-report.md).
+- **The outcome of record** is the exit code plus the outcome in the dataset directory: `DIR/run.json` beside
+  a committed dataset, else `DIR/error.json`, each with `class`, `exit_code` and `resumable`
+  ([Run on a schedule](production.md#the-nightly-command) says how a supervisor reads them).
+  `--report FILE` keeps each attempt's full report elsewhere, on failure too: give each attempt a fresh path
+  outside the output directory (or remove the old file first). Its `outcome` holds `class`, `exit_code`,
+  `resumable`, `cause`, `complete`, `stop_reason` and, when the outcome could not be written to
+  `DIR/error.json`, `unrecorded`; `attempt.id` identifies the attempt. Its schema:
+  [Run report and progress file](reference/run-report.md).
 - **`--max-duration`** (default 0, no limit) stops the run with exit 124; an object-store run is resumable.
   The stall watchdog stops a service that answers only empty pages; `--max-duration` is the only stop for one
   that keeps returning rows or pages forever. Give every unattended attempt one.

@@ -300,9 +300,8 @@ func TestSize(t *testing.T) {
 
 // TestDocsCLIFlags keeps each command page's options (docs/commands/) and
 // the diagnostic options (docs/internals/diagnostics.md) generated from
-// the flag set: a page's as Markdown (optionList.markdown) with the text
-// --help prints collapsed under it, the diagnostics' as that text. UPDATE=1
-// rewrites them.
+// the flag set: a page's as Markdown (optionList.markdown), the
+// diagnostics' as the text --help prints. UPDATE=1 rewrites them.
 func TestDocsCLIFlags(t *testing.T) {
 	// grouped is the flags keep says, by help group.
 	grouped := func(diag bool, keep func(*pflag.Flag) bool) optionList {
@@ -359,8 +358,7 @@ type optionList struct {
 
 // markdown is a command page's options: a heading per titled group and an
 // item per flag, its names linked to its own anchor (option-NAME), its
-// help line and default, and its further text; then the --help text in a
-// collapsed block.
+// help line and default, and its further text.
 func (l optionList) markdown() string {
 	var b strings.Builder
 	for _, g := range l.groups {
@@ -382,7 +380,6 @@ func (l optionList) markdown() string {
 			}
 		}
 	}
-	b.WriteString("<details>\n<summary>Plain text, in the <code>--help</code> layout</summary>\n\n```text\n" + l.text + "```\n\n</details>\n")
 	return b.String()
 }
 
