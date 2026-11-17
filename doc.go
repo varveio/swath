@@ -23,7 +23,10 @@
 // fails returns an error of one of package listing's classes, read from
 // the failure as the swath command reads it for its outcome, or ctx's own
 // error once ctx has ended. Error messages pass through swath's redaction
-// (objfile.RedactError) and carry no credential.
+// (objfile.RedactError) and carry no credential. Every request a call
+// sends, retries included, is reported to the objfile.Observer on ctx
+// (objfile.WithObserver): a page as an objfile.ListRequest, a lookup's
+// HeadObject and HeadBucket as objfile.MetadataRequest.
 //
 // This package links no cloud SDK; a provider package links its own.
 // Neither links swath's command, its flags or its Parquet writer.

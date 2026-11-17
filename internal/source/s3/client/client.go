@@ -26,7 +26,8 @@
 // deserializer refuses (CDATA within text, spaces around numbers:
 // xml_test.go); TestScannerConformsToSDKDecoder holds it to the SDK's
 // decoder. Credentials are this package's resolution (loadAuth, auth.go),
-// fetched before each attempt is counted.
+// fetched before each attempt is counted. Every attempt, retries included,
+// is reported to the objfile.Observer its context carries, if any.
 package client
 
 import (
@@ -53,6 +54,7 @@ import (
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/tokensource"
+	"github.com/varveio/swath/objfile"
 )
 
 // Config configures a Client. Zero values take the defaults.
@@ -227,9 +229,9 @@ func (c *Client) ListObjectsV2(ctx context.Context, in *ListInput) (*Page, error
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	var renewed bool // an expired-token answer renews the credentials once per call (auth.expired)
+	op := &operation{request: objfile.Request{Kind: objfile.ListRequest, Name: in.Prefix}}
 	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Page, error) {
-		return attempt(c, ctx, &renewed, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, op, emptyList, parseList, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectsV2(actx, req, opts...)
 			return err
 		})
@@ -256,9 +258,9 @@ func (c *Client) ListObjectVersions(ctx context.Context, in *VersionsInput) (*Ve
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	var renewed bool
+	op := &operation{request: objfile.Request{Kind: objfile.ListRequest, Name: in.Prefix}}
 	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*VersionPage, error) {
-		return attempt(c, ctx, &renewed, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, op, emptyVersions, parseVersions, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.ListObjectVersions(actx, req, opts...)
 			return err
 		})
@@ -275,13 +277,13 @@ func (c *Client) HeadObject(ctx context.Context, bucket, key string) (*Head, err
 	if c.cfg.RequestPayer {
 		req.RequestPayer = types.RequestPayerRequester
 	}
-	var renewed bool
+	op := &operation{request: objfile.Request{Kind: objfile.MetadataRequest, Name: key}}
 	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*Head, error) {
 		var out *awss3.HeadObjectOutput
 		answer := func([]byte) (*Head, error) {
 			return &Head{Size: out.ContentLength, LastModified: out.LastModified, StorageClass: string(out.StorageClass)}, nil
 		}
-		return attempt(c, ctx, &renewed, nil, answer, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, op, nil, answer, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			var err error
 			out, err = c.sdk.HeadObject(actx, req, opts...)
 			return err
@@ -294,10 +296,10 @@ func (c *Client) HeadObject(ctx context.Context, bucket, key string) (*Head, err
 // missing bucket is an *Error of status 404.
 func (c *Client) HeadBucket(ctx context.Context, bucket string) error {
 	req := &awss3.HeadBucketInput{Bucket: aws.String(bucket)}
-	var renewed bool
+	op := &operation{request: objfile.Request{Kind: objfile.MetadataRequest}}
 	answer := func([]byte) (*struct{}, error) { return &struct{}{}, nil }
 	_, err := objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*struct{}, error) {
-		return attempt(c, ctx, &renewed, nil, answer, func(actx context.Context, opts ...func(*awss3.Options)) error {
+		return attempt(c, ctx, op, nil, answer, func(actx context.Context, opts ...func(*awss3.Options)) error {
 			_, err := c.sdk.HeadBucket(actx, req, opts...)
 			return err
 		})
@@ -337,8 +339,9 @@ func bearerHeader(req *http.Request) error {
 // Guard has read and checked the body by then). The Guard captures a 200's
 // body and hands the SDK replace in its place; parse decodes the captured
 // body. An expired-token answer may renew the credentials, once per call
-// (renewed; auth.expired), and is then retried.
-func attempt[T any](c *Client, ctx context.Context, renewed *bool, replace []byte, parse func([]byte) (*T, error), call func(context.Context, ...func(*awss3.Options)) error) (*T, error) {
+// (op.renewed; auth.expired), and is then retried. The attempt is reported
+// to ctx's objfile.Observer, when it carries one (operation.begin).
+func attempt[T any](c *Client, ctx context.Context, op *operation, replace []byte, parse func([]byte) (*T, error), call func(context.Context, ...func(*awss3.Options)) error) (*T, error) {
 	actx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 	tok, creds, gen, err := c.auth.ready(actx)
@@ -357,6 +360,7 @@ func attempt[T any](c *Client, ctx context.Context, renewed *bool, replace []byt
 	}
 	capture := &objhttp.Capture{Replace: replace}
 	cctx = objhttp.WithCapture(cctx, capture)
+	end := op.begin(ctx)
 	done := c.Tally.Attempt()
 	err = call(cctx, opts...)
 	done()
@@ -368,9 +372,40 @@ func attempt[T any](c *Client, ctx context.Context, renewed *bool, replace []byt
 		v, err = parse(capture.Body)
 	}
 	if err != nil {
-		return nil, c.auth.expired(actx, c.failure(actx, ctx, err), creds, gen, renewed)
+		err = c.failure(actx, ctx, err)
+	}
+	end(int64(len(capture.Body)), err)
+
+	if err != nil {
+		return nil, c.auth.expired(actx, err, creds, gen, &op.renewed)
 	}
 	return v, nil
+}
+
+// operation is one call's state across its attempts: whether an
+// expired-token answer has renewed the credentials (auth.expired), and the
+// request each attempt reports to ctx's objfile.Observer.
+type operation struct {
+	renewed bool
+	request objfile.Request
+}
+
+// begin reports an attempt to ctx's observer, when it carries one, and
+// returns what reports its end, with the bytes of the answer read and the
+// attempt's failure. Every attempt after the first is a retry.
+func (op *operation) begin(ctx context.Context) func(bytes int64, err error) {
+	o := objfile.ObserverFromContext(ctx)
+	if o == nil {
+		return func(int64, error) {}
+	}
+
+	end := o.Begin(op.request)
+	op.request.Retry = true
+	return func(bytes int64, err error) {
+		if end != nil {
+			end(objfile.RequestResult{Bytes: bytes, Err: objfile.RedactError(err)})
+		}
+	}
 }
 
 // failure maps an attempt's error to safe provider diagnostics. A Guard

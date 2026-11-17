@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/internal/replay/server"
 	"github.com/varveio/swath/internal/replay/store/memstore"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
 	"github.com/varveio/swath/s3"
 )
@@ -456,5 +457,61 @@ func TestRedaction(t *testing.T) {
 	_, err = s3.Open(context.Background(), secret, s3.Options{Anonymous: true})
 	if !errors.Is(err, listing.ErrInvalidRequest) || strings.Contains(err.Error(), "hunter2") {
 		t.Errorf("open: %v, want ErrInvalidRequest without the credentials", err)
+	}
+}
+
+// observed is an objfile.Observer that records each request and its
+// outcome.
+type observed struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (o *observed) Begin(r objfile.Request) func(objfile.RequestResult) {
+	return func(res objfile.RequestResult) {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		o.seen = append(o.seen, fmt.Sprintf("%v %q retry=%t failed=%t", r.Kind, r.Name, r.Retry, res.Err != nil))
+	}
+}
+
+func (o *observed) BatchPlanned(int64, int64, int64) {}
+
+func (o *observed) CacheHit(int64) {}
+
+// TestObserved: every request a call sends, retries included, reaches the
+// observer on its context: a page answered 503 and then retried, and a
+// missing key's HeadObject and HeadBucket.
+func TestObserved(t *testing.T) {
+	s3test.NoCredentials(t)
+	var failed sync.Once
+	backend := s3test.Handler(s3test.Backend(t, []string{"a/1"}))
+	endpoint := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		first := false
+		failed.Do(func() { first = true })
+		if first {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	src := open(t, endpoint, s3test.Name)
+	obs := &observed{}
+	ctx := objfile.WithObserver(context.Background(), obs)
+
+	if _, err := src.Page(ctx, listing.PageRequest{Prefix: []byte("a/"), Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := src.Lookup(ctx, []byte("a/2")); err != nil || r.State != listing.LookupAbsent {
+		t.Fatalf("%+v, %v", r, err)
+	}
+	want := []string{
+		`list "a/" retry=false failed=true`,
+		`list "a/" retry=true failed=false`,
+		`metadata "a/2" retry=false failed=true`,
+		`metadata "" retry=false failed=false`,
+	}
+	if !slices.Equal(obs.seen, want) {
+		t.Errorf("observed %q, want %q", obs.seen, want)
 	}
 }

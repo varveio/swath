@@ -104,6 +104,10 @@ client's retries are spent, `ErrInvalidPage`, `ErrInvalidToken`, `ErrInvalidRequ
 `listing.Retryable` says whether asking again later can succeed. A call whose context ends returns the context's
 error. Error messages pass through swath's redaction and carry no credential.
 
+To count or trace the requests a call sends, put an `objfile.Observer` on its context (`objfile.WithObserver`), as
+for dataset reads: every attempt, retries included, is reported to it, a page's as a list request and a lookup's
+HeadObject and HeadBucket as metadata requests.
+
 ## Not in the library yet
 
 The library answers Page and Lookup on S3. Walk and Summarize, which list a whole prefix, and the GCS, Azure and
