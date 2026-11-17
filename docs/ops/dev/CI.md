@@ -35,10 +35,20 @@ passed full Go validation. It separately verifies that the tag is an ancestor of
 nested modules' tags of the same version (`reader/vX.Y.Z`, `objfile/vX.Y.Z`) name the same commit,
 and requires
 `go-full-gate` from the exact commit's main push run. It then reruns `go vet`
-and the race tests unsharded on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
+and the race tests on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
 binaries once into the release archives, builds both images from those archived binaries, pushes
 them by digest, smokes the digests, and only then applies tags and signs.
 [`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
+
+The release's `go-tests` runs the race tests in the shards of `scripts/ci/go-race-shards.sh`,
+read from the table at the tag, one matrix leg per shard and every one on amd64, beside a
+`vet-reader` leg (`go vet`, the table's `--check`, the reader module's race tests); `publish`
+needs every leg. One unsharded run took 19.5 to 25.5 of the about 28 minutes from a tag push to
+the approval prompt, `internal/listing` alone 1,044 to 1,369 s; the slowest shard sets that wait
+now. The cost: no leg runs all the tests of `internal/listing` or of `cmd/swath` in one process,
+so state leaking from one test into a test of another shard is caught only by nightly's unsharded
+amd64 `go-race-nightly`, which the release does not check. The newest nightly run on `main` must
+be green before a tag ([RELEASING.md](../../../RELEASING.md#cutting-a-release)).
 
 [`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. The three modules are one `directories` entry, so a group is one pull request across them: the root requires `objfile` and `reader` by local `replace`, and a bump in one module alone leaves the root's `go.mod` short of what the nested module requires, which fails every `go` command at the root. The Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
 
@@ -56,7 +66,7 @@ instead of taking the repository default:
 
 - 14 days for the per-commit `go test -json` streams in `ci.yml`;
 - 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`, and the release's
-  `go test -json` stream;
+  `go test -json` streams (one per shard);
 - 1 day for an artifact that only hands files from one job to another in the same run.
 
 ## One required check: `ci-gate`

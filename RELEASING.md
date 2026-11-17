@@ -92,8 +92,11 @@ not qualify an earlier tag. The release token needs read-only Actions access to 
 With full validation established, release does not repeat that whole platform matrix. It checks
 what guards the bytes it ships, on the tag SHA, from a cold cache:
 
-- `go-tests`: `go vet ./...` and `go test -race ./...` of the main module unsharded on
-  linux/amd64 (as nightly's `go-race-nightly`), and of the reader module it compiles in;
+- `go-tests`: the race tests of the main module in the shards of
+  `scripts/ci/go-race-shards.sh`, one leg per shard and every leg on linux/amd64, and one more
+  leg, `vet-reader`: `go vet` of the main module and of the reader module it compiles in, the
+  shard table's check that every test of the main module runs in exactly one shard, and the
+  reader module's race tests. A failed or cancelled leg stops the release before `publish`;
 - `build`: the static builds for all five targets and their `--version` stamp, and the
   license gate: `notices.sh` fails on a linked module whose license go-licenses does not
   recognize or that is not on its allow-list (SPDX identifiers), or when
@@ -103,6 +106,13 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
   the image smoke (`scripts/ci/smoke-container.sh`: an anonymous listing of a
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's
   part list, then resumed as a no-op), and the replay image serving that dataset.
+
+Sharding gives one thing up: no release leg runs all the tests of `internal/listing`, or all
+those of `cmd/swath`, in one process, so a test that leaks state (a global, a goroutine, a file)
+into a test of another shard is not caught at the tag. Only nightly's `go-race-nightly`, the
+unsharded `go test -race ./...` on amd64, runs them together, and the release does not check it:
+before tagging, the newest `nightly.yml` run on `main` must be green
+([Cutting a release](#cutting-a-release)).
 
 `ci.yml` `go-build` runs the same image smoke offline on every main/dispatch run and on
 packaging/dependency/full PRs. Ordinary code PRs retain native cross-builds and the license gate;
@@ -171,7 +181,10 @@ do not repair the published candidate by hand.
    what users will notice, then the evidence for the release and its honest limits. The
    release recipe and workflow reject an untouched or incomplete template.
 2. Make sure `main` is green and you are on a clean checkout of `main` at the commit you
-   want to release, with that commit already on `origin/main`.
+   want to release, with that commit already on `origin/main`. The newest nightly run on
+   `main` must be green too (`gh run list --workflow nightly.yml --branch main --limit 1`): its
+   unsharded race run is the only one that runs a package's tests in one process
+   ([What gates a release](#what-gates-a-release)).
 3. Tag it:
    ```sh
    just release 0.4.0
@@ -205,7 +218,8 @@ do not repair the published candidate by hand.
 - Choosing the version is manual by design; `just release` wraps the guards so the tag
   names a commit the workflow will accept.
 - Artifact retention follows the [registry and artifacts](docs/ops/dev/CI.md#registry-and-artifacts)
-  policy: `release-assets`, a hand-off between jobs, 1 day; the `go-race-release` stream 30 days.
+  policy: `release-assets`, a hand-off between jobs, 1 day; the `go-race-release-SHARD` streams
+  30 days.
 
 ## Verifying a release
 

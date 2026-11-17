@@ -111,7 +111,7 @@ results are in the tag's `ci.yml` and `release.yml` runs.
   modules, the default tier on macOS, Windows and Linux ARM64, cross-builds of the five targets, SeekParquet
   conformance, the replay fixture tier, and both images built for two architectures and smoked offline
   ([testing](https://github.com/varveio/swath/blob/v0.4.0/docs/internals/testing.md)).
-- `release.yml` on the tag: `go vet` and the whole race suite of the main module unsharded, the five targets
+- `release.yml` on the tag: `go vet` and the whole race suite of the main module on amd64, the five targets
   built once with each linux/amd64 binary's `--version` checked, and a smoke of the pushed image digests
   before they are tagged: an anonymous listing of a public S3 prefix into a dataset, read back with DuckDB
   from the manifest's part list, resumed as a no-op, and served by the replay image. The release stays a

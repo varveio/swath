@@ -18,7 +18,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Race tests: `internal/listing`, `cmd/swath` | unit and law tests, oracles, the crash, kill and durable-spill matrices, under `-race` | PR: main module selected; main, dispatch: always | ubuntu-24.04-arm | `ci.yml` `go-race (crash)`, `(durable)`, `(remote-crash)`, `(listing-rest)`, `(cmd-kill)`, `(cmd)` |
 | Race tests: every other package | the same for the rest of the module | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-race (rest-replay)`, `(rest-source)`, `(rest)` |
 | Race tests, unsharded | `go test -race ./...` on amd64: the amd64 race coverage of `internal/listing` and `cmd/swath` | nightly; dispatch `jobs=all` or `go-race-nightly` | ubuntu-latest | `nightly.yml` `go-race-nightly` |
-| Release gate | on the tag SHA: `go vet` and `go test -race ./...` of the main module unsharded, and of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests`, `build` |
+| Release gate | on the tag SHA: the race shards of the main module, every one on amd64, and `go vet`, the shard check and the race tests of `reader`; the five targets' builds and their exact `--version` ([RELEASING.md](../../RELEASING.md#what-gates-a-release)) | a pushed `v*` tag | ubuntu-latest | `release.yml` `go-tests (SHARD)`, `go-tests (vet-reader)`, `build` |
 | Release image smoke | the pushed lister digest lists a public S3 prefix over HTTPS, reads the dataset back with DuckDB and resumes it as a no-op; the replay digest serves it | a pushed `v*` tag, when the repository is public and `PUBLIC_RELEASE_ENABLED` is `true` | ubuntu-latest | `release.yml` `publish` |
 | Heap gates (`SWATH_HEAP_GATES=1`) | the writer admission covers the measured live heap | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
 | Shape suite, per push (`TestShapes`) | 21 shapes at 200,000 keys: exact keys, byte-identical Parquet at 16 and 5 workers, tenfold bounds | PR: main module selected; main, dispatch: always | ubuntu-latest | `ci.yml` `go-nonrace` |
@@ -383,15 +383,16 @@ before and after the change when it fixes a flake, as #300 does.
 ### Release
 
 `release.yml` runs on a `v*` tag and ships this implementation: `source` (release guard self-tests, tag SHA and
-`main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (`go vet ./...`
-and `go test -race -count=1 -timeout 40m ./...` unsharded on amd64, then `go vet` and the race tests of
-`reader`; the `-json` stream is the `go-race-release` artifact) and `build` (`scripts/ci/release-assets.sh
+`main` ancestry, full Go qualification at that SHA, the version read from the tag, the release notes), then side by side `go-tests` (one leg per
+[race shard](#race-shards) at the tag, every one on amd64, each shard's `-json` stream the
+`go-race-release-SHARD` artifact, and a `vet-reader` leg: `go vet` of the main and reader modules,
+`go-race-shards.sh --check` and the race tests of `reader`) and `build` (`scripts/ci/release-assets.sh
 build`: `build.sh` for the five targets with `SWATH_VERSION` and `SWATH_REVISION` set, each linux/amd64
 `--version` exactly the tag's version and commit, and the [license gate](#license-gate); the archives, an SBOM,
 `SHA256SUMS`), then `publish` (both
 `Dockerfile` images from the archived binaries, smoked by digest, assets and images signed, attested and
 verified), which runs only when the repository is public and the `PUBLIC_RELEASE_ENABLED` variable is `true`.
-It does not rerun `ci.yml`'s shards, cross-OS legs, nested modules or fixture tier: `source` requires a
+It does not rerun `ci.yml`'s cross-OS legs, the `objfile` module or the fixture tier: `source` requires a
 successful `go-full-gate` from that exact SHA's main push run ([RELEASING.md](../../RELEASING.md#what-gates-a-release)).
 
 Dependabot raises the Go modules and the `Dockerfile`'s pinned images weekly; [CI.md](../ops/dev/CI.md) says what it leaves to hand.

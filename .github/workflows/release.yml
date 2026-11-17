@@ -20,6 +20,7 @@ jobs:
       actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      shards: ${{ steps.shards.outputs.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -75,14 +76,36 @@ jobs:
           ./scripts/ci/verify-release-notes.sh "$version" docs/ops/dev/RELEASE_NOTES.md
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-  # The Go gate on the tag SHA: vet and the race tests of the main module and of the reader
-  # module it compiles in (go.mod replaces it with ./reader). The source job separately
-  # requires main CI's full Go gate at this SHA; this reruns the suite that guards
-  # what ships, unsharded on amd64 as nightly's go-race-nightly does, from a cold cache.
+      # go-tests runs one leg per shard of the race shard table at the tag; this needs no Go.
+      - id: shards
+        name: Read the race shards from the shard table
+        run: |
+          set -euo pipefail
+          shards=$(./scripts/ci/go-race-shards.sh --matrix | jq -c 'map(.shard)')
+          printf 'shards=%s\n' "$shards" >> "$GITHUB_OUTPUT"
+          echo "go-tests shards: $shards"
+
+  # The Go gate on the tag SHA, from a cold cache: the race tests of the main module in the shards
+  # of scripts/ci/go-race-shards.sh, every shard on amd64 (ci.yml races the heavy ones on arm64),
+  # and one more leg, vet-reader: go vet of the main and reader modules, the shard table's --check
+  # (every package's tests in exactly one shard), and the race tests of the reader module the main
+  # one compiles in (go.mod replaces it with ./reader). The source job separately requires main
+  # CI's full Go gate at this SHA; this reruns the suite that guards what ships. No leg runs all
+  # of internal/listing's or cmd/swath's tests in one process; nightly's go-race-nightly does.
+  # A failed or cancelled leg fails the job, so publish, which needs it, does not run. go test's
+  # -timeout is per package binary and leaves the job's limit room for a cold compile, so a hang
+  # ends in a goroutine dump.
   go-tests:
     needs: source
+    name: go-tests (${{ matrix.leg }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.source.outputs.shards) }}
+        include:
+          - leg: vet-reader
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -99,18 +122,33 @@ jobs:
           cache: false
 
       - name: go vet
+        if: matrix.leg == 'vet-reader'
         run: |
           go vet ./...
           (cd reader && go vet ./...)
 
-      # -timeout is per package binary and leaves the job's limit room for the packages queued
-      # ahead of the last (the unsharded run took ~13 min), so a hang ends in a goroutine dump.
-      - name: go test -race ./... (unsharded, amd64)
+      - name: Race shards cover every test once
+        if: matrix.leg == 'vet-reader'
+        run: ./scripts/ci/go-race-shards.sh --check
+
+      - name: go test -race (reader module)
+        if: matrix.leg == 'vet-reader'
+        working-directory: reader
+        run: go test -race -count=1 -timeout 10m ./...
+
+      - name: go test -race (shard ${{ matrix.leg }}, amd64)
+        if: matrix.leg != 'vet-reader'
+        env:
+          SHARD: ${{ matrix.leg }}
         run: |
           set -euo pipefail
+          # Captured first, so a failing script fails the step instead of running no arguments.
+          shard_args=$(./scripts/ci/go-race-shards.sh "$SHARD")
+          mapfile -t args <<<"$shard_args"
+          printf 'go test -race -count=1 -timeout 20m'; printf " '%s'" "${args[@]}"; echo
           json="$RUNNER_TEMP/go-race-release.json"
           set +e
-          go test -race -count=1 -timeout 40m -json ./... | tee "$json" |
+          go test -race -count=1 -timeout 20m -json "${args[@]}" | tee "$json" |
             jq --unbuffered -rj 'select(.Action == "output" and .Test == null) | .Output'
           status=${PIPESTATUS[0]}
           set -e
@@ -123,16 +161,12 @@ jobs:
           fi
           exit "$status"
 
-      - name: go test -race (reader module)
-        working-directory: reader
-        run: go test -race -count=1 -timeout 10m ./...
-
       - name: Upload the go test -json stream
-        if: always()
+        if: always() && matrix.leg != 'vet-reader'
         # actions/upload-artifact@v7
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: go-race-release
+          name: go-race-release-${{ matrix.leg }}
           path: ${{ runner.temp }}/go-race-release.json
           if-no-files-found: ignore
           retention-days: 30
@@ -214,6 +248,8 @@ jobs:
           retention-days: 1
 
   publish:
+    # go-tests is a matrix: it succeeds only when every leg does. The `if` below names no status
+    # function, so success() applies and a failed, cancelled or skipped need skips publish.
     needs: [source, go-tests, build]
     # Publishing requires the repository to be public AND the PUBLIC_RELEASE_ENABLED
     # variable, which stays in place as an emergency kill-switch: unset it and tags
