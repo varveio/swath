@@ -244,4 +244,4 @@ key, a key outside the scope or a file past those bounds is refused (exit 2). A 
 the work but does not bound the spill.
 
 **Resuming a seeded run.** `swath resume` reads `--seed-from` again and may change or drop it
-(`--seed-from=`); a resume whose previous dataset can no longer be read warns and lists without it.
+(`--seed-from=`); a resume whose previous dataset cannot be read warns and lists without it.
