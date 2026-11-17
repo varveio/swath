@@ -50,7 +50,7 @@ amd=ubuntu-latest
 # the remainder of a split package), build cache (-: the shard's own; else the shard whose cache
 # it shares). Rows that compile the same packages with the same flags on the same runner can
 # share one cache instead of each growing its own: the `internal/inventory` rows build one test
-# binary and their tests build nothing else; the `cmd/swath` rows' tests both build the swath
+# binary and their tests build nothing else; the `command` rows' tests both build the swath
 # binary with the swathtest tag, and `cmd`'s also without it (a few entries, rebuilt when the
 # kill shard saved the shared cache first).
 table=(
@@ -58,8 +58,8 @@ table=(
   "durable        $arm ./internal/inventory                     ^(TestDurable.*|TestDiskFaultMatrix)\$   inventory-rest"
   "remote-crash   $arm ./internal/inventory                     ^TestRemoteCrashMatrix\$                 inventory-rest"
   "inventory-rest $arm ./internal/inventory                     -                                        -"
-  "cmd-kill       $arm ./cmd/swath                              ^(TestSIGKILL.*|TestForcedExit.*)\$      cmd"
-  "cmd            $arm ./cmd/swath                              -                                        -"
+  "cmd-kill       $arm ./command                                ^(TestSIGKILL.*|TestForcedExit.*)\$      cmd"
+  "cmd            $arm ./command                                -                                        -"
   "rest-replay    $amd ./internal/replay/...,./bench/replaydiff -                                        -"
   "rest-source    $amd ./internal/source/...                    -                                        -"
   "rest           $amd -                                        -                                        -"
@@ -70,7 +70,7 @@ table=(
 # (internal/inventory 17 min alone, 28 min beside the other packages, 2026-11-16), and a leg that ran
 # several long shards one after another came within minutes of its limit, so its run is split
 # along the shards above: a leg names shards, comma-separated, and runs one `go test` per shard in
-# order. Every shard is in exactly one leg. Each `internal/inventory` and `cmd/swath` shard is a leg
+# order. Every shard is in exactly one leg. Each `internal/inventory` and `command` shard is a leg
 # (each takes 5 to 9 min there, `remote-crash` 5 of them, 2026-11-17), and the `rest*` shards
 # share one. The leg holding `rest` is the full one: it also vets the module and tests the nested
 # modules.
@@ -85,9 +85,9 @@ windows=(
 )
 
 # The macOS legs of ci.yml `go-xos` on a full platform run, in the same form. One macOS job ran
-# `internal/inventory` and `cmd/swath` side by side on three vCPUs and was the critical job of a full
+# `internal/inventory` and `command` side by side on three vCPUs and was the critical job of a full
 # run (14.5 to 15.7 min, 2026-11-17); alone, without -race, `internal/inventory` takes about 5.4 min
-# of test time there and `cmd/swath` 9.2. So `internal/inventory` is a leg and everything else the
+# of test time there and `command` 9.2. So `internal/inventory` is a leg and everything else the
 # full one. Unlike a Windows leg, a macOS leg runs its packages in one `go test`, side by side as
 # the single job did: a split package whose rows are all in the leg runs whole (one process, all
 # its tests), and a row of a split package whose other rows are elsewhere runs in a `go test` of

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MinIO for the durable spill campaign (cmd/swath's TestDurableMinIO).
+# MinIO for the durable spill campaign (command's TestDurableMinIO).
 #
 # usage: minio.sh up KEYFILE [BUCKET]   start MinIO in Docker (if not running) and fill BUCKET
 #                                       (default swath-durable) from KEYFILE, one empty object per key
@@ -56,7 +56,7 @@ campaign)
   "$SELF" up "$KEYS"
   SWATH_MINIO_ENDPOINT=http://127.0.0.1:$PORT SWATH_MINIO_ACCESS_KEY=$AK SWATH_MINIO_SECRET_KEY=$SK \
     SWATH_CAMPAIGN_KEYS=$KEYS SWATH_CAMPAIGN_RESULTS=$RESULTS \
-    go test -p 1 -count=1 -timeout 3h ./cmd/swath -run '^TestDurableMinIO$' -v > "${RESULTS%.*}.log" 2>&1
+    go test -p 1 -count=1 -timeout 3h ./command -run '^TestDurableMinIO$' -v > "${RESULTS%.*}.log" 2>&1
   ;;
 *)
   echo "usage: minio.sh up KEYFILE [BUCKET] | down | campaign KEYFILE" >&2
