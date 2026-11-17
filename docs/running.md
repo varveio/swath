@@ -30,14 +30,15 @@ millions of objects, read [Size a run](size-a-run.md) first.
 On a terminal, swath draws one progress line on stderr, redrawn every second:
 
 ```text
-  listing · 1,441,002 objects · 51.6 TiB · 2.0s elapsed · 969,817 keys/s (avg 720,501) · 0 parts · 63 in flight · 1,510 API calls · ~$0.008 (est. @ $0.005/1k LIST)
+  listing · 1,441,002 objects · 51.6 TiB · 2.0s elapsed · 969,817 keys/s (avg 720,501) · 0 parts · 63 in flight · 1,510 API calls
 ```
 
 It shows the objects listed and their bytes, the time and the rate, the Parquet parts written, then the
-requests in flight, the requests sent and an estimate of their cost. There is no percentage: a listing does not
-know its total in advance. On a large bucket `parts` can stay at 0 for a long time: swath lists the whole key
-space at once, holds the rows that are not yet next in key order (on disk once its memory budget is full), and
-writes them out in order, much of it near the end of the run.
+requests in flight and the requests sent, and last an estimate of their cost when swath knows the store's price
+(left out here). There is no percentage: a listing does not know its total in advance. On a large bucket
+`parts` can stay at 0 for a long time: swath lists the whole key space at once, holds the rows that are not yet
+next in key order (on disk once its memory budget is full), and writes them out in order, much of it near the end of
+the run.
 
 When stderr is not a terminal (a log, a scheduler), add `--progress` to get the same line every 30 seconds.
 What each number means, the file `inventory/.swath/progress.json` and the signs of trouble are in
