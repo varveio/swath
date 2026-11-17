@@ -30,16 +30,13 @@ source is shown as `?sig=[redacted]`, and a resume needs the SAS again, by `--az
 `marker` or another List Blobs parameter, in any case) is refused at startup with exit 2, naming the parameter.
 Rules shared by every object store are in [Choose a source](README.md#credentials-on-every-object-store).
 
-**Flat namespace only.** Before listing, swath asks the account whether it has a hierarchical namespace (Data
-Lake Storage Gen2) and refuses one that does, with exit 2 and cause `unsupported`. When the account will not
-say (an anonymous caller is always refused that question), swath asks the account's Data Lake host, whose
-refusal of a flat account with blob soft delete or events on also establishes a flat namespace. Only when
-neither establishes it is the run refused too, unless `--azure-assume-flat` asserts a flat namespace; an
-account that reports a hierarchical namespace is refused whatever is asserted. A credential the service
-refuses during these checks ends the run as an authentication failure (exit 1, cause `auth`). A busy or failing
-service (503 `ServerBusy`, other 5xx, throttling, timeouts) is no answer: swath asks again, as it does a listing
-page, until the account answers or the run stops as stuck (exit 75); an endpoint that never answers at all
-stops as unreachable (exit 75).
+**Flat namespace only.** Before listing, swath checks that the account's namespace is flat. An account with a
+hierarchical namespace (Data Lake Storage Gen2) is refused with exit 2 and cause `unsupported`. When swath
+cannot tell (some anonymous callers are refused every answer), the run is refused the same way unless
+`--azure-assume-flat` asserts a flat namespace; an account that reports a hierarchical namespace is refused
+whatever is asserted. A credential refused during the check ends the run as an authentication failure (exit
+1, cause `auth`). A busy or failing service is asked again until it answers or the run stops as stuck (exit
+75).
 
 ## Options for this source
 
@@ -75,8 +72,10 @@ only spill and the run's metadata in `DIR` ([writing to a bucket](../production.
   destination (make a SAS from the key). The SAS is never recorded: give it to every `swath resume DIR`.
 - **Permissions:** read, write and delete on the container's blobs (`sp=rwd`, a container SAS `sr=c`, or an
   account SAS for the blob service with `srt=o`); a container listing is not needed. An Entra ID identity needs
-  a data role on the container or its account, `Storage Blob Data Contributor`, or a custom role with the
-  blob `read`, `write` and `delete` data actions; a control-plane role such as `Contributor` is not enough.
+  a data role on the container or its account, `Storage Blob Data Contributor`, or a custom role with the data
+  actions `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read`, `.../blobs/write` (Put Blob,
+  Put Block and Put Block List) and `.../blobs/delete` (orphans); a control-plane role such as `Contributor` is
+  not enough.
 - **Endpoint:** `--output-endpoint-url` (the blob service base with the account as its first path segment) is
   `https://ACCOUNT.blob.core.windows.net` by default, is never taken from the environment, and is fixed for the
   run. Entra ID needs an `https://` endpoint: an emulator is reached with a SAS.
@@ -85,12 +84,14 @@ only spill and the run's metadata in `DIR` ([writing to a bucket](../production.
   with blob soft delete on, each is kept until the account's retention period expires; with blob versioning
   on, each becomes a previous version that stays billed until deleted, so add a lifecycle rule that deletes
   previous versions under the dataset prefixes (`daysAfterCreationGreaterThan` on `version`).
-- **Entra ID data actions:** a custom role needs
-  `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read`, `.../blobs/write` (Put Blob, Put
-  Block and Put Block List) and `.../blobs/delete` (orphans).
 
 ## Limits and known differences
 
 - Hierarchical namespaces (Data Lake Storage Gen2) are not supported.
 - Azure lists names in UTF-16 order; swath reorders them into byte order, as every other source's.
-- Filters do not narrow an Azure listing, and the report has no cost estimate for it.
+- An `--include` does not reduce what is listed: swath lists the whole source URL and filters the rows (the
+  report's `invocation.narrowing` is `provider_lists_root`). Put the prefix in the URL instead,
+  `az://acct/ctr/logs/2026/` rather than `--include 'logs/2026/**'` on `az://acct/ctr/`.
+- The report has no cost estimate for an Azure listing.
+- `--seed-from` fails the run on a seed whose key pages end at a blob name longer than 1,024 bytes; list
+  without it ([known limits](../troubleshooting.md#known-limits)).

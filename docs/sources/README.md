@@ -37,7 +37,7 @@ Secrets are not taken from flags, with two exceptions that are never recorded: `
 `--s3-bearer-token-command`. Neither reaches the journal, the report or the terminal (each shows
 `[redacted]`), so [`swath resume`](../commands/swath-resume.md) must be given them again.
 
-The report's `source.stats` says where the credentials came from (`credentials`), whether the run was
+The report's `diagnostics.source.stats` says where the credentials came from (`credentials`), whether the run was
 `anonymous`, and for S3 the `region`.
 
 ## Endpoints and TLS
@@ -64,10 +64,9 @@ S3, GCS and Azure Blob share the request options:
 | `--request-rate N` | no cap | at most N HTTP attempts per second, retries and probes included |
 | `--no-adaptive-limit` | the limit is on | do not lower concurrency when the service throttles |
 
-A failed request that can be retried (a throttle, a timeout, a 5xx, a cut connection) is tried up to nine
-times with exponential backoff (100 ms, at most 5 s apart); a listing page that still fails goes back to the
-queue and is tried again later. On Azure Blob the 5xx retried are 502, 503, 504 and a 500 whose code is
-`InternalError` or `OperationTimedOut`; any other 500, and a 501, is not retried. `--stall-timeout` and
+A failed request that can be retried (a throttle, a timeout, a transient 5xx, a cut connection) is tried up
+to nine times with exponential backoff (100 ms, at most 5 s apart); a listing page that still fails goes back
+to the queue and is tried again later. `--stall-timeout` and
 `--max-duration` bound a run that cannot make progress.
 Throttling and how to tune for it: [Watch and tune a run](../watch-a-run.md#throttling).
 

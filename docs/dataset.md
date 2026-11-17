@@ -90,14 +90,16 @@ DIR/
   data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
   manifest.json             the commit: written last, names every part with exact key bounds and coverage
   run.json                  the run report (after the commit)
+  cuts.txt                  the cut file, for the next listing's --seed-from (after run.json)
   error.json                the outcome of an attempt that did not complete
   .swath/                   private workspace: lock, journal, parts/, spill/, suspect/, progress.json, stack dumps
 ```
 
 ### The cut file
 
-`cuts.txt` is the dataset's key distribution for the next listing of the same source and scope. It is
-advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
+`cuts.txt` is the dataset's key distribution for the next listing of the same source and scope: `--seed-from`
+reads it to seed the next listing of a bucket (a local tree is not seeded), and for a dataset in a bucket you
+copy `PREFIX/cuts.txt` and pass that file. It is advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
 without it is whole. A committed run writes it last, after the manifest and `run.json` (in a bucket, after the
 orphan cleanup too, within a time bound of its own); one it cannot write, or not in time, is a warning, and the
 dataset stands. A run killed or stopped between its commit and the cut file leaves none (its resume finds the
@@ -154,7 +156,7 @@ directory (`.swath/remote/allocated`).
 receipt per part (`.swath/remote/claims/`), the names allocated before their uploads began, the candidate
 manifest and, once committed, `commit.json` (finalized once the orphans are cleaned and `run.json` is in place). `swath resume DIR` continues the run against the recorded
 destination. [Durability and resume (internals)](internals/durability.md#a-dataset-in-a-bucket) has the protocol;
-[Running swath in production](production.md#writing-to-a-bucket) the operating guide.
+[Writing to a bucket](production.md#writing-to-a-bucket) the operating guide.
 
 ## The swath extension
 

@@ -10,7 +10,7 @@ the flags to change when its report says so, are in [Watch and tune a run](watch
 | Listing concurrency | `--workers` | 64 for an object store, whatever the CPU count; 4 per CPU for a local path, at most 64 | an object-store listing waits on the service, not the CPU; it is also the request limiter's ceiling. A local walk waits on the disk: more workers past a few per CPU only add memory and contention (raise it for a network filesystem) |
 | Sort buffer | `--sort-buffer` | 1/16 of memory, at most 1 GiB; 128 MiB when no limit is found; at least 128 KiB (less is refused, exit 2) | memory is the least of physical memory, the cgroup's limit (Linux, its ancestors' included) and `GOMEMLIMIT`; `diagnostics.sort_buffer` records which, and why the budget is what it is. It bounds the bytes of rows and scheduler metadata in flight (see Memory below). Not a cap on resident memory. After listing it also sizes the parallel tail: when `diagnostics.resources.drain.segments.workers_by` is `row_budget`, a larger budget buys more tail workers ([how](internals/ordering.md#segments-parts-written-in-parallel-after-listing)) |
 | Encoders | `--encoders` | GOMAXPROCS, reduced by resource admission | default Parquet counts are limited by an encoder allowance of 1/16 of memory (at most 1 GiB, whatever `--sort-buffer` says), each encoder priced at the schema's calculated working set plus, writing to a bucket, its upload buffer (a GCS chunk, an S3 part or an Azure block), and by the descriptor limit; an explicit `--encoders N` bypasses these limits with a warning on a shortfall. The default count may rise after listing; an explicit count is never raised. See [encoder admission](internals/ordering.md#the-budget) and [per-schema buffer sizes](internals/parquet-output.md#writer-buffers-and-admission). For `.zst` text files the flag controls parallel compression jobs (see Memory). |
-| Spill disk | `--spill-budget` | 0: the spill filesystem's free space after the reserve for a dataset in a bucket, half of it otherwise (the output, or a stream's other programs in `$TMPDIR`, share it), following the disk | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's in `$TMPDIR/swath-ATTEMPT-RANDOM/spill/`, as a stream has no directory; a listed tree holding either leaves it out; `swath du` and `swath diag count` never spill); past the cap, or at the reserve, listing waits instead of failing. The default cap is re-derived from the free space when it would refuse a frame, and every 2 s while it holds the run back, so a filesystem grown under the running process is used (report: `diagnostics.resources.spill.max_by`, `start_max_bytes`, `max_bytes`, `max_raised`); a `--spill-budget` is fixed. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `diagnostics.resources.spill.reserve_bytes`; `swath diag list --spill-reserve` overrides it) |
+| Spill disk | `--spill-budget` | 0: the spill filesystem's free space after the reserve for a dataset in a bucket, half of it otherwise (the output, or a stream's other programs in `$TMPDIR`, share it), following the disk | rows listed ahead of a slow frontier go to `DIR/.swath/spill/`; a text file's to a scratch directory beside it, `.NAME.swath-ATTEMPT-RANDOM/spill/` (stdout's in `$TMPDIR/swath-ATTEMPT-RANDOM/spill/`, as a stream has no directory; a listed tree holding either leaves it out; `swath du` never spills); past the cap, or at the reserve, listing waits instead of failing. The default cap is re-derived from the free space when it would refuse a frame, and every 2 s while it holds the run back, so a filesystem grown under the running process is used (report: `diagnostics.resources.spill.max_by`, `start_max_bytes`, `max_bytes`, `cap_raises`); a `--spill-budget` is fixed. The reserve is derived: one part per encoder at full size, at least 1 GiB (report: `diagnostics.resources.spill.reserve_bytes`) |
 | Part size | `--part-size`, `--part-max-rows` | 64 MiB; no row cap | target Parquet bytes per part; with `--part-max-rows N` a part also closes at N rows. Smaller parts suit readers that load whole parts, larger ones mean fewer files. A dataset holds at most 100,000 parts: a small part size on a very large listing can reach that (exit 1, `cause` `part_limit`; start over with a larger `--part-size`) |
 
 ## Disk
@@ -33,13 +33,16 @@ run (resumable; [ordering](internals/ordering.md#spill)).
 
 ### Disk sizing
 
-- **The dataset:** about 30 bytes per row at the default part size (the live 1.09-billion-object listing of
-  run `cogslive1`, `bf5e6d52`, 256 workers, wrote 488 parts, 32 GB). Measure your own from a representative
+- **The dataset:** about 30 bytes per row at the default part size, measured on a live listing of 1.09
+  billion objects (488 parts, 32 GB;
+  [measurements](internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)). Measure your own from a representative
   prefix: `output.output_bytes` over `output.rows_committed`.
 - **Spill per row:** frames are prefix-coded and compressed (zstd) by default: 25 to 53 bytes per row on production
-  keys with real ETags in the frame benchmark, and about 30 bytes per row on the live listing above (`cogslive1`:
-  32 GB for 1.08 billion spilled rows). At the peak, a median 71 % of the rows were listed ahead of the output
-  on lists of 20M keys or more (candidate 4, run `c4big`, plain frames), so live spill can come close to the
+  keys with real ETags in a [benchmark](internals/measurements.md#delta-coded-spill-frames), and about 30 bytes
+  per row on the live listing above (32 GB for 1.08 billion spilled rows). At the peak, a median 71 % of the
+  rows were listed ahead of the output on lists of 20M keys or more
+  ([measurements](internals/measurements.md#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)),
+  so live spill can come close to the
   dataset's own size. On listings of a billion objects and more it reaches it: 96 to 99 % of the rows were
   ahead of the output at the peak, at 18 to 22 bytes per row
   ([measurements](internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13)).
@@ -92,18 +95,18 @@ process when memory cannot be reclaimed. A run holds:
   64 MiB for Azure. These byte limits do not bound the backing buffer capacity or decoded rows and
   strings. With the default page policy, Azure Blob asks for 5,000 entries a page with a counted
   `--seed-from` prior, against 1,000 otherwise: about five times the memory per page in flight, beside
-  the same sort buffer. `swath diag` commands can override the page size with `--page-size`. Worker requests,
+  the same sort buffer. Worker requests,
   seed listings and probes can overlap. Include those allocations, the
   encoders' writers and codec, compression scratch and garbage collector headroom when sizing the host.
   See [body handling](internals/clients.md#what-swath-keeps) and
   [writer buffers](internals/parquet-output.md#writer-buffers-and-admission).
 - **A local listing's largest directory, outside it:** a listing reads each directory whole to sort it,
   for each directory read at once; the names and keys grow with their lengths (1M files in one directory,
-  names of about 13 bytes: about 140 MiB peak measured). A count (`swath du`, `swath diag count`) does not
+  names of about 13 bytes: about 140 MiB peak measured). A count (`swath du`) does not
   sort, and on Linux reads large directories a slab at a time; the portable engine (macOS, Windows) reads
   each directory whole for a count too.
 - **A `.zst` text file's compressor, outside it:** as many parallel jobs as `--encoders`, about 5 to 13 MiB
-  each; lower `--encoders` to lower it. Gzip is one stream. The report's `output.text.compressor` names the
+  each; lower `--encoders` to lower it. Gzip is one stream. The report's `diagnostics.text.compressor` names the
   jobs and why (`jobs_reason`: `cores`, `encoder_allowance`, `encoders` when asked, `gzip`); the rows being
   formatted for the file are rows in flight, charged to `--sort-buffer`
   ([how](internals/run-lifecycle.md#encoder-sizing)).
@@ -112,7 +115,7 @@ process when memory cannot be reclaimed. A run holds:
   report names the filesystem (`diagnostics.resources.spill.fs_type`), and a run that spills there warns once, at its first
   spill (one that never spills, most runs, says nothing).
 
-A count (`swath du`, `swath diag count`) holds only pages in flight and the ranges queued for a worker: it counts rows as they
+A count (`swath du`) holds only pages in flight and the ranges queued for a worker: it counts rows as they
 arrive and never orders, buffers or spills them (`diagnostics.resources.features.order` false, `peak_buffered_bytes` 0, no `spill`).
 `swath du` also holds one entry per distinct prefix (about 150 bytes each), capped by `--max-prefixes`.
 

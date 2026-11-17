@@ -73,7 +73,7 @@ being listed, and the prefixes kept to the end because they hold a hard-linked f
 `--max-prefixes`; past it the view keeps fewer levels rather than fail, and says so on stderr. The run
 report's `diagnostics.totals_view` counts what was kept, dropped and merged.
 
-The view is for reading. In a pipe `swath du` prints its rows (TSV) as before, and an explicit `-d N`
+The view is for reading. In a pipe `swath du` prints TSV rows, and an explicit `-d N`
 (`-d 0` included), `--sort` (the view is always by size) or `--format` prints the table or the rows.
 `--from-dataset` draws the same view from a saved dataset, line for line.
 
@@ -155,7 +155,9 @@ children it holds does), and says so in one line under it instead of naming them
 Each `swath du SOURCE` lists SOURCE again. To look at a large source at several depths, or with other filters,
 list it once into a dataset (`swath list SOURCE -o DIR`) and total that instead (a live `swath du` that listed
 a million entries or more says so on a terminal: its closing lines end with `hint:` lines giving both commands
-for its SOURCE):
+for its SOURCE). `--from-dataset` reads a local dataset directory only: a dataset in a bucket is refused
+(exit 2), so copy its `manifest.json` and the parts the manifest names, at the same paths, to a local
+directory and total that.
 
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size
@@ -189,10 +191,10 @@ and warns, exit 0, as a live listing of an empty prefix. Any other SOURCE is ref
 dataset's: `"photos": photos-inventory was listed from /data/photos; give a path below it, or no argument`.
 
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
-and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unreadable entries`, `--max-keys
-reached`), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
+and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unreadable entries`, or `--max-keys
+reached` for a diagnostic `swath diag list` sample), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
 the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset whose listing did not complete, such as a
-`--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
+diagnostic `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. The dataset counts the
 unreadable entries but does not record which directories they were, so it cannot mark their rows: such a
 directory's row shows 0 (in every format) where the live `swath du` shows `-` or null. A file with several hard links
@@ -202,8 +204,7 @@ are those of a live `--metadata names` run: both figures null under a prefix wit
 `links_once` false. With nothing counted (an empty tree, or every file filtered out) both figures are 0, and
 `links_once` is still false, as live, since the manifest records the tier.
 
-`--from-dataset` reads a committed local dataset directory. A dataset in a bucket is refused as not supported
-yet. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
+`--from-dataset` reads a committed local dataset directory. A directory holding an interrupted run is refused with the `swath show` and `swath resume` commands that
 handle it. The options that shape a listing are refused by name: provider, credential, performance, limit and
 report options, and `--all-versions`, since the dataset's schema decides that. So are `--allocated`,
 `--count-links` and `--storage-class` when the dataset's schema has no column for them. The filters, the

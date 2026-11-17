@@ -18,13 +18,15 @@ Parquet inventories. Releases are published on the [releases page](https://githu
   and mounted filesystems: URLs, credentials, permissions, endpoints, requests.
 - [Output](output.md): text rows (table, TSV, JSONL), `swath du` totals, reading them in DuckDB, when to write
   a dataset.
-- [Filters](filters.md): globs, regular expressions, sizes, times and storage classes.
-- [Running swath](running.md): one large run, its output directory, outcome and limits.
+- [Total a source](totals.md): `swath du`, the view of where the bytes are, totals per prefix and totals from a
+  saved dataset.
+- [Filter rows](filters.md): globs, regular expressions, sizes, times and storage classes.
+- [Run large listings](running.md): one large run, its output directory, outcome and limits.
   - [Size a run](size-a-run.md): disk, memory and cost.
   - [Watch and tune a run](watch-a-run.md): progress, the signals to read, throttling, the flags to change.
   - [Stop, resume and refresh](resume-and-refresh.md): signals, `swath resume`, overwrite and seeding a refresh.
   - [List every version](all-versions.md): versions, generations, snapshots and delete markers.
-- [Running swath in production](production.md): a scheduled run under a supervisor, a dataset written to a
+- [Run on a schedule](production.md): a scheduled run under a supervisor, a dataset written to a
   bucket, preemptible machines.
 - [Troubleshooting](troubleshooting.md): symptom, cause, fix; the known limits.
 

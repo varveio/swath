@@ -22,8 +22,9 @@ swath du -d 1 media
 
 Each row totals everything below it, as `du` does: its files, its directories and their bytes. `-d 1` limits
 the breakdown to one level. It does not limit the walk: swath still reads the whole tree, and every row and
-the total include everything below them. Without `-d` you get the total alone. `--sort size` puts the largest
-first.
+the total include everything below them. Without `-d`, on a terminal, `swath du` draws
+[the view](totals.md#the-view), a tree of the largest directories and files with their shares of the total; in
+a pipe it prints the total alone. `--sort size` puts the largest first.
 
 The sizes are apparent bytes, the length of each file as `ls -l` shows it; the last line adds the space the
 filesystem reports for the whole tree, on disk, close to what `du` prints. Here `archive/` holds a sparse
@@ -70,7 +71,8 @@ under both its names here), the time, and where the dataset went, then what to r
 `media-inventory` is now a swath dataset. A swath dataset is a directory of sorted Parquet parts and a
 `manifest.json` that commits them, in the SeekParquet format, with one of swath's registered schema ids and
 valid swath metadata ([the swath dataset profile](dataset.md)). Here it holds `data/part-00000.parquet`, the
-manifest, `run.json` (the run report), `cuts.txt` (the cut file, for the next listing's `--seed-from`) and
+manifest, `run.json` (the run report), `cuts.txt` (the cut file, which `--seed-from` reads to seed the next
+listing of a bucket; a directory listing does not use it) and
 `.swath/` (the run's private workspace, which readers ignore)
 ([layout](dataset.md#what-a-swath-dataset-is)). Its 12 rows are 7 file names and 5 directories;
 two of the names are one hard-linked file.
