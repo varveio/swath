@@ -1,8 +1,9 @@
 # Total a source
 
-`swath du` totals a source's objects (a local tree's files), their bytes and their newest time, per prefix
-down to a depth; on a terminal it draws the view of where the bytes are; it can also read the same totals
-back from a saved dataset. The rows' fields and the care their totals
+`swath du SOURCE` shows where the bytes are: on a terminal it draws the view, the largest prefixes and objects
+(a local tree's directories and files) at any depth; in a pipe it prints the total row only. With `-d N` it
+totals the objects, their bytes and their newest time per prefix down to N levels, a table or rows for
+scripts. It can also read the same totals back from a saved dataset. The rows' fields and the care their totals
 need are in [Output](output.md#du-rows); every option is in [swath du](commands/swath-du.md).
 
 ## The view
@@ -90,7 +91,7 @@ its children:
 
 ```text
 $ swath du -d 1 /data/photos --format table
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
  459 KiB      5     3  2026-11-02 10:30:00  /data/photos (total)
@@ -116,8 +117,9 @@ bytes](results.md#apparent-and-allocated-bytes)). A bucket has no allocated byte
 null and its table has no on-disk line. A local tree's directories are counted in `dirs`, never as objects,
 and their own size and blocks are in no total, so a tree's allocated bytes are below `du -sB1`'s by them. With
 `--all-versions` every version is an object; an S3 delete marker adds its prefixes but no object, bytes or
-time. `max_last_modified` is the newest time among the objects counted; the table shows it in local time to
-the second, under a heading that names the zone, as `swath list`'s table does, and `-` when no object had one.
+time. `max_last_modified` is the newest time among the objects counted; the table shows it under `newest`, as
+the view does, in local time to the second with the zone named in the heading, as `swath list`'s table does, and
+`-` when no object had one.
 
 The table shows the size by default (`--apparent-size`). On a local tree, `--allocated` shows the allocated
 bytes instead and `--sort size` orders by them; the rows' `primary` says which. `--allocated` needs each entry's stat, so
@@ -162,7 +164,7 @@ directory and total that.
 ```text
 $ swath du --from-dataset photos-inventory -d 1 --sort size
 swath: totals of the dataset photos-inventory, not a live listing: /data/photos as listed 2026-11-12 11:00:03 CET (3 hours ago); complete
-    size  files  dirs  last_modified (CET)  path
+    size  files  dirs  newest (CET)         path
  410 KiB      2     1  2026-03-01 11:00:00  2025/
 48.8 KiB      1     0  2026-11-02 10:30:00  2026/
  459 KiB      5     3  2026-11-02 10:30:00  photos-inventory (total)
@@ -193,8 +195,8 @@ dataset's: `"photos": photos-inventory was listed from /data/photos; give a path
 The output says the totals are saved rows. A line on stderr names the dataset, its source, when it was listed
 and its coverage verdict (`complete`, or `partial:` and what is missing: `2 unreadable entries`, or `--max-keys
 reached` for a diagnostic `swath diag list` sample), then the listing's filters and exclusions. `-q` silences that line. In JSONL each row also carries a `dataset` member with
-the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset whose listing did not complete, such as a
-diagnostic `--max-keys` sample, or that left out entries it could not read (`coverage.unreadable`), prints its totals and
+the same facts, its `filters` as the manifest's `coverage.filters` records them ([Output](output.md#du-rows)). A dataset that left out entries it could not read (`coverage.unreadable`), or is
+otherwise partial, prints its totals and
 exits 3 (`incomplete`), as the run that wrote it did, its last line saying why. The dataset counts the
 unreadable entries but does not record which directories they were, so it cannot mark their rows: such a
 directory's row shows 0 (in every format) where the live `swath du` shows `-` or null. A file with several hard links

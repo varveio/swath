@@ -34,8 +34,8 @@ const (
 	plainHelpWidth = 80
 )
 
-// docStyle is the help as docs/commands/ holds it: the long form, the widest,
-// no styling.
+// docStyle is the help as docs/internals/diagnostics.md holds it: the long
+// form, the widest, no styling.
 var docStyle = helpStyle{width: maxHelpWidth, long: true}
 
 // styleFor is the help's style on w: on a terminal its width (at most
@@ -350,7 +350,7 @@ func resumeUsage(w io.Writer, f *pflag.FlagSet, s helpStyle) {
 
 // showHelp is swath show's help text before its flags.
 var showHelp = commandHelp{usage: []string{"show DIR [OPTIONS]"},
-	about:    "Print a committed dataset's manifest summary, or an interrupted run's recorded command, identity and committed parts.",
+	about:    "Print a committed dataset's manifest summary, or an interrupted run's recorded command and committed parts; -v adds the dataset's format id and the run's identity.",
 	examples: []string{"swath show logs-inventory", "swath show logs-inventory --journal"}}
 
 // diagHelp is swath diag's own help.

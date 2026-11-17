@@ -106,7 +106,7 @@ func tableCells(line string) []string {
 // to a time's width.
 func duTimeHeading() string {
 	zone, _ := time.Now().Zone()
-	return fmt.Sprintf("%-*s", len(time.DateTime), "last_modified ("+zone+")")
+	return fmt.Sprintf("%-*s", len(time.DateTime), "newest ("+zone+")")
 }
 
 // linksOnce is the links_once a local tree's rows carry by default: every
@@ -360,7 +360,7 @@ func TestDuJSONL(t *testing.T) {
 	out.Reset()
 	stderr := captureStderr(t)
 	if err := runDu(context.Background(), append(src, "--depth", "1", "--format", "table", "--no-stats"), &out); err != nil || strings.Contains(stderr.String(), "on disk") ||
-		!regexp.MustCompile(`^ *size  objects  last_modified \([^)]+\)  prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
+		!regexp.MustCompile(`^ *size  objects  newest \([^)]+\) +prefix\n`).MatchString(out.String()) || strings.Contains(out.String(), "on disk") ||
 		!regexp.MustCompile(`\n *[0-9.]+ [KMG]?i?B +50  \d{4}-\d\d-\d\d \d\d:\d\d:\d\d  s3://bkt \(total\)\n$`).MatchString(out.String()) {
 		t.Fatalf("%v %q", err, out.String())
 	}

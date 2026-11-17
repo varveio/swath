@@ -29,7 +29,7 @@ features:
     link: /docs/output
     linkText: Output
   - title: Find where the space went
-    details: <code>swath du</code> totals files and bytes per directory or prefix, as <code>du</code> does, for a directory or a whole bucket.
+    details: <code>swath du</code> shows the largest directories, prefixes and files at any depth, or totals files and bytes per directory or prefix, as <code>du</code> does, for a directory or a whole bucket.
     link: /docs/first-inventory
     linkText: Your first inventory
 ---
@@ -41,8 +41,7 @@ listing metadata only and never changes what it lists.
 
 In one live run with `--workers 1024`, swath wrote a sorted Parquet inventory of 1.09 billion S3 objects in
 846 seconds (about 14 minutes) on one 32-vCPU VM; a separate count-only run of the same bucket, which wrote
-nothing, took 177 seconds. At the default 64 workers, which the commands on this page use, neither finished
-within 40 minutes.
+nothing, took 177 seconds ([how many workers to use](../docs/size-a-run.md#workers)).
 [How this was measured](../docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)
 
 ## Download
@@ -58,20 +57,22 @@ like this one: the recorded listing of the whole bucket, the "Save an inventory,
 above, covered 37,064,981 objects in 39,016 requests.
 
 ```bash
-swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -d 1 --anonymous --s3-region us-east-1
+swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1 | head
 ```
 
-`-d` changes the breakdown, not the scan: each `swath du` lists the whole prefix again. To explore several
-depths of a big bucket, list it once with `-o DIR` and total the saved inventory with
-`swath du --from-dataset DIR -d N`.
+On a terminal, bare `swath du` draws the view at the top of this page: the largest prefixes and objects at any
+depth, each under its parent with its share of the total. In a pipe it prints the total row only. `-d N`
+prints the totals of every prefix down to N levels instead, a table or TSV for scripts. Each `swath du` lists
+the whole prefix again: to look at a big bucket several ways, list it once with `-o DIR` and total the saved
+inventory with `swath du --from-dataset DIR`.
 
 ## Try it on a local directory
 
 No account or credentials needed. Replace `~/Downloads` with any directory:
 
 ```bash
-swath du -d 1 ~/Downloads                       # totals per directory, one level down
+swath du ~/Downloads                            # where the bytes are, at any depth
 swath list ~/Downloads -o ~/downloads-inventory  # a sorted Parquet inventory
 swath show ~/downloads-inventory                # what it holds and how complete it is
 ```
@@ -82,7 +83,7 @@ swath show ~/downloads-inventory                # what it holds and how complete
 ## List your own buckets
 
 ```bash
-swath du s3://bucket/prefix/ -d 1                # totals per prefix
+swath du s3://bucket/prefix/                     # where the bytes are, at any depth
 swath list gs://bucket/prefix/ -o inventory      # a sorted Parquet inventory
 ```
 

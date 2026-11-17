@@ -101,6 +101,13 @@ func (o *scriptedSource) Listed() int64                     { return o.p.listed.
 func (o *scriptedSource) Restart(after string) error        { o.p.after = &after; return nil }
 func (o *scriptedSource) Capabilities() source.Capabilities { return source.Capabilities{Resume: true} }
 
+// SeedFrom refuses every prior; the scripted source stands in for an object
+// store (its rows are S3 objects), whose dataset carries a cut file
+// (source.Seeded, writeCuts).
+func (o *scriptedSource) SeedFrom(*source.Prior) error {
+	return errors.New("the scripted source takes no prior")
+}
+
 var (
 	scriptMu   sync.Mutex
 	scriptNext *scripted

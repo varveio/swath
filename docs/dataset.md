@@ -28,8 +28,8 @@ A directory (or object-store prefix) is a swath dataset when all of the followin
 
 A SeekParquet dataset without a registered schema id or without a valid `extensions.swath` is not a swath
 dataset. Any SeekParquet reader can still open it, and generic SeekParquet reads ignore `extensions.swath`
-entirely. A swath dataset can also be partial: a listing stopped by `--max-keys`, or one with filters, is still
-a swath dataset, and opens and reads like any other.
+entirely. A swath dataset can also be partial: one that left out entries it could not read, or one with
+filters, is still a swath dataset, and opens and reads like any other.
 
 The reader opens and reads; it does not judge a dataset. Its operations (the `reader` names are given; other
 readers make the same distinctions):
@@ -77,7 +77,8 @@ The manifest is the authority for which parts belong to the dataset and for its 
 own is inspectable Parquet, not evidence that a dataset exists, is complete, or was published.
 
 **Layout.** `manifest.json` (the commit, installed last), `data/part-NNNNN.parquet` (the parts the manifest
-lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listing's `--seed-from`), `run.json`
+lists), `cuts.txt` (the dataset's [cut file](#the-cut-file), for the next listing's `--seed-from`; an object
+store's dataset only), `run.json`
 (the run report: operational, written after the commit and never part of the dataset), and `.swath/` (the run's
 private workspace, which readers ignore). A directory whose run did not commit holds `error.json` instead of a
 manifest: that run's outcome ([exit codes](reference/exit-codes.md#the-outcome-of-record)); a committed
@@ -90,7 +91,7 @@ DIR/
   data/part-NNNNN.parquet   key-sorted, disjoint parts, name order == key order; at most 100,000 parts
   manifest.json             the commit: written last, names every part with exact key bounds and coverage
   run.json                  the run report (after the commit)
-  cuts.txt                  the cut file, for the next listing's --seed-from (after run.json)
+  cuts.txt                  the cut file, for the next listing's --seed-from (after run.json; not for a local tree)
   error.json                the outcome of an attempt that did not complete
   .swath/                   private workspace: lock, journal, parts/, spill/, suspect/, progress.json, stack dumps
 ```
@@ -98,8 +99,9 @@ DIR/
 ### The cut file
 
 `cuts.txt` is the dataset's key distribution for the next listing of the same source and scope: `--seed-from`
-reads it to seed the next listing of a bucket (a local tree is not seeded), and for a dataset in a bucket you
-copy `PREFIX/cuts.txt` and pass that file. It is advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
+reads it to seed the next listing of a bucket, and for a dataset in a bucket you copy `PREFIX/cuts.txt` and pass
+that file. A local tree is not seeded, so the dataset of a local tree has none (`--overwrite` removes one that an
+earlier version wrote). It is advisory and outside the SeekParquet format: the manifest does not name it, readers ignore it, and a dataset
 without it is whole. A committed run writes it last, after the manifest and `run.json` (in a bucket, after the
 orphan cleanup too, within a time bound of its own); one it cannot write, or not in time, is a warning, and the
 dataset stands. A run killed or stopped between its commit and the cut file leaves none (its resume finds the
@@ -214,7 +216,7 @@ module's. JSON readers must not depend on that order.
 | `scope.kind` | `whole` (the bucket, container or tree) or `prefix` | the application |
 | `scope.prefix` | The prefix, with `prefix`; omitted when empty | the application; `--seed-from` checks it against the run's prefix |
 | `coverage.complete` | Nothing is missing: the listing reached the end of its scope and `unreadable` is 0. Filters and exclusions are recorded beside it; they do not make it false | the application |
-| `coverage.stop_reason` | `end_of_scope` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys`, `unreported`, ...) | the application |
+| `coverage.stop_reason` | `end_of_scope` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys` only in a diagnostic sample, `unreported`, ...) | the application |
 | `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) | the application |
 | `coverage.filters` | The filters the run applied, one object each: `filter`, the option's name in snake case (`include`, `include_regex`, `exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`, and the local options that leave entries out, `one_file_system` and `no_dirs`), and `value`, as given (each pattern and storage class its own object), a time as RFC 3339 in UTC with six fraction digits (`--modified-since 7d` as the time it named), `null` for an option that takes no value | the application |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) | informative |

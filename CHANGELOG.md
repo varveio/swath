@@ -5,6 +5,16 @@ Notable changes per release. The human summary of the current release is in the
 
 ## Unreleased
 
+### Changed
+
+- `swath du`'s table heads the newest time under a prefix `newest (ZONE)`, as the terminal view does, instead
+  of `last_modified (ZONE)`. TSV and JSONL keep the field `max_last_modified`.
+- `swath show` names a dataset's storage by its Parquet parts and schema; `-v` adds the SeekParquet format id.
+- `swath show` on an interrupted run prints when it started, its command and the parts saved; `-v` adds the
+  journal version and the identity a resume must match, without the settings that have no value (an AWS run's
+  endpoint).
+- A dataset of a local tree has no `cuts.txt`: `--seed-from` does not take a local source. `--overwrite`
+  removes the one an earlier version wrote.
 - Azure Blob: an `--include` with a literal leading prefix narrows the listing to that prefix, as on S3 and
   GCS. A prefix the source URL cannot carry beside its SAS is not narrowed, and the report says so
   (`invocation.narrowing` `provider_declined_prefix`). An Azure run with such an include that was
