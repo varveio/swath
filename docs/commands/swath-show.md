@@ -31,7 +31,7 @@ media-inventory: complete
 
 The verdict is `complete` when nothing is missing: the listing reached the end of its scope and read every
 entry. Otherwise it is `partial:` and what is missing: `partial: 2 unreadable entries` (entries that could not
-be read), `partial: --max-keys reached`. The coverage line counts the unreadable entries, names the filters the
+be read; a diagnostic sample says `partial: --max-keys reached`). The coverage line counts the unreadable entries, names the filters the
 run applied by their rules (`filtered: include=*.jpg, min_size=200k`), and what was left out by design
 (`excluded: ...`, an output directory inside the tree). A complete dataset without filters covers the source
 on the line below the verdict, minus its exclusions
@@ -77,15 +77,6 @@ lists ([Query an inventory](../query.md)).
 - <a id="option-journal"></a>[`--journal`](#option-journal)\
   dump the journal's header and records as JSON lines (diagnostic: the journal's private format, which may change in any release)
 
-<details>
-<summary>Plain text, in the <code>--help</code> layout</summary>
-
-```text
-      --journal  dump the journal's header and records as JSON lines (diagnostic: the journal's
-                 private format, which may change in any release)
-```
-
-</details>
 <!-- flags:end -->
 
 `swath show` also takes `-v`, `-q`, `--color` and `--log-format` ([swath(1)](swath.md#options)).

@@ -8,7 +8,7 @@ directory whose run did not commit, `error.json` carry the same code with its cl
 | 0 | `ok` | the command did what it was asked: the dataset is committed, the text rows or totals are written, or the reader closed stdout early (`\| head`: `complete` false, `stop_reason` `downstream_closed`); also `swath resume` on a dataset that is already complete | – |
 | 1 | `fatal` | a failure a person fixes: credentials that do not load or are refused (`auth`), access denied (`access_denied`), a disk that fails or turned read-only, no such bucket (`not_found`), a bucket in another region (`region_redirect`), another swath process owning the output, an invalid page from the service (`cause` `protocol`), more than 100,000 parts (`part_limit`), an output layout swath did not make (`unsafe_layout`), more prefixes than `--max-prefixes` (`prefix_limit`); for a dataset in a bucket, another run's manifest created first (`lost_race`), a retained part changed in the bucket (`remote_altered`), a saved manifest an earlier attempt may still create naming other parts (`candidate_mismatch`) | as `resumable` says: yes for a journaled run once the cause is fixed (`auth`, `access_denied`, a disk error); no for `not_found` and `region_redirect` (the fix is another command), another process's output, and the causes named here (`protocol` marks the journal unresumable) |
 | 2 | `usage`, `refused` | `usage`: the command line does not parse, names an unknown scheme or a malformed SOURCE URL (`s3://`, `az://ACCOUNT` without a container), or gives a value out of range (`--sort-buffer` below 128KiB). `refused`: something the caller must fix before anything runs: a non-empty `-o` directory without `--overwrite`, `--overwrite` on a directory that is not a swath dataset, a new run over an interrupted one, an output that is or contains the listed tree, `--overwrite` of an output inside it, a resume whose identity changed or that has nothing to resume, an S3 directory bucket, a bucket or container `-o` whose prefix already holds a dataset or overlaps the listed source | `refused` leaves the output as it was: an interrupted run there can still be resumed |
-| 3 | `incomplete` | the run finished, but its output is partial (`complete` false): entries could not be read (permissions; the dataset's `coverage.unreadable` and the report's `outcome.unreadable` count them), or `--max-keys` stopped the listing (`stop_reason` `max_keys`). The rows, totals, counts (`swath diag count`) or dataset are written (a dataset is committed, without `error.json`: its manifest's coverage says what is missing); the closing line on stderr says why (`partial: …`), and under `-q`, which prints no closing line, an error line says it. `swath resume` on such a dataset exits 3 again | no: fix the cause and run again |
+| 3 | `incomplete` | the run finished, but its output is partial (`complete` false): entries could not be read (permissions; the dataset's `coverage.unreadable` and the report's `outcome.unreadable` count them; a diagnostic sample's `stop_reason` is `max_keys`). The rows, totals, counts (`swath diag count`) or dataset are written (a dataset is committed, without `error.json`: its manifest's coverage says what is missing); the closing line on stderr says why (`partial: …`), and under `-q`, which prints no closing line, an error line says it. `swath resume` on such a dataset exits 3 again | no: fix the cause and run again |
 | 74 | `disk_full` | a part, a journal record or the manifest could not be written: the filesystem or the quota is full (ENOSPC, EDQUOT; `cause` `no_space`); or listing waited on a full spill cap for `--spill-wait-timeout` (`cause` `spill_budget`) | yes, once there is space |
 | 75 | `stuck`, `unresolved` | `stuck`: no progress for `--stall-timeout` (10 minutes by default; a warning at half). `unresolved` (`cause` `commit_unresolved`): a dataset in a bucket whose manifest's creation could neither be confirmed nor refuted; every part is kept | yes |
 | 124 | `deadline` | `--max-duration` reached before the output was finished | yes |
@@ -55,7 +55,7 @@ answers.
 |---|---|
 | 0 | done |
 | 3 | the output is usable but partial: accept it, or fix the permissions and run again |
-| 129, 130, 143 | `swath resume DIR --report NEW-FILE` |
+| 129, 130, 143 | `swath resume DIR` (with `--report NEW-FILE` to keep its report) |
 | 75 | resume once (`unreachable` and not `resumable`: fix the endpoint and run the command again); a second 75 in a row on the same output needs a person (with `stuck_empty_chain`, the service no longer moves past a point in the key space). `unresolved`: resume, which creates the same manifest again; without a journal (a local tree written to a bucket), a person checks whether the prefix holds a manifest before deleting anything there |
 | 74 | free space, or move the directory to a larger disk, then `swath resume DIR`; `spill_budget`: `swath resume DIR --spill-budget SIZE` with a larger cap, on a disk with room for it (a plain resume keeps a recorded `--spill-budget`; with the default cap it derives one from the free space it finds). With the default cap, growing the disk under the running process avoids the stop: the cap follows it |
 | 124 | resume only within a separate budget of attempts or total time: a source that keeps a run busy without finishing reaches 124 on every attempt; past the budget, a person |
@@ -69,11 +69,12 @@ report; treat its outcome as unknown, never as the one in an older `error.json`.
 
 ## The outcome of record
 
-The outcome of an attempt is its exit code plus the report it wrote to `--report FILE` (on failure too). Give
-each attempt a fresh path outside the output directory: `swath resume` writes a report only when given
-`--report`, never to the path the run recorded. The report's `outcome` has `class`, `exit_code`,
-`resumable`, `cause`, `complete` (nothing is missing from the output), `stop_reason`, and `attempt.id` names the
-attempt ([Run report and progress file](run-report.md)).
+The outcome of an attempt is its exit code plus its report: for a dataset run, `DIR/run.json` beside the
+committed dataset or `DIR/error.json` (below); with `--report FILE`, the whole report of every attempt (on
+failure too). Give each attempt a fresh path outside the output directory: `swath resume` writes a report
+only when given `--report`, never to the path the run recorded. The report's `outcome` has `class`,
+`exit_code`, `resumable`, `cause`, `complete` (nothing is missing from the output), `stop_reason`, and
+`attempt.id` names the attempt ([Run report and progress file](run-report.md)).
 
 `DIR/error.json` holds the same outcome inside a dataset directory whose run did not commit (beside the
 previous dataset, for an `--overwrite` run that did not replace it):

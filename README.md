@@ -7,7 +7,7 @@
 See what's taking up space in a bucket or a directory, and save a Parquet inventory you can query without
 listing again. swath reads listing metadata only; it never reads, changes or deletes what it lists.
 
-- `swath du` totals files and bytes per directory or prefix.
+- `swath du` shows where the bytes are, or totals files and bytes per directory or prefix.
 - `swath list` prints every entry as a table, TSV or JSON lines, or writes a sorted Parquet inventory with a
   manifest that records how complete it is.
 - `swath du --from-dataset` totals a saved inventory again without listing.
@@ -35,21 +35,25 @@ run the examples as written.
 On a directory of yours, with no account or credentials (replace `~/Downloads` with any directory):
 
 ```bash
-swath du -d 1 ~/Downloads                          # totals per directory, one level down
+swath du ~/Downloads                               # where the bytes are, at any depth
 swath list ~/Downloads -o downloads-inventory      # a sorted Parquet inventory
 swath show downloads-inventory                     # what it holds and how complete it is
 ```
 
+On a terminal, bare `swath du` shows the largest directories and files at any depth, each under its parent
+with its share of the total; in a pipe it prints the total row only. `swath du -d 1` prints the totals of each
+directory one level down instead, a table or TSV for scripts.
+
 The same totals from the inventory, without listing again:
 
 ```bash
-swath du --from-dataset downloads-inventory -d 1
+swath du --from-dataset downloads-inventory
 ```
 
 On a public S3 prefix, without credentials:
 
 ```bash
-swath du -d 1 s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1
+swath du s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-region us-east-1
 ```
 
 Listing a bucket makes billable API requests; credentials otherwise come from the provider's usual chain.
@@ -59,9 +63,9 @@ Listing a bucket makes billable API requests; credentials otherwise come from th
 `du` and `find` answer most questions about a small directory, and a scheduled provider inventory costs less
 when a daily or weekly report is fresh enough. swath divides the key space into ranges and lists them in
 parallel, which matters once a bucket holds tens of millions of keys. In one live run with `--workers 1024`,
-swath counted 1.09 billion S3 objects in 177 seconds on one 32-vCPU VM; at the default 64 workers the same
-count did not finish within 40 minutes
-([how this was measured](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07)).
+swath counted 1.09 billion S3 objects in 177 seconds on one 32-vCPU VM
+([how this was measured](docs/internals/measurements.md#a-billion-live-objects-sentinel-cogs-2026-11-07);
+[how many workers to use](https://swath.varve.io/docs/size-a-run.html#workers)).
 [Start here](https://swath.varve.io/docs/start-here.html#when-swath-fits) compares the choices.
 
 ## Limits worth knowing

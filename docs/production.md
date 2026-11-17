@@ -10,14 +10,18 @@ observations on the stated runs ([Measurements (internals)](internals/measuremen
 ```bash
 swath list s3://bucket/prefix/ -o /data/inv/2026-11-08 \
   --seed-from /data/inv/2026-11-07 \
-  --report /var/log/swath/inv-2026-11-08.attempt-1.json \
   --max-duration 6h
 ```
 
 - `-o DIR` writes a sorted Parquet dataset. `DIR` must be new or empty. Write each night to a new directory and
   point readers at it once its `manifest.json` exists ([Overwrite and refresh](resume-and-refresh.md#overwrite-and-refresh)).
 - `--seed-from` names the previous night's dataset ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). Leave it out on the first night.
-- `--report FILE` is the outcome of record. Use a fresh path for each attempt, outside the output directory.
+- The exit code and the outcome in `DIR` are the outcome of record: `DIR/run.json` beside a committed dataset
+  (its `outcome`), else `DIR/error.json`, each with `class`, `exit_code` and `resumable`. An `error.json` whose
+  `attempt.started_at` is before the attempt began is an earlier attempt's: one that was killed, or could not
+  write it, left it ([the outcome of record](reference/exit-codes.md#the-outcome-of-record)). To keep each
+  attempt's full report, a resume's included, add `--report FILE` at a fresh path for each attempt, outside the
+  output directory.
 - `--max-duration` stops a run that takes too long. Give every unattended run one. Set the supervisor's own
   kill deadline above `--max-duration` plus 20 s.
 
@@ -27,7 +31,7 @@ What the supervisor does with the exit code:
 |---|---|
 | 0 | done |
 | 3 (partial) | accept the partial output, or fix the permissions and run again |
-| 129, 130, 143 (signals) | `swath resume DIR --report NEW-FILE` |
+| 129, 130, 143 (signals) | `swath resume DIR` |
 | 75 (stuck) | resume once; a second 75 in a row on the same output needs a person |
 | 74 (disk full) | free space or move the directory to a larger disk, then `swath resume DIR` |
 | 124 (deadline) | resume only within a separate budget of attempts or total time; past it, a person |
