@@ -68,8 +68,9 @@
 // that fails returns an error matching one of the classes ErrInvalidRequest
 // to ErrUnavailable with errors.Is, and Retryable says whether trying it
 // again later can succeed. Error messages carry no credential. Every storage
-// request a call makes, retries included, is reported to the storage
-// observer on ctx (objfile.Observer), as dataset reads are.
+// request an inventory's call makes, retries included, is reported to the
+// storage observer on ctx (objfile.Observer), as dataset reads are; a live
+// source's requests are not reported there.
 //
 // # Ownership
 //

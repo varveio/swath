@@ -46,13 +46,13 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath/local-entries/v1`; `Open`, its opened view, whose `Begin` readies a listing (pruning, a count's processors) | source, schema, bind, dataset, longpath |
 | `internal/source/keyrange` | the range engine: `(lo, hi]` ranges, seed, owner-side splits (demand, rank, admission gates), safe pivots, guards, structure probes, requeue, counters, group mode (a versions listing's repeated keys: groups.go), warm start and a counted prior's plan of tiles (prior.go, plan.go); behind a page fetch and a provider description; `Registered`, the optional interfaces an engine provider gives its registered source; the run trace's events ([trace.md](trace.md)) | source, schema, counters, faults, runtrace, buildinfo |
 | `internal/source/keyrange/keyrangetest` | test fixtures: a fake listing API over sorted keys, the fixture and hostile keyspaces; imported by tests only | – |
-| `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`, for `s3://` roots. With `--all-versions` (`NewVersions`): the ListObjectVersions page fetch, its payload `Version` and schema `swath/s3-versions/v1` (grouped), its native page and continuation token; `Open` and `OpenVersions`, its opened view | source, schema, bind, keyrange, s3/client |
+| `internal/source/s3` | S3 provider on the range engine: the ListObjectsV2 page fetch, its row payload `Object` and schema `swath/s3-objects/v1`, for `s3://` roots. With `--all-versions` (`NewVersions`): the ListObjectVersions page fetch, its payload `Version` and schema `swath/s3-versions/v1` (grouped), its native page and continuation token; `Open` and `OpenVersions`, its opened view; `OpenLive`, a bucket's client for the library's live source, with no range engine | source, schema, bind, keyrange, s3/client, live |
 | `internal/source/azblob` | Azure Blob provider on the range engine: flat-namespace admission (Get Account Information), the List Blobs page fetch through the byte-order adapter (one per `Expand`), its row payloads `Object` and `Version` and schemas `swath/azure-objects/v1` and `swath/azure-versions/v1` (grouped: `--all-versions`, `NewVersions`); `Open` and `OpenVersions`, its opened view | source, schema, bind, keyrange, azblob/client, azblob/order |
 | `internal/source/azblob/order` | the byte-order adapter: serves the range engine's queries in byte order over List Blobs' UTF-16 order (spans cut at names at U+E000 and above, lazy splits, page-atomic chains with their own tokens, its `order_*` counters) | source, keyrange, counters, azblob/client, utf16order |
 | `internal/utf16order` | Azure's listing order (UTF-16 code units) on UTF-8 bytes: the comparator the Azure client, the byte-order adapter and the replay's Azure route share | – |
 | `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payloads `Object` and `Generation` and schemas `swath/gcs-objects/v1` and `swath/gcs-generations/v1` (grouped: `--all-versions`, `NewGenerations`); `Open` and `OpenGenerations`, its opened view | source, schema, bind, keyrange, gcs/client |
-| `internal/source/objhttp` | what all object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client `Meter`, token waits, Guard and capture, transport pool, `Activity` (a client's request activity, each part zero where a supplied client does not count it), route canonicalization; `objhttptest` holds the retry contract all three clients pass | source, counters, tokensource |
-| `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
+| `internal/source/objhttp` | what all object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client `Meter`, token waits, Guard and capture, transport pool, `Activity` (a client's request activity, each part zero where a supplied client does not count it), route canonicalization; a failure's class in the listing contract (`ListingClass`); `objhttptest` holds the retry contract all three clients pass | source, counters, tokensource, reader/listing |
+| `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions, and HeadObject and HeadBucket for the live source's lookups: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
 | `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, SDK decode checks | objhttp |
 | `internal/source/azblob/client` | List Blobs and account/namespace checks: credential and SAS handling, API-version and start bound policy, Azure status/code precedence, SDK decode checks | objhttp, utf16order |
 | `internal/source/tokensource` | shared OAuth token cache and one refresh in flight, cancellable waits, the shell-command bearer token source | oauth2, singleflight |
@@ -72,6 +72,16 @@ that the remainder and both children are worth their requests. It then emits `(c
 
 The list clients are built on the vendors' SDK service clients; what is the SDK's, what swath keeps and why:
 [clients.md](clients.md).
+
+**The library** (experimental, [library.md](../library.md)). The root package `github.com/varveio/swath` holds
+`Source`, an opened live location that answers the listing contract's Page and Lookup (`reader/listing`) with the
+checks and page tokens every object store's pages share; it links no provider and no cloud SDK. A provider's
+public package opens one with typed options and no flags: `github.com/varveio/swath/s3` (`s3.Open`) over
+`internal/source/s3.OpenLive`, whose one-level call is one delimiter ListObjectsV2 and whose lookup is HeadObject,
+then HeadBucket after a 404. `internal/live` joins the two: the `Store` a provider implements, and the constructor
+package `swath` sets when it is initialized. A provider's failures take the contract's classes through
+`objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither package links the command,
+pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
