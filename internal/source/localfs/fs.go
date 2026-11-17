@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/longpath"
@@ -97,12 +98,76 @@ type Stats struct {
 	// maxKeyBytes (a directory with its subtree): unreadable.
 	KeyTooLong int64     `json:"key_too_long"`
 	LongPaths  LongPaths `json:"long_paths"`
+	DirOpens   DirOpens  `json:"dir_opens"`
 }
 
-// LongPaths account for the paths the kernel refused by their length
-// (ENAMETOOLONG: past PATH_MAX, 4,096 bytes on Linux, 1,024 on macOS),
-// opened again below the root one name at a time (openLong). A path that
-// fits is never counted.
+// DirOpens account for the directories below the root opened relative to
+// an open directory (Linux, macOS: openRange). Each is opened one name
+// down from its parent's descriptor, which the walk keeps for its queued
+// subdirectories; past the limit on kept descriptors, a directory's
+// subdirectories are opened from a kept ancestor's, several names down (a
+// redescent). Elsewhere a directory is opened by its path and nothing is
+// counted.
+type DirOpens struct {
+	Opened     int64 `json:"opened"`
+	Redescents int64 `json:"redescents"` // opens attempted from an ancestor, more than one name down
+	Refused    int64 `json:"refused"`    // directories the limit did not keep for their subdirectories
+	// Failed counts the opens that failed, by reason, as LongPaths.Failed.
+	Failed   map[string]int64 `json:"failed,omitempty"`
+	PeakKept int64            `json:"peak_kept"` // the most directory descriptors kept at once
+	MaxKept  int64            `json:"max_kept"`  // the limit on them (keepLimit)
+}
+
+func (o *DirOpens) fail(reason string) {
+	if o.Failed == nil {
+		o.Failed = map[string]int64{}
+	}
+	o.Failed[reason]++
+}
+
+func (o *DirOpens) add(x *DirOpens) {
+	o.Opened += x.Opened
+	o.Redescents += x.Redescents
+	o.Refused += x.Refused
+	for k, v := range x.Failed {
+		if o.Failed == nil {
+			o.Failed = map[string]int64{}
+		}
+		o.Failed[k] += v
+	}
+}
+
+// keptFDs bound the directory descriptors a walk keeps open (dirFD): a
+// directory's, from its open until its chunks are read and its queued
+// subdirectories opened relative to it. Past limit a directory is still
+// read, but not kept: its subdirectories are opened from a kept ancestor.
+// The root is always kept.
+type keptFDs struct {
+	limit int64
+	open  atomic.Int64
+	peak  atomic.Int64
+}
+
+// take counts one more kept descriptor if the limit allows, or always.
+func (k *keptFDs) take(always bool) bool {
+	n := k.open.Add(1)
+	if n > k.limit && !always {
+		k.open.Add(-1)
+		return false
+	}
+	for peak := k.peak.Load(); n > peak; peak = k.peak.Load() {
+		if k.peak.CompareAndSwap(peak, n) {
+			break
+		}
+	}
+	return true
+}
+
+// LongPaths account for the paths past the kernel's length limit
+// (PATH_MAX: 4,096 bytes on Linux, 1,024 on macOS), which it refuses
+// whole (ENAMETOOLONG): a directory there, opened relative to its parent
+// as any below the root (openRange), and a file root, statted relative to
+// its directory (atParent). A path that fits is never counted.
 type LongPaths struct {
 	Attempts int64 `json:"attempts"`
 	Opened   int64 `json:"opened"`
@@ -193,6 +258,7 @@ func (s *Stats) add(o *Stats) {
 	s.FilteredStatErrors += o.FilteredStatErrors
 	s.KeyTooLong += o.KeyTooLong
 	s.LongPaths.add(&o.LongPaths)
+	s.DirOpens.add(&o.DirOpens)
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -202,9 +268,15 @@ func (s *Stats) add(o *Stats) {
 
 // Range is a directory, or a chunk of a large directory's sorted entries.
 type Range struct {
-	path   string // on-disk path
+	path   string // on-disk path: for messages, and opened by it where directories are not opened relative to a descriptor (dirfd_other.go)
 	prefix string // key prefix: "" for the root, "a/b/" below it
 	chunk  *chunk
+	// at is the open directory a directory below the root is opened from,
+	// below names down (openRange), a reference the range holds until it
+	// is expanded or disposed; nil for the root, and where directories are
+	// opened by their path.
+	at    *dirFD
+	below int
 }
 
 // Provider lists one root. It implements source.Provider[Range, Entry].
@@ -235,6 +307,8 @@ type Provider struct {
 	spaceOnce sync.Once
 	space     *source.FilesystemSpace
 	rootInfo  fs.FileInfo
+	// keep bounds the directory descriptors the walk keeps (dirFD).
+	keep keptFDs
 }
 
 // warnf passes a warning to the user, if the run takes them.
@@ -270,6 +344,7 @@ func New(root string, opt Options) (*Provider, error) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
 	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi}
+	p.keep.limit = keepLimit()
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
 			return nil, err
@@ -288,19 +363,25 @@ func (p *Provider) Stats() Stats {
 	s := p.stats
 	s.Samples = slices.Clone(s.Samples)
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
+	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
+	s.DirOpens.PeakKept, s.DirOpens.MaxKept = p.keep.peak.Load(), p.keep.limit
 	return s
 }
 
-// Expand lists one range.
-// Dispose releases a range that will never be expanded (a chunk's share of
-// its directory descriptor). It implements source.Disposer.
-func (p *Provider) Dispose(r Range) { disposeChunk(r) }
+// Dispose releases what a range that will never be expanded holds: a
+// chunk's share of its directory's descriptor, a directory's reference on
+// the one it is opened from. It implements source.Disposer.
+func (p *Provider) Dispose(r Range) {
+	disposeChunk(r)
+	r.at.release()
+}
 
+// Expand lists one range.
 func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Entry]) error {
-	// A chunk's share of its descriptor is released however Expand ends,
-	// a cancellation before any work included: a range a worker has taken
-	// is no longer queued, so the order stage will not dispose it.
-	defer disposeChunk(r)
+	// What the range holds is released however Expand ends, a cancellation
+	// before any work included: a range a worker has taken is no longer
+	// queued, so the order stage will not dispose it.
+	defer p.Dispose(r)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -323,10 +404,10 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 }
 
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
-// as a child range right after its DIR row. The run's own output (Skip) and
-// an entry whose key passes maxKeyBytes are dropped, a directory with its
-// subtree.
-func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
+// as a child range right after its DIR row, opened from d, the directory
+// read (dirFD.child). The run's own output (Skip) and an entry whose key
+// passes maxKeyBytes are dropped, a directory with its subtree.
+func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
 	start := 0
 	for i := range rows {
 		row := &rows[i]
@@ -375,13 +456,15 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		// the emitter owns them then, and a filter may clear the DIR row.
 		// The key is a view of the directory's key arena: the child's
 		// prefix is a copy, so a queued subdirectory does not keep its
-		// parent's names alive.
+		// parent's names alive. Its reference on d is taken as it is handed
+		// on: Child owns it then, even when it fails.
 		key := row.Key
 		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}
 		if err := e.Rows(rows[start:end]); err != nil {
 			return err
 		}
 		start = i + 1
+		child.at, child.below = d.child()
 		if err := e.Child(child); err != nil {
 			return err
 		}
@@ -439,12 +522,13 @@ func sortRows(rows []Row) {
 // expandPortable lists a directory with os.File.ReadDir and a stat per
 // entry (statEntry).
 func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	f, ok, err := p.openChecked(ctx, r, st)
+	d, ok, err := p.openPortable(ctx, r, st)
 	if !ok {
 		return err
 	}
 	st.DirsRead++
-	defer f.Close() // statEntry and readlinkIn read relative to it (Linux, macOS)
+	defer d.release() // statEntry and readlinkIn read relative to it (Linux, macOS); subdirectories take their own references
+	f := d.f
 	ents, err := f.ReadDir(-1)
 	if err != nil {
 		st.note(&st.ReadErrors, r.path, err)
@@ -490,7 +574,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	} else {
 		sortRows(rows)
 	}
-	return p.emit(r, rows, e, st)
+	return p.emit(r, d, rows, e, st)
 }
 
 // leftOut says the filters leave out the entry at key (its name below the
@@ -520,42 +604,6 @@ func (p *Provider) unreadableDir(r Range) {
 	if p.unreadable != nil && r.prefix != "" {
 		p.unreadable(r.prefix)
 	}
-}
-
-// openChecked opens a directory by path. Below the root it then checks that
-// the path is still a real directory (Lstat: not a symlink) and the same
-// object as the opened file (fstat): best-effort protection against a
-// directory swapped for a symlink between listing and open. A path the
-// kernel refuses by its length is opened below the root instead
-// (openLong), which follows no symlink at all. A directory it does not
-// open is accounted for, and err is the context's error when the run
-// stopped.
-func (p *Provider) openChecked(ctx context.Context, r Range, st *Stats) (f *os.File, ok bool, err error) {
-	f, err = os.Open(r.path)
-	if tooLong(err) {
-		var fd int
-		if fd, ok, err = p.openLong(ctx, r, st); !ok {
-			return nil, false, err
-		}
-		return os.NewFile(uintptr(fd), r.path), true, nil
-	}
-	if err != nil {
-		st.note(&st.OpenErrors, r.path, err)
-		p.unreadableDir(r)
-		return nil, false, nil
-	}
-	if r.prefix == "" {
-		return f, true, nil
-	}
-	ffi, err1 := f.Stat()
-	lfi, err2 := os.Lstat(r.path)
-	if err1 != nil || err2 != nil || !ffi.IsDir() || !lfi.IsDir() || lfi.Mode()&fs.ModeSymlink != 0 || !os.SameFile(ffi, lfi) {
-		f.Close()
-		st.note(&st.Unsafe, r.path, errors.New("directory changed before open"))
-		p.unreadableDir(r)
-		return nil, false, nil
-	}
-	return f, true, nil
 }
 
 // kindOf maps Go file mode type bits to a kind.

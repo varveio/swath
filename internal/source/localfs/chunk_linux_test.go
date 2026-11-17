@@ -194,7 +194,7 @@ func TestCountSlabReleasesFD(t *testing.T) {
 		if err := p.Expand(context.Background(), p.Root(), k); err != nil {
 			t.Fatal(err)
 		}
-		var d *sharedFD
+		var d *dirFD
 		cont := 0
 		for _, r := range k.r {
 			if r.chunk != nil {
