@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
@@ -24,19 +26,31 @@ import (
 type versionAPI struct {
 	rows    []client.Version
 	crashAt int
+	// crashAfter, when set, holds the crash until it is closed (or the
+	// run's context ends; 20 s fails the run, not crashed).
+	crashAfter <-chan struct{}
 }
 
 func (p *versionAPI) Route(string) string { return "https://versions.invalid/b" }
 func (p *versionAPI) ListObjectsV2(context.Context, *client.ListInput) (*client.Page, error) {
 	return &client.Page{Contents: []client.Object{{Key: "a"}, {Key: "b"}, {Key: "c"}, {Key: "d"}}}, nil
 }
-func (p *versionAPI) ListObjectVersions(_ context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
+func (p *versionAPI) ListObjectVersions(ctx context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
 	i := sort.Search(len(p.rows), func(i int) bool { return p.rows[i].Key > in.KeyMarker })
 	if in.VersionIDMarker != "" {
 		n, _ := strconv.Atoi(in.VersionIDMarker)
 		i = n + 1
 	}
 	if p.crashAt > 0 && i >= p.crashAt {
+		if p.crashAfter != nil {
+			select {
+			case <-p.crashAfter:
+			case <-ctx.Done():
+				return nil, context.Cause(ctx)
+			case <-time.After(20 * time.Second):
+				return nil, errors.New("the crash's barrier not met after 20 s")
+			}
+		}
 		return nil, faults.ErrCrash
 	}
 	end := min(len(p.rows), i+2)
@@ -64,12 +78,33 @@ func versionListingConfig(out string, versions, resume bool, api *versionAPI) Co
 
 // TestVersionsResumeAfterCrashDuringHotGroup: A crash inside a hot key retains only
 // complete groups; resume reproduces the clean parts and reports its new rows.
+//
+// The crash, inside b's listing, waits until part a is recorded and b's
+// part has taken rows of b. A crash may lose a part not yet recorded (its
+// rows are listed again), and when a worker rather than the drainer lists
+// the range, nothing holds the listing until the rows are handed on: without
+// the barrier the crash can come first, with nothing recorded, or with
+// part a recorded and b's part not yet opened.
 func TestVersionsResumeAfterCrashDuringHotGroup(t *testing.T) {
 	ref, out := filepath.Join(t.TempDir(), "ref"), filepath.Join(t.TempDir(), "out")
 	if _, err := Run(context.Background(), versionListingConfig(ref, true, false, versionFixture(0))); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Run(context.Background(), versionListingConfig(out, true, false, versionFixture(4200)))
+	api, inB := versionFixture(4200), make(chan struct{})
+	api.crashAfter = inB
+	var recorded atomic.Bool
+	open := sync.OnceFunc(func() { close(inB) })
+	restore := faults.Set(func(p string) error {
+		switch {
+		case p == "recorded":
+			recorded.Store(true) // part a's: records follow the ordinals
+		case p == "encoding" && recorded.Load():
+			open() // a later part's batch: part a's were all encoded before its record
+		}
+		return nil
+	})
+	_, err := Run(context.Background(), versionListingConfig(out, true, false, api))
+	restore()
 	if !errors.Is(err, faults.ErrCrash) {
 		t.Fatalf("did not stop mid-group: %v", err)
 	}
