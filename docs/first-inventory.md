@@ -30,7 +30,7 @@ On a terminal, bare `swath du` shows where the bytes are: the largest directorie
 largest first, each under its parent with its share of the total and the date of the newest file below it. A
 `(N more)` line counts the rest of a directory's entries, so the lines under a directory add up to it
 ([the view](totals.md#the-view)). In a pipe it prints the total row only. This output comes from a terminal 100
-columns wide.
+columns wide and 30 lines high.
 
 For the totals of every directory down to a fixed depth, a table on a terminal and TSV in a pipe for
 scripts, give `-d N`:

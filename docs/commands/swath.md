@@ -215,7 +215,7 @@ swath du -h
 | 0 | completed (also a reader that closed the pipe early, as `head` does) |
 | 1 | failed: a person fixes the cause; a run whose outcome says `resumable` then resumes |
 | 2 | a usage error, or a refusal that is the caller's to fix |
-| 3 | finished, but the output is incomplete: entries could not be read |
+| 3 | finished, but the output is incomplete; in a listing, entries could not be read |
 | 74 | the output's filesystem is full |
 | 75 | stuck: no progress for `--stall-timeout`, an endpoint that never answered, or a bucket commit whose outcome is unknown |
 | 124 | `--max-duration` reached |
