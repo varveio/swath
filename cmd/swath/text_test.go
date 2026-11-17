@@ -210,12 +210,8 @@ func TestPercentRootIsLiteral(t *testing.T) {
 // before any request; the table and a dataset refuse it.
 func TestColumns(t *testing.T) {
 	keys := []string{"a", "bb"}
-	var requests atomic.Int64
 	h := s3test.Handler(s3test.Backend(t, keys))
-	src := []string{"s3://bkt", "--anonymous", "--endpoint-url", s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		h.ServeHTTP(w, r)
-	}))}
+	src := []string{"s3://bkt", "--anonymous", "--endpoint-url", s3test.Serve(t, h)}
 	var out bytes.Buffer
 	if err := run(context.Background(), append(src, "--columns", "size,key"), &out, false); err != nil || out.String() != "size\tkey\n1\ta\n2\tbb\n" {
 		t.Fatalf("tsv: %v %q", err, out.String())
@@ -232,12 +228,18 @@ func TestColumns(t *testing.T) {
 	if err := run(context.Background(), append(src, "--columns", "key"), &out, false); err != nil || out.String() != "key\na\nbb\n" {
 		t.Fatalf("on a terminal: %v %q", err, out.String())
 	}
-	before := requests.Load()
-	err := run(context.Background(), append(src, "--columns", "key,Size", "--no-stats"), &out, false)
+	// The refused run gets a server of its own to count on: a request that a
+	// run above sent and abandoned can still reach that run's server.
+	var requests atomic.Int64
+	unasked := []string{"s3://bkt", "--anonymous", "--endpoint-url", s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		h.ServeHTTP(w, r)
+	}))}
+	err := run(context.Background(), append(unasked, "--columns", "key,Size", "--no-stats"), &out, false)
 	if exitCode(t, err) != exitUsage || !strings.Contains(err.Error(), `--columns: no column "Size" in swath/s3-objects/v1 (its columns: key, size, last_modified, etag`) {
 		t.Fatalf("unknown column: %v", err)
 	}
-	if n := requests.Load() - before; n != 0 {
+	if n := requests.Load(); n != 0 {
 		t.Fatalf("an unknown column sent %d requests", n)
 	}
 	var u usageError
