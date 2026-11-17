@@ -68,7 +68,7 @@ type Options struct {
 func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, error) {
 	switch {
 	case bucket == "" || strings.ContainsAny(bucket, "/\x00"):
-		return nil, fmt.Errorf("%w: bucket %q: a bucket's name, with no slash", listing.ErrInvalidRequest, bucket)
+		return nil, objfile.RedactError(fmt.Errorf("%w: bucket %q: a bucket's name, with no slash", listing.ErrInvalidRequest, bucket))
 	case opts.MaxRequests < 0 || opts.RequestRate < 0:
 		return nil, fmt.Errorf("%w: a negative MaxRequests or RequestRate", listing.ErrInvalidRequest)
 	}

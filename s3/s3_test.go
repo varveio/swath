@@ -440,3 +440,21 @@ func TestInvalidRequests(t *testing.T) {
 		t.Errorf("requests %q", got)
 	}
 }
+
+// TestRedaction: a message that quotes what the store answered or what
+// the caller gave keeps no URL's credentials: a key outside the prefix
+// that holds one, and a bucket argument that does.
+func TestRedaction(t *testing.T) {
+	s3test.NoCredentials(t)
+	const secret = "https://user:hunter2@example.com/x?token=hunter2"
+	src := open(t, scripted(t, map[string]string{"": listResult("", []string{secret}, nil)}), "bkt")
+	_, err := src.Page(context.Background(), listing.PageRequest{Prefix: []byte("a/"), Limit: 10})
+	if !errors.Is(err, listing.ErrInvalidPage) || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("a page: %v, want ErrInvalidPage without the credentials", err)
+	}
+
+	_, err = s3.Open(context.Background(), secret, s3.Options{Anonymous: true})
+	if !errors.Is(err, listing.ErrInvalidRequest) || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("open: %v, want ErrInvalidRequest without the credentials", err)
+	}
+}

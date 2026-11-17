@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/live"
+	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
 )
 
@@ -65,7 +66,7 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 
 	page, last, err := level(req.Prefix, cur.last, lvl, req.Limit)
 	if err != nil {
-		return listing.Page{}, err
+		return listing.Page{}, objfile.RedactError(err) // it quotes the store's keys
 	}
 	if lvl.Truncated {
 		if err := checkContinuation(cur.store, lvl.Next); err != nil {
