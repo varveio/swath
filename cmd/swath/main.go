@@ -1243,6 +1243,10 @@ func explain(err error) error {
 		return fmt.Errorf("%w (use --overwrite to replace a previous dataset)", err)
 	case errors.Is(err, dataset.ErrOutIsRoot), errors.Is(err, dataset.ErrNotDataset):
 		return fmt.Errorf("-o: %w", err)
+	case errors.As(err, &mm) && mm.Field == "source" && strings.HasPrefix(fmt.Sprint(mm.Requested), fmt.Sprint(mm.Stored)):
+		// The recorded command lists a narrower prefix now: this build
+		// narrows an --include the run's build listed whole (narrowRoot).
+		return fmt.Errorf("%w (this swath narrows the listing to the --include's literal prefix, which the swath that started the run did not: finish the run with that swath, or start over with swath list --overwrite)", err)
 	case errors.As(err, &mm):
 		return fmt.Errorf("%w (start over with swath list --overwrite, or resume with the original settings)", err)
 	case errors.As(err, &ve):
@@ -1437,7 +1441,8 @@ func (s *size) Set(v string) error {
 // imply (filter.Spec.NarrowPrefix), and the narrowing's engagement: the
 // same rows, fewer requests. A resume replays the same command, so it
 // narrows the same way. Only a provider that can name another prefix
-// (registry.Factory.WithPrefix) narrows.
+// (registry.Factory.WithPrefix) narrows, and only where it can name the
+// prefix (filter.NarrowDeclined otherwise).
 func narrowRoot(root string, f *filter.Spec) (string, string) {
 	pf, err := registry.Lookup(root)
 	if err != nil {
@@ -1456,5 +1461,8 @@ func narrowRoot(root string, f *filter.Spec) (string, string) {
 	case pf.WithPrefix == nil:
 		return root, filter.NarrowUnsupported
 	}
-	return pf.WithPrefix(root, n), why
+	if narrowed := pf.WithPrefix(root, n); narrowed != root {
+		return narrowed, why
+	}
+	return root, filter.NarrowDeclined
 }
