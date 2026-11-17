@@ -21,10 +21,13 @@ import (
 )
 
 // Inventory answers the four questions from one opened dataset. It is
-// immutable and safe for concurrent use. It does not own the dataset: the
+// immutable and safe for concurrent use. An inventory OpenDir returns owns
+// its dataset, which Close closes; one Open returns does not, and the
 // caller closes the reader.Dataset after its last call.
 type Inventory struct {
 	sp *seekparquet.Dataset
+	// dataset is the dataset OpenDir opened; nil for Open's.
+	dataset *reader.Dataset
 	// rows says how a row of the dataset's schema becomes an Entry.
 	rows rowShape
 	// base is every answer's Evidence, without its Stop.
@@ -32,6 +35,36 @@ type Inventory struct {
 	// provable: the evidence proves absence inside its scope (Unlocated
 	// is 0).
 	provable bool
+}
+
+// OpenDir opens the dataset in the local directory dir, checks every
+// part's schema (reader.Dataset.CheckSchema) and returns its inventory,
+// which owns the dataset until Close. It refuses what Open refuses, and a
+// failure to read the dataset is of a class of package listing, as a
+// call's is: a directory with no dataset is listing.ErrNotFound.
+func OpenDir(ctx context.Context, dir string) (*Inventory, error) {
+	d, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{})
+	if err != nil {
+		return nil, failed(ctx, err)
+	}
+	if err := d.CheckSchema(ctx); err != nil {
+		return nil, errors.Join(failed(ctx, err), d.Close())
+	}
+	inv, err := Open(d)
+	if err != nil {
+		return nil, errors.Join(err, d.Close())
+	}
+	inv.dataset = d
+	return inv, nil
+}
+
+// Close closes the dataset OpenDir opened. An inventory Open returned owns
+// nothing, and Close does nothing.
+func (inv *Inventory) Close() error {
+	if inv.dataset == nil {
+		return nil
+	}
+	return inv.dataset.Close()
 }
 
 // Open returns the inventory of d. It reads nothing. A dataset of versions
@@ -135,12 +168,13 @@ func invalid(format string, args ...any) error {
 
 // failed is the error a call that read the inventory returns for err:
 // ctx's own once ctx has ended, else err in a class of package listing,
-// with err wrapped beside it. Data the reader refuses (reader.IsRefusal)
-// is ErrInvalidPage; a missing object ErrNotFound; a refused access, or a
-// store's answer of 401 or 403, ErrAuth; a feature or limit the reader
-// does not support ErrUnsupported; any other failure, such as an I/O or
-// network error past the storage's retries, ErrUnavailable, which
-// listing.Retryable reports. An error the view gave a class keeps it.
+// with err wrapped beside it. A missing object or manifest is ErrNotFound;
+// other data the reader refuses (reader.IsRefusal) ErrInvalidPage; a
+// refused access, or a store's answer of 401 or 403, ErrAuth; a feature or
+// limit the reader does not support ErrUnsupported; any other failure,
+// such as an I/O or network error past the storage's retries,
+// ErrUnavailable, which listing.Retryable reports. An error the view gave
+// a class keeps it.
 func failed(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -156,10 +190,10 @@ func failed(ctx context.Context, err error) error {
 	switch {
 	case err == nil || classed(err):
 		return err
+	case errors.Is(err, fs.ErrNotExist) || seekparquet.RefusalCodeOf(err) == seekparquet.CodeNoManifest:
+		class = listing.ErrNotFound
 	case reader.IsRefusal(err):
 		class = listing.ErrInvalidPage
-	case errors.Is(err, fs.ErrNotExist):
-		class = listing.ErrNotFound
 	case errors.Is(err, fs.ErrPermission) || code == http.StatusUnauthorized || code == http.StatusForbidden:
 		class = listing.ErrAuth
 	case errors.As(err, &unsupported) || errors.Is(err, seekparquet.ErrLimitExceeded):

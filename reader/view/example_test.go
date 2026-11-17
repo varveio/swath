@@ -8,9 +8,6 @@ import (
 	"fmt"
 	"log"
 
-	seekparquet "github.com/varveio/seekparquet/go"
-
-	"github.com/varveio/swath/reader"
 	"github.com/varveio/swath/reader/listing"
 	"github.com/varveio/swath/reader/view"
 )
@@ -20,18 +17,11 @@ import (
 // under a directory.
 func Example() {
 	ctx := context.Background()
-	d, err := reader.OpenDir(ctx, "../testdata/photos", seekparquet.OpenOptions{})
+	inv, err := view.OpenDir(ctx, "../testdata/photos")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer d.Close()
-	if err := d.CheckSchema(ctx); err != nil {
-		log.Fatal(err)
-	}
-	inv, err := view.Open(d)
-	if err != nil {
-		log.Fatal(err)
-	}
+	defer inv.Close()
 
 	files := &listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile}}
 	page, err := inv.Page(ctx, listing.PageRequest{Limit: 10, ChildTotals: files})

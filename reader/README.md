@@ -152,13 +152,15 @@ any release.
 ## The inventory view
 
 The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those four questions from an opened
-dataset. `view.Open(d)` reads nothing; it refuses a dataset of versions, whose keys repeat, and one whose manifest
-records no scope, with `listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque
-tokens bound to the manifest digest, the prefix and the kinds the child totals count, and optional child totals
-within a budget; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards when unbudgeted;
-`Summarize` reads the entries at its targets' keys, then aggregates its subtree targets' rows in one `AggregateRows`
-call, checking their key order, both within one entry and time budget. An object store's prefix may be any key prefix; a local one is empty or a directory key, and a local
-inventory has no row for its root.
+dataset. `view.OpenDir(ctx, dir)` opens a local dataset directory, checks its parts' schemas and returns the
+inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller opened and owns, and reads nothing. Both
+refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with
+`listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque tokens bound to the manifest
+digest, the prefix and the kinds the child totals count, and optional child totals within a budget; `Lookup` reads
+the key's row; `Walk` is a range scan, in parallel shards when unbudgeted; `Summarize` reads the entries at its
+targets' keys, then aggregates its subtree targets' rows in one `AggregateRows` call, checking their key order, both
+within one entry and time budget. An object store's prefix may be any key prefix; a local one is empty or a
+directory key, and a local inventory has no row for its root.
 
 Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes (`sha256:` and its hex), the
 listing's interval and publication time, its scope, and its count of unreadable entries as `Unlocated` only when

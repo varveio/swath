@@ -88,7 +88,8 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 }
 
 // TestOpenRefuses: a dataset of versions, whose keys repeat, and one whose
-// manifest records no scope are refused as unsupported.
+// manifest records no scope are refused as unsupported, by Open and by
+// OpenDir; OpenDir of a directory with no dataset is ErrNotFound.
 func TestOpenRefuses(t *testing.T) {
 	version := map[string]any{"is_latest": true, "is_delete_marker": false}
 	versions := write(t, fixture{id: reader.S3VersionsV1, rows: []rec{{key: "a", extra: version}, {key: "b", extra: version}}})
@@ -104,6 +105,12 @@ func TestOpenRefuses(t *testing.T) {
 		if _, err := Open(d); !errors.Is(err, listing.ErrUnsupported) {
 			t.Errorf("%s: Open = %v, want ErrUnsupported", name, err)
 		}
+		if _, err := OpenDir(context.Background(), dir); !errors.Is(err, listing.ErrUnsupported) {
+			t.Errorf("%s: OpenDir = %v, want ErrUnsupported", name, err)
+		}
+	}
+	if _, err := OpenDir(context.Background(), t.TempDir()); !errors.Is(err, listing.ErrNotFound) {
+		t.Errorf("OpenDir of a directory with no dataset = %v, want ErrNotFound", err)
 	}
 }
 
