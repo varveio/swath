@@ -367,7 +367,7 @@ tool: an observation on that VM and that hour, not a rate.
 Runs `cogslive1`, `cogslive2` and `cogslive3`, 2026-11-07. sentinel-cogs in AWS
 us-west-2 (about 1.09 billion objects), listed anonymously from one n4-highcpu-32 in GCP us-east1 with a 400 GB
 disk, arms one after another, each capped at 40 minutes; the delta+zstd build `bf5e6d52` unless named. Java's
-rows are the scale study's release rows on the same bucket (Java 0.3.2, sorted Parquet, 16 GB heap).
+row is the scale study's release row on the same bucket (Java 0.3.2, sorted Parquet, 16 GB heap).
 
 | Arm | Result |
 |---|---|
@@ -378,12 +378,84 @@ rows are the scale study's release rows on the same bucket (Java 0.3.2, sorted P
 | **sorted Parquet, 256 workers** | **1,088,794,418 rows in 1,115 s**, 1,094,847 requests (1.01 per 1k), spill 32 GB (about 30 B per row), RSS 1.2 GB, 488 parts, mean active 141 of 256, no retries |
 | sorted Parquet, 1,024 workers | 846 s, 1,115,517 requests (1.02 per 1k), in flight avg 210 of 1,024, 480 parts, spill 32.5 GB, RSS 2.2 GB, 5 encoders, `encoder_wait` 318 s, `budget_wait` 0 |
 | the same, `--row-budget 1GiB` (32 encoders admitted) | 941 s, RSS 4.5 GB |
-| Java, sorted Parquet, 1,024 / 2,048 concurrency | 654 s / 253 s |
+| Java, sorted Parquet, 1,024 concurrency | 654 s (2,048 concurrency: [2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)) |
 
+*Corrected 2026-11-17.* The Java row read "1,024 / 2,048 concurrency | 654 s / 253 s". The scale study's 253 s
+is its Java 0.3.2 sorted row at concurrency 2,048 for another bucket (523M objects); its only Java 0.3.2 sorted
+row for sentinel-cogs is 654 s at 1,024. Java 0.3.2 at 2,048 took 655 s on this bucket on 2026-11-17.
+
+*Superseded 2026-11-17.* The paragraph below describes the build measured that day, before the rows left after
+listing were written to several parts at once
+([segments](ordering.md#segments-parts-written-in-parallel-after-listing)). On the 0.4.0 release the sorted run
+at 1,024 workers took 289 s, and Java 0.3.2's 666 s, on the same machine type, one run each
+([2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)). As first
+written:
 At 1,024 workers the sorted run is bound by its output: after listing ends, the rows drain through one open
 Parquet part at a time, and neither a larger row budget nor more encoders moved the wall. Java's sorted run at
 the same concurrency was faster on this bucket. One run per arm, cross-cloud: an observation on that VM and
 that day.
+
+### A billion live objects on the 0.4.0 release, against 0.3.2 (sentinel-cogs, 2026-11-17)
+
+sentinel-cogs in AWS us-west-2 (about 1.09 billion objects), listed anonymously on 2026-11-17 from one
+n4-highcpu-32 in GCP us-east1 (32 vCPU, Intel Xeon Platinum 8581C, 62 GiB, not Spot) with a 400 GB disk, the
+machine type of the runs above. Five arms one after another on that VM, 09:54 to 10:31 UTC, each capped at 40
+minutes, output on the VM's disk and deleted after each arm. Both tools ran in the `ghcr.io/varveio/swath:0.3.2`
+image as root under `/usr/bin/time -v`, with the disk's usage sampled every 5 s.
+
+- **Go:** the 0.4.0 release's static linux/amd64 binary, which prints
+  `swath 0.4.0 (7e75c77f59c9cc31248e6d1326d9140cb8be5567)`, at its defaults otherwise:
+
+  ```bash
+  swath list s3://sentinel-cogs -o OUT --workers 1024 --report R.json --anonymous --s3-region us-west-2 \
+    --max-duration 2400s --stats -v --progress-interval 30s
+  ```
+
+  The second sorted arm is the same with `--workers 2048`. The count is
+  `swath du s3://sentinel-cogs -d 0 --workers 1024` followed by the same options from `--report` on.
+- **Java:** the image's own Java 0.3.2, which prints `swath 0.3.2` with `Commit: acf0d509f238` and
+  `Runtime: 25.0.4+7-LTS`, with `JAVA_TOOL_OPTIONS=-Xmx16g`:
+
+  ```bash
+  java -jar /opt/swath/swath.jar list s3://sentinel-cogs --concurrency 1024 --format parquet --sort -o OUT \
+    --report R.json --region us-west-2 --no-sign-request --max-duration 2400s --stats
+  ```
+
+  and the same with `--concurrency 2048`: the scale study's command for its release rows, without its
+  `sort.merge-parallelism=8` (the default on 32 cores; the reports show 8) and `sort.ignore-disk-check` settings.
+
+| Arm | Exit | Wall s | Objects | Requests (per 1k) | Retries / throttles | Peak RSS | CPU s (user + sys) | Disk peak | Parts | Dataset |
+|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|
+| **Go 0.4.0, sorted Parquet, 1,024 workers** | 0 | **289** | 1,091,734,257 | 1,117,576 (1.02) | 0 / 0 | 5.8 GB | 6,586 | 64.6 GB | 494 | 32.6 GB |
+| Java 0.3.2, sorted Parquet, concurrency 1,024 | 0 | 666 | 1,091,735,778 | 1,110,537 (1.02) | – | 8.4 GB | 8,888 | 67.6 GB | 68 | 31.6 GB |
+| Go 0.4.0, sorted Parquet, 2,048 workers | 0 | 338 | 1,091,738,583 | 1,130,199 (1.04) | 0 / 0 | 7.3 GB | 7,135 | 64.4 GB | 496 | 32.6 GB |
+| Java 0.3.2, sorted Parquet, concurrency 2,048 | 0 | 655 | 1,091,739,523 | 1,125,940 (1.03) | – | 17.1 GB | 9,983 | 67.6 GB | 68 | 31.6 GB |
+| Go 0.4.0, count (`du -d 0`), 1,024 workers | 0 | 188 | 1,091,741,237 | 1,118,054 (1.02) | 0 / 0 | 1.3 GB | 3,982 | – | – | – |
+
+Wall, peak RSS and CPU are `/usr/bin/time -v`'s (GB here are 10^9 bytes); objects, requests, retries and
+throttles are each tool's report's. Java's report counts no retries; in each Java arm it recorded one attempt
+timeout and no slowdown, 5xx or network throttle event. Disk peak is the most the work filesystem held above
+its level before the arm, in the 5 s samples; the dataset is the published output.
+
+- **Go, 1,024 workers.** The last listing page came at 196 s (`timings.provider_finished_at`); the tail after
+  it took 87 s (`drain.tail_ns`) and publication 6 s. Mean active 685 of 1,024, split depth 55. 32 encoders,
+  16 segment workers (`workers_by` `processors`), `encoder_wait` 219 s, `budget_wait` 0. Spill peaked at
+  32.3 GB (about 30 B per row). CPU averaged 22.8 of 32 cores.
+- **Go, 2,048 workers.** The last listing page came at 194 s; the tail took 136 s and publication 8 s. Mean
+  active 1,122 of 2,048 (peak 2,035 in flight), split depth 55, 32 encoders, 16 segment workers,
+  `encoder_wait` 57 s, `budget_wait` 0, spill peak 32.5 GB. CPU averaged 21.1 cores. The 49 s it lost to the
+  1,024-worker arm are the tail's (136 s against 87 s).
+- **Java, 1,024 / 2,048.** Listing 306 / 303 s, then the merge 336 / 327 s (`sort.merge_ms`); in flight
+  average 342 / 625, peak 1,024 / 2,048; CPU averaged 13.3 / 15.2 cores. Doubling the concurrency shortened
+  neither the listing nor the merge, and peak RSS went from 8.4 to 17.1 GB.
+- **Count.** Mean active 997 of 1,024, split depth 55; 5.8M keys/s over the wall.
+- **Against the earlier records.** Java 0.3.2 at 1,024: 666 s here, 654 s in the scale study. Go at 1,024 on
+  `bf5e6d52` (2026-11-07, table above): sorted 846 s with a peak RSS of 2.2 GB and 5 encoders; count 177 s.
+
+One run per arm, cross-cloud: an observation on that VM and that hour, not a rate. The arms ran in a fixed
+order, not interleaved. The object counts differ by a few thousand between arms because the bucket grows; each
+is the tool's own count for its run. The datasets were deleted after each arm and not compared. Why the Go tail
+took longer at 2,048 workers than at 1,024 is not established by this run.
 
 ### Workers, one core and the study harness (through the fake)
 
@@ -1735,8 +1807,10 @@ defaults, with smaller hosts emulated) have one smoke run each and no numbers to
   [durability.md](durability.md)); Windows and macOS run the test suite in CI, but nothing is measured there. Power
   loss is untested.
 - **Scale.** Runs of hours and listings past a billion keys are unmeasured. The largest runs are key lists of
-  up to 593M keys through the fake and one live bucket of 1.09 billion objects at 256 and 1,024 workers
-  ([a billion live objects](#engine-campaign-2026-11-07-prod-key-lists-through-a-fake-at-50-ms)).
+  up to 593M keys through the fake and one live bucket of 1.09 billion objects, at 256 and 1,024 workers on a
+  build of 2026-11-07 ([a billion live objects](#a-billion-live-objects-sentinel-cogs-2026-11-07)) and at 1,024
+  and 2,048 on the 0.4.0 release
+  ([2026-11-17](#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)).
 - **Local benchmarks.** Cold-cache numbers are guest-cold in a VM and single runs; all trees are synthetic.
 
 ## Skipped or not measured
