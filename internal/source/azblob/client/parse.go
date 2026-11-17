@@ -35,6 +35,12 @@ func (p *ListOutput) Validate(sent string, grouped bool) error {
 			return fmt.Errorf("%w: %q listed after %q (UTF-16 code-unit order)", objhttp.ErrInvalidPage, b.Name, a.Name)
 		}
 	}
+	return p.continues(sent)
+}
+
+// continues holds the page's next marker to not being the one sent: the
+// listing would loop. It is all a page of ListInput.AnyOrder is held to.
+func (p *ListOutput) continues(sent string) error {
 	if p.NextMarker != "" && p.NextMarker == sent {
 		return fmt.Errorf("%w: NextMarker repeats the marker sent", objhttp.ErrInvalidPage)
 	}

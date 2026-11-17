@@ -140,3 +140,37 @@ func TestGCSImports(t *testing.T) {
 		t.Error("the walk does not see the GCS SDK in the gcs package")
 	}
 }
+
+// TestAzblobImports: the azblob package links none of the command, its
+// parquet-go only through SeekParquet's reader, and of the cloud SDKs only
+// Azure's; the s3 package links no Azure SDK.
+func TestAzblobImports(t *testing.T) {
+	const azure = "github.com/Azure/"
+	d := deps(t, mod+"/azblob")
+	for _, c := range command {
+		if _, ok := d[c]; ok {
+			t.Errorf("%s/azblob links %s", mod, c)
+		}
+	}
+	for path, imports := range d {
+		if !strings.HasPrefix(path, azure) && slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
+			t.Errorf("%s/azblob links %s", mod, path)
+		}
+		if strings.HasPrefix(path, "github.com/parquet-go/") || slices.Contains(readerEdge, path) {
+			continue
+		}
+		for _, imp := range imports {
+			if strings.HasPrefix(imp, "github.com/parquet-go/") {
+				t.Errorf("%s/azblob links %s through %s, not through SeekParquet's reader", mod, imp, path)
+			}
+		}
+	}
+	if _, ok := d["github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"]; !ok {
+		t.Error("the walk does not see the Azure SDK in the azblob package")
+	}
+	for path := range deps(t, mod+"/s3") {
+		if strings.HasPrefix(path, azure) || strings.HasPrefix(path, mod+"/internal/source/azblob") {
+			t.Errorf("%s/s3 links %s", mod, path)
+		}
+	}
+}

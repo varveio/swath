@@ -45,6 +45,7 @@ import (
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/tokensource"
+	"github.com/varveio/swath/objfile"
 )
 
 // Version is the service version every request names (x-ms-version):
@@ -96,6 +97,10 @@ type ListInput struct {
 	Marker     string
 	MaxResults int     // 0: the server default (5,000, also the cap)
 	Include    Include // the zero value sends no include
+	// AnyOrder holds the page to no order of its names, for a caller that
+	// orders them itself: a hierarchical namespace lists in its own order,
+	// which is not UTF-16 code-unit order. It is never sent.
+	AnyOrder bool
 }
 
 // Item is one listed entry: a blob, or with Prefix a BlobPrefix (a
@@ -471,7 +476,8 @@ const blobSuffix, dfsSuffix = ".blob.core.windows.net", ".dfs.core.windows.net"
 // which this request is not signed with (a key Get Account Information
 // refused would be refused here too). Retries and classification are
 // AccountInfo's; a refused call or a missing header is an error, never
-// "flat".
+// "flat". Each attempt is reported to ctx's objfile.Observer as
+// AccountInfo's are.
 func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, error) {
 	if !c.defaultEndpoint() {
 		return false, ErrNoDFSEndpoint
@@ -481,7 +487,11 @@ func (c *Client) NamespaceInfo(ctx context.Context, container string) (bool, err
 	}
 	u := url.URL{Scheme: "https", Host: c.cfg.Account + dfsSuffix, Path: "/" + container,
 		RawQuery: encodeQuery(url.Values{"resource": {"filesystem"}})}
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (bool, error) {
+	op := &observed{request: objfile.Request{Kind: objfile.MetadataRequest}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (_ bool, err error) {
+		end := op.begin(ctx)
+		defer func() { end(0, err) }()
+
 		hdr, err := c.head(ctx, &u)
 		if err != nil {
 			return false, err

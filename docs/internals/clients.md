@@ -4,7 +4,8 @@ Each object-store provider lists through one client, built on the vendor's SDK s
 `internal/source/s3/client` over `service/s3` (ListObjectsV2 and ListObjectVersions; HeadObject and HeadBucket for
 the library's lookups, [library.md](../library.md)),
 `internal/source/gcs/client` over Google's generated `google.golang.org/api/storage/v1` (`objects.list`), and
-`internal/source/azblob/client` over `sdk/storage/azblob` v1.8.3 (List Blobs and Get Account Information). The SDK
+`internal/source/azblob/client` over `sdk/storage/azblob` v1.8.3 (List Blobs and Get Account Information; Get Blob
+Properties for the library's lookups). The SDK
 sends the request; swath keeps what a listing tool must guarantee and the SDKs do not. The providers above the
 clients are described in [providers.md](providers.md) and the page of each provider.
 
