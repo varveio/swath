@@ -1,0 +1,23 @@
+name: Trim the Go build cache and save it on main
+description: >
+  The last step of a job that set up Go through ./.github/actions/setup-go: deletes the
+  build-cache entries the job did not use (scripts/ci/go-build-cache.sh trim, which prints what it
+  kept) and, on a push to main, saves the rest under the key setup-go restored with. A job that
+  failed skips it and saves nothing; a job whose Go setup was skipped skips its steps.
+
+runs:
+  using: composite
+  steps:
+    - name: Trim the Go build cache to the entries this job used
+      if: env.GO_BUILD_CACHE_KEY != ''
+      shell: bash
+      run: '"$GITHUB_WORKSPACE/scripts/ci/go-build-cache.sh" trim "$GO_BUILD_CACHE_DIR" "$GO_BUILD_CACHE_AGED"'
+
+    # A key once saved is never overwritten: when jobs sharing a key save at once, the first wins
+    # and the others log a warning, which does not fail them.
+    - name: Save the Go build cache
+      if: env.GO_BUILD_CACHE_KEY != '' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: ${{ env.GO_BUILD_CACHE_DIR }}
+        key: ${{ env.GO_BUILD_CACHE_KEY }}

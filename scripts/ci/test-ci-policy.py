@@ -368,6 +368,15 @@ exit 2
             needs = set(re.search(r'needs: \[(.*?)\]', section)[1].split(', '))
             self.assertTrue(go_jobs <= needs, (gate, go_jobs - needs))
 
+        # Every job that sets up Go ends by trimming its build cache and saving it on main: a job
+        # without that step would never save one, and its runs on main would build cold.
+        jobs = re.split(r'^  (?=[a-z0-9_-]+:\n)', WORKFLOW.split('\njobs:\n', 1)[1], flags=re.M)
+        go_setup = [job for job in jobs if 'uses: ./.github/actions/setup-go' in job]
+        self.assertTrue(go_setup)
+        for job in go_setup:
+            last = job.rstrip().rsplit('\n      - ', 1)[1]
+            self.assertIn('uses: ./.github/actions/save-go-cache', last, job.split(':', 1)[0])
+
         with tempfile.NamedTemporaryFile() as summary:
             for result in ['success', 'skipped', 'failure', 'cancelled']:
                 run = subprocess.run(['bash', '-c', run_step('Every gating job passed')],
