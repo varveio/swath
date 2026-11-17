@@ -98,6 +98,6 @@ filesystems. [What each supports](../docs/sources/README.md)
 
 - [Start here](../docs/start-here.md): pick a job, and when swath fits.
 - [Sources](../docs/sources/README.md): URLs, credentials and what each source supports.
-- [Run large listings](../docs/running.md): size, watch, stop and resume a long run.
+- [Run large listings](../docs/running.md): list a bucket of your own start to finish.
 - [Commands](../docs/commands/swath.md): every command and option.
 - [Troubleshooting](../docs/troubleshooting.md): by symptom and exit code.
