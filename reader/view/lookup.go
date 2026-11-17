@@ -41,7 +41,7 @@ func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupRes
 		if ctx.Err() != nil {
 			return listing.LookupResult{}, ctx.Err()
 		}
-		result.Reason = err
+		result.Reason = failed(ctx, err)
 		return result, nil
 	}
 	result.State, result.Entry, result.Reason = inv.resolve(key, found)

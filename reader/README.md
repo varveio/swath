@@ -170,4 +170,7 @@ directory the listing did not read), and never below a symbolic link, which no l
 or a summary reports the keys it did not reach as `Unread` intervals of class `budget`; the listing's own gaps
 stay unlocated. The view checks every value it reads (a missing column, a negative size, a local kind swath does
 not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
+A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
+is `ErrInvalidPage`, a missing object `ErrNotFound`, a refused access `ErrAuth`, and any other failure to read the
+dataset `ErrUnavailable`, which `listing.Retryable` reports.
 [view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.

@@ -82,7 +82,7 @@ const (
 
 // errUnknownTotal reports a reduction SeekParquet left unknown with no
 // budget in force, which reads every value it needs.
-var errUnknownTotal = errors.New("view: an aggregation left a total unknown without a budget")
+var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total unknown without a budget")
 
 // aggregate counts and sums the rows of the selection's kinds in each
 // span, in one aggregation: an element is nil where the value budget
@@ -135,7 +135,7 @@ func (inv *Inventory) totals(r []seekparquet.AggregateResult, bounded bool) (*li
 		}
 	}
 	if r[reduceCount].Status != seekparquet.AggregateExact {
-		return nil, errors.New("view: a count of rows overflowed")
+		return nil, wrap(listing.ErrUnsupported, "a count of rows overflowed")
 	}
 
 	t := &listing.Totals{Entries: r[reduceCount].Value.Int64()}
@@ -290,7 +290,7 @@ func established(span seekparquet.RowSpan) bool {
 }
 
 // errUnknownSpan reports a span SeekParquet did not establish.
-var errUnknownSpan = errors.New("view: a selection's rows are not established")
+var errUnknownSpan = wrap(listing.ErrUnsupported, "a selection's rows are not established")
 
 // merge sorts intervals and joins those that overlap or touch.
 func merge(intervals [][2]int64) [][2]int64 {

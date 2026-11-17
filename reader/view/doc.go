@@ -46,7 +46,18 @@
 // reads is checked as it is read: a column a part lacks or holds with
 // another physical type, a negative size, a local kind swath does not
 // write, or a directory whose key does not end in "/" (and the reverse) is
-// a *reader.SemanticError, and a key holding a NUL byte, which no listing
-// key may hold, is listing.ErrInvalidPage. Summarize checks the values it
-// sums, and the order of the keys it counts but not their form.
+// a *reader.SemanticError, and it, a key holding a NUL byte, which no
+// listing key may hold, and any data SeekParquet refuses are
+// listing.ErrInvalidPage. Summarize checks the values it sums, and the
+// order of the keys it counts but not their form.
+//
+// # Errors
+//
+// A call that fails returns an error of a class of package listing, with
+// the cause wrapped beside it: a missing object is listing.ErrNotFound, a
+// refused access (fs.ErrPermission, a store's 401 or 403) listing.ErrAuth,
+// a feature or limit SeekParquet does not support listing.ErrUnsupported,
+// and any other failure to read the dataset, an I/O or network error
+// past the storage's retries, listing.ErrUnavailable. A context's error
+// is returned as it is, and so is an error of a Walk's emit.
 package view

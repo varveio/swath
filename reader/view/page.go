@@ -70,14 +70,14 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	entries, next := listed.Entries, listed.Next
 	if limit > req.Limit {
 		if page.Self, entries, next, err = inv.self(req.Prefix, req.Limit, entries, next); err != nil {
-			return listing.Page{}, err
+			return listing.Page{}, failed(ctx, err)
 		}
 	}
 	page.Entries = make([]listing.Entry, len(entries))
 	for i := range entries {
 		e, err := inv.listedEntry(entries[i].ListEntry)
 		if err != nil {
-			return listing.Page{}, err
+			return listing.Page{}, failed(ctx, err)
 		}
 		page.Entries[i] = *e
 	}
@@ -94,20 +94,20 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	}
 	if next != nil {
 		if page.Next, err = encodeToken(bind, next); err != nil {
-			return listing.Page{}, err
+			return listing.Page{}, failed(ctx, err)
 		}
 	}
 	return page, nil
 }
 
 // stopped is the page err ended: at the page's time budget, a page with
-// no entry whose Next is token, which starts it again; else the error, or
-// ctx's once ctx has ended.
+// no entry whose Next is token, which starts it again; else the error in
+// its class, or ctx's once ctx has ended.
 func (inv *Inventory) stopped(ctx, op context.Context, token string, err error) (listing.Page, error) {
 	if timeUp(ctx, op) {
 		return listing.Page{Order: listing.OrderBytes, Next: token, Evidence: inv.evidence(listing.StopTimeBudget)}, nil
 	}
-	return listing.Page{}, ctxOr(ctx, err)
+	return listing.Page{}, failed(ctx, err)
 }
 
 // self takes the entry at exactly prefix from the first page of its
@@ -240,18 +240,10 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 		if ctx.Err() == nil && totalsCtx.Err() != nil {
 			return out, nil
 		}
-		return nil, ctxOr(ctx, err)
+		return nil, failed(ctx, err)
 	}
 	for j, i := range counted {
 		out[i] = totals[j]
 	}
 	return out, nil
-}
-
-// ctxOr is ctx's error once ctx has ended, else err.
-func ctxOr(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return err
 }

@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net/http"
 	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
@@ -129,6 +131,52 @@ func wrap(class error, reason string) error {
 // invalid is a request this package refuses.
 func invalid(format string, args ...any) error {
 	return wrap(listing.ErrInvalidRequest, fmt.Sprintf(format, args...))
+}
+
+// failed is the error a call that read the inventory returns for err:
+// ctx's own once ctx has ended, else err in a class of package listing,
+// with err wrapped beside it. Data the reader refuses (reader.IsRefusal)
+// is ErrInvalidPage; a missing object ErrNotFound; a refused access, or a
+// store's answer of 401 or 403, ErrAuth; a feature or limit the reader
+// does not support ErrUnsupported; any other failure, such as an I/O or
+// network error past the storage's retries, ErrUnavailable, which
+// listing.Retryable reports. An error the view gave a class keeps it.
+func failed(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	var status interface{ HTTPStatusCode() int }
+	var unsupported *seekparquet.UnsupportedError
+	code := 0
+	if errors.As(err, &status) {
+		code = status.HTTPStatusCode()
+	}
+
+	class := listing.ErrUnavailable
+	switch {
+	case err == nil || classed(err):
+		return err
+	case reader.IsRefusal(err):
+		class = listing.ErrInvalidPage
+	case errors.Is(err, fs.ErrNotExist):
+		class = listing.ErrNotFound
+	case errors.Is(err, fs.ErrPermission) || code == http.StatusUnauthorized || code == http.StatusForbidden:
+		class = listing.ErrAuth
+	case errors.As(err, &unsupported) || errors.Is(err, seekparquet.ErrLimitExceeded):
+		class = listing.ErrUnsupported
+	}
+	return fmt.Errorf("%w: %w", class, err)
+}
+
+// classed reports whether err has a class the view gives its own errors.
+func classed(err error) bool {
+	for _, class := range []error{listing.ErrInvalidRequest, listing.ErrInvalidToken, listing.ErrNotFound, listing.ErrNotDirectory,
+		listing.ErrUnsupported, listing.ErrInvalidPage, listing.ErrOutOfScope} {
+		if errors.Is(err, class) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkPrefix refuses a prefix of the wrong form: one holding a NUL, a

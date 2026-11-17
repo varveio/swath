@@ -69,7 +69,7 @@ func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit fu
 	case err != nil && timeUp(ctx, op):
 		stop = listing.StopTimeBudget
 	case err != nil:
-		return listing.WalkSummary{}, err
+		return listing.WalkSummary{}, failed(ctx, err)
 	}
 	if stop != listing.StopCompleted {
 		unread := listing.WalkBatch{Unread: []listing.Unread{{Key: w.last, Scope: listing.UnreadInterval, Class: listing.UnreadBudget}}}

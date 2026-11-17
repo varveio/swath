@@ -365,13 +365,13 @@ func stopRank(stop listing.StopReason) int {
 
 // fail ends the call on err: with ctx's error when ctx ended; at the time
 // budget, with every target not yet answered unread, and unknown when its
-// own entry was not read; else with err.
+// own entry was not read; else with err in its class.
 func (s *summary) fail(ctx, op context.Context, err error) ([]listing.TargetSummary, listing.Evidence, error) {
 	if ctx.Err() != nil {
 		return nil, listing.Evidence{}, ctx.Err()
 	}
 	if !timeUp(ctx, op) {
-		return nil, listing.Evidence{}, err
+		return nil, listing.Evidence{}, failed(ctx, err)
 	}
 	for i := range s.out {
 		switch {

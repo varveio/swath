@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -132,8 +133,9 @@ func TestEmptyInventory(t *testing.T) {
 
 // TestRowFaults: a value swath never writes is refused when the view reads
 // it, never handed on or counted: by Walk and Page, and by Summarize where
-// it sums the value (a key's form is not one). A common prefix holding a
-// NUL is refused as its rows' keys are.
+// it sums the value (a key's form is not one), as listing.ErrInvalidPage
+// with the reader's error beside it. A common prefix holding a NUL is
+// refused as its rows' keys are.
 func TestRowFaults(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -152,10 +154,10 @@ func TestRowFaults(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			inv := open(t, write(t, c.f))
 			_, err := inv.Walk(ctx, listing.WalkRequest{Workers: 1}, func(listing.WalkBatch) error { return nil })
-			if !errors.Is(err, c.want) {
+			if !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
 				t.Errorf("Walk = %v, want %v", err, c.want)
 			}
-			if _, err := inv.Page(ctx, listing.PageRequest{Limit: 5}); !errors.Is(err, c.want) {
+			if _, err := inv.Page(ctx, listing.PageRequest{Limit: 5}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
 				t.Errorf("Page = %v, want %v", err, c.want)
 			}
 			if c.want == listing.ErrInvalidPage {
@@ -167,12 +169,48 @@ func TestRowFaults(t *testing.T) {
 			if c.want == listing.ErrInvalidPage || strings.Contains(c.name, "slash") {
 				return
 			}
-			if _, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{}); !errors.Is(err, c.want) {
+			if _, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
 				t.Errorf("Summarize = %v, want %v", err, c.want)
 			}
 		})
 	}
 }
+
+// TestFailureClasses: a failure to read the dataset is returned in a class
+// of package listing, the cause kept; a context's error and an error the
+// view classed are returned as they are.
+func TestFailureClasses(t *testing.T) {
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	io := errors.New("read: input/output error")
+	for _, c := range []struct {
+		ctx       context.Context
+		err, want error
+	}{
+		{context.Background(), &os.PathError{Op: "open", Err: os.ErrPermission}, listing.ErrAuth},
+		{context.Background(), statusError(403), listing.ErrAuth},
+		{context.Background(), &os.PathError{Op: "open", Err: os.ErrNotExist}, listing.ErrNotFound},
+		{context.Background(), &seekparquet.RefusalError{Code: seekparquet.CodeInvalidParquet}, listing.ErrInvalidPage},
+		{context.Background(), &seekparquet.UnsupportedError{Code: seekparquet.UnsupportedEncoding}, listing.ErrUnsupported},
+		{context.Background(), io, listing.ErrUnavailable},
+		{context.Background(), errNotDirectory, listing.ErrNotDirectory},
+		{ended, io, context.Canceled},
+	} {
+		err := failed(c.ctx, c.err)
+		if !errors.Is(err, c.want) || c.ctx.Err() == nil && !errors.Is(err, c.err) {
+			t.Errorf("failed(%v) = %v, want %v", c.err, err, c.want)
+		}
+		if c.want == listing.ErrUnavailable != listing.Retryable(err) {
+			t.Errorf("failed(%v) = %v, retryable %t", c.err, err, listing.Retryable(err))
+		}
+	}
+}
+
+// statusError is a store's answer with an HTTP status, as objfile's carry.
+type statusError int
+
+func (e statusError) Error() string       { return "the store answered " + strconv.Itoa(int(e)) }
+func (e statusError) HTTPStatusCode() int { return int(e) }
 
 // TestRequestChecks: a request of the wrong form is ErrInvalidRequest,
 // before anything is read.
