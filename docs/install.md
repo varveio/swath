@@ -94,7 +94,7 @@ Expand-Archive $Archive -DestinationPath . -Force
 $Bin = "$env:LOCALAPPDATA\Programs\swath"
 New-Item -ItemType Directory -Force $Bin | Out-Null
 Copy-Item "swath-$Version-windows-amd64\swath.exe" $Bin -Force
-& "$Bin\swath.exe" --version
+if ($?) { & "$Bin\swath.exe" --version }
 ```
 
 `curl.exe` comes with Windows 10 (version 1803 and later) and Windows 11; write it with `.exe`, because in
@@ -170,8 +170,8 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json `
 ### Build attestation
 
 Needs the [GitHub CLI](https://cli.github.com/) (`gh`), logged in (`gh auth login`); without a login it fails
-with exit 4. It checks the archive itself against the attestation swath's release workflow recorded for it,
-which names the build that produced it:
+with exit 4. It checks the archive itself against a build attestation recorded in swath's repository, which
+names the workflow and the commit that built it:
 
 ```bash
 gh attestation verify "$ARCHIVE" --repo varveio/swath
