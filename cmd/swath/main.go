@@ -46,7 +46,6 @@ import (
 	// Providers register themselves (scheme and flag group); the command
 	// imports them for nothing else.
 	_ "github.com/varveio/swath/internal/source/azblob"
-	_ "github.com/varveio/swath/internal/source/gcs"
 	_ "github.com/varveio/swath/internal/source/localfs"
 )
 
