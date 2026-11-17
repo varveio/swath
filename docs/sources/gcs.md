@@ -39,8 +39,9 @@ GCS's XML API also answers S3 requests: `s3://` with `--endpoint-url https://sto
 
 ## Writing a dataset to GCS
 
-`swath list SOURCE -o gs://BUCKET/PREFIX --work-dir DIR` puts the dataset in GCS and keeps only spill and the
-run's metadata in `DIR` ([writing to a bucket](../production.md#writing-to-a-bucket)).
+`-o gs://BUCKET/PREFIX --work-dir DIR` writes the dataset to GCS; the command, what appears in the bucket and
+how to resume and clean up are in [Writing to a bucket](../production.md#writing-to-a-bucket). What is GCS's
+own:
 
 - **Credentials:** the destination's are its own: `--output-gcs-credentials-file FILE` (a service account key
   or authorized-user JSON) or Application Default Credentials, with the read-write scope. The source's
@@ -48,8 +49,8 @@ run's metadata in `DIR` ([writing to a bucket](../production.md#writing-to-a-buc
 - **Permissions:** `storage.objects.create`, `get` and `delete` on the prefix (delete removes this run's own
   orphans, by generation).
 - **Endpoint:** `--output-endpoint-url`, as the SDK takes it, is fixed for the run.
-- **Leftovers:** unfinished resumable upload sessions expire on their own; GCS keeps them a week. No
-  lifecycle rule is needed for them.
+- **Unfinished uploads** are resumable upload sessions, which GCS keeps a week: no lifecycle rule is needed
+  for them.
 
 ## Limits and known differences
 

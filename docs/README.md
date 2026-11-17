@@ -9,21 +9,20 @@ Parquet inventories. Releases are published on the [releases page](https://githu
 - [Start here](start-here.md): pick a job, and when swath fits.
 - [Install](install.md): release binaries and their verification, the container image, a source build.
 - [Your first inventory](first-inventory.md): total a local directory, list it, save and inspect an inventory.
-- [Understand your results](results.md): scope, apparent and allocated bytes, hard links, coverage, observation
-  time, live and saved results.
+- [Understand your results](results.md): scope, sizes, coverage, observation time, live and saved results.
 
 **Use**
 
 - [Sources](sources/README.md): Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local
   and mounted filesystems: URLs, credentials, permissions, endpoints, requests.
-- [Output](output.md): text rows (table, TSV, JSONL), `swath du` totals, reading them in DuckDB, when to write
-  a dataset.
-- [Total a source](totals.md): `swath du`, the view of where the bytes are, totals per prefix and totals from a
-  saved dataset.
+- [Output](output.md): text rows (table, TSV, JSONL), the fields of `swath du`'s rows, reading them in DuckDB,
+  when to write a dataset.
+- [Total a source](totals.md): `swath du`, the view of where the bytes are, totals per prefix, totals from a
+  saved dataset, and how sizes, hard links and unreadable entries are counted.
 - [Filter rows](filters.md): globs, regular expressions, sizes, times and storage classes.
 - [Run large listings](running.md): list a bucket of your own start to finish: the command, what it prints,
   stopping and resuming it, where the result is.
-  - [Size a run](size-a-run.md): disk, memory and cost.
+  - [Size a run](size-a-run.md): the disk, memory and workers a bucket needs, and what it costs.
   - [Watch and tune a run](watch-a-run.md): progress, the closing lines, throttling, memory and disk, a stuck run.
   - [Stop, resume and refresh](resume-and-refresh.md): signals, `swath resume`, overwrite and seeding a refresh.
   - [List every version](all-versions.md): versions, generations, snapshots and delete markers.

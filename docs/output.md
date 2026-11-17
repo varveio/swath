@@ -152,107 +152,66 @@ byte that is not valid UTF-8. `contains(replace(key, '\\', ''), '\x')` finds tho
 
 ## du rows
 
-`swath du` prints, for the total and each prefix down to `-d N`, the objects under it, two byte figures and the
-newest modification time among them (a local tree adds its directories):
+The rows `swath du` prints with `-d N` or `--format`, and in a pipe: for the total and each prefix down to
+`-d N`, the objects under it, two byte figures and the newest modification time among them (a directory's rows
+add its subdirectories). What the totals mean, and the table and the view that a terminal shows, are in
+[Total a source](totals.md).
 
 ```text
-$ swath du -d 1 /data/photos --format tsv
+$ swath du -d 1 media --format tsv
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
-total	0	4	3	470003	0	483328	0	2026-11-02T09:30:00.000000Z	size	name	true	
-prefix	1	2	1	420000	0	425984	0	2026-03-01T10:00:00.000000Z	size	name	true	2025/
-prefix	1	1	0	50000	0	53248	0	2026-11-02T09:30:00.000000Z	size	name	true	2026/
+total	0	6	5	105308864	0	38211584	0	2026-11-02T09:30:00.000000Z	size	name	true	
+prefix	1	2	0	67908864	0	802816	0	2026-11-02T09:30:00.000000Z	size	name	true	archive/
+prefix	1	3	2	6400000	0	6406144	0	2026-11-02T09:30:00.000000Z	size	name	true	photos/
+prefix	1	1	0	31000000	0	31002624	0	2026-11-02T09:30:00.000000Z	size	name	true	videos/
 ```
 
-| Field | Meaning |
-|---|---|
-| `row_type` | `total` for the total, `prefix` for every other row |
-| `depth` | the row's level below SOURCE; 0 is the total |
-| `objects` | the objects under the prefix (a local tree's files and other entries, never its directories) |
-| `dirs` | the directories below the prefix (local trees only) |
-| `size` | the sum of the objects' lengths, as the dataset's `size` column holds them |
-| `size_missing` | the objects counted that had no length (a local walk with `--metadata names`) |
-| `allocated_bytes` | the sum of the files' allocated bytes (`st_blocks` × 512), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
-| `allocated_bytes_missing` | the objects counted that had no allocated bytes |
-| `max_last_modified` | the newest `last_modified` among the objects counted under the prefix; directories, S3 delete markers and the names of a hard-linked file that is counted under another do not count; null when no object had one |
-| `primary` | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
-| `sort` | the order of the rows, `name` or `size` (`--sort`) |
-| `links_once` | `true` when a file with several hard links is counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket, with `--metadata names` and on Windows, which read no links. It says how the listing counts, whatever the rows hold, and a saved dataset gives the same as the live run: its manifest records the metadata tier |
-| `prefix` | the prefix, up to and including its `/`; the total's is the key prefix SOURCE names (`logs/2026/0` for `s3://bucket/logs/2026/0`), empty for a whole bucket or tree |
+| Field | Type | Meaning |
+|---|---|---|
+| `row_type` | string | `total` for the total, `prefix` for every other row |
+| `depth` | integer | the row's level below SOURCE; 0 is the total |
+| `objects` | integer | the objects under the prefix (a local tree's files and other entries, never its directories) |
+| `dirs` | integer | the directories below the prefix (local trees only) |
+| `size` | integer | the sum of the objects' lengths, as the dataset's `size` column holds them |
+| `size_missing` | integer | the objects counted that had no length (a local walk with `--metadata names`) |
+| `allocated_bytes` | integer | the sum of the files' allocated bytes (`st_blocks` × 512), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
+| `allocated_bytes_missing` | integer | the objects counted that had no allocated bytes (every object of a bucket) |
+| `max_last_modified` | string (UTC time) | the newest `last_modified` among the objects counted under the prefix, in UTC; directories, S3 delete markers and the names of a hard-linked file that is counted under another do not count; null when no object had one |
+| `primary` | string | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
+| `sort` | string | the order of the rows, `name` or `size` (`--sort`) |
+| `links_once` | boolean | `true` when a file with several hard links is counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket, with `--metadata names` and on Windows, which read no links. It says how the listing counts, whatever the rows hold, and a saved dataset gives the same as the live run: its manifest records the metadata tier |
+| `prefix` | string | the prefix, up to and including its `/`; the total's is the key prefix SOURCE names (`logs/2026/0` for `s3://bucket/logs/2026/0`), empty for a whole bucket or tree |
 
-Every row has both figures, whichever `--allocated` puts first. A figure that no object under the prefix had is
-null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones there
-were, and its `*_missing` count says how many it leaves out. An empty prefix has 0 of each figure its source
-has: an empty bucket's `size` is 0 and its `allocated_bytes` null. A local directory that could not be read
-(the run exits 3) has null `objects`, `dirs`, `size` and `allocated_bytes`, where an empty directory has 0;
-totals read from a saved dataset cannot tell that directory apart and give it 0
-([Totals](totals.md#totals-from-a-saved-dataset)). The byte figures are JSON numbers and can
-exceed 2^53; parse them as 64-bit integers, not as floating point (JavaScript's `JSON.parse` rounds them).
+Every row has both byte figures, whichever `--allocated` puts first. A figure that no object under the prefix
+had is null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones
+there were, and its `*_missing` count says how many it leaves out. With `--metadata names` a local walk reads
+names only, so both figures are null beside their counts:
 
-TSV puts the numbers first and the prefix last, as `du` prints a size and then its path; `--no-header` leaves
-out its header line. JSONL has the same fields, the prefix after `depth` (`prefix_base64` for a prefix that is
+```text
+$ swath du media --metadata names --format jsonl
+{"row_type":"total","depth":0,"prefix":"","objects":7,"dirs":5,"size":null,"size_missing":7,"allocated_bytes":null,"allocated_bytes_missing":7,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
+```
+
+An empty prefix has 0 of each figure its source has: an empty bucket's `size` is 0 and its `allocated_bytes`
+null. A local directory that could not be read (the run exits 3) has null `objects`, `dirs`, `size` and
+`allocated_bytes`, where an empty directory has 0; totals read from a saved dataset cannot tell that directory
+apart and give it 0 ([Total a source](totals.md#entries-that-could-not-be-read)). `max_last_modified` is null in
+all three cases, since no object under them had a time.
+The byte figures are JSON numbers and can exceed 2^53; parse them as 64-bit integers, not as floating point
+(JavaScript's `JSON.parse` rounds them).
+
+TSV puts the numbers first and the prefix last, as `du` prints a size and then its path, and escapes the prefix
+as [TSV](#tsv) escapes a key; `--no-header` leaves out its header line. JSONL has the same fields, the prefix
+after `depth` (`prefix_base64`, the exact bytes in standard base64, in place of `prefix` for a prefix that is
 not valid UTF-8). Totals read from a saved dataset (`swath du --from-dataset`) add a last JSONL member,
 `dataset`: the directory (`path`), the listed `source`, the `schema_id`, `listing_started_at` and
 `listing_finished_at`, and the listing's coverage from its manifest (`complete`, `stop_reason`, `unreadable`,
 `filters`, `exclusions`; null where the manifest does not say), so a stored row still says it was not a live
 listing and how complete it was. Both sort the rows by prefix in byte order, the total first and each parent
-before its children; the table puts the total last. Select the total by `row_type`, not by its place:
-`jq 'select(.row_type == "total") | .size'`. Three members depend on the source or the data, and every other
-is in every row: `dirs` (a local tree's rows only), `dataset` (JSONL read from a saved dataset) and
-`prefix_base64` (in place of `prefix`, for a prefix that is not valid UTF-8).
-
-Read the totals with care:
-
-- **Each row includes everything below it.** Add up rows of one depth only: the depth-1 rows together leave out
-  the objects directly under SOURCE, and all rows together count an object once per level it is under.
-- **A null figure was not read**, which is not an empty file: with `--metadata names` a local walk reads names
-  only, so both figures are null beside their counts:
-
-  ```text
-  $ swath du /data/photos --metadata names --format jsonl
-  {"row_type":"total","depth":0,"prefix":"","objects":4,"dirs":3,"size":null,"size_missing":4,"allocated_bytes":null,"allocated_bytes_missing":4,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
-  ```
-
-- **`size` is not disk use.** It is the objects' lengths as listed: not storage consumed, compression, replicas
-  or a bill. `allocated_bytes` is closer to `du`'s figure, with limits of its own
-  ([Apparent and allocated bytes](results.md#apparent-and-allocated-bytes)). A local directory's own size and
-  blocks are in no total.
-- **`max_last_modified` (the table's `newest`) is not a directory's time.** It is the newest of the objects' own
-  `last_modified`, the column `swath list` prints for each row.
-- **Filters apply first**, to every row, directories included ([Filters](filters.md)).
-
-The table shows one figure: `size`, or with `--allocated` the allocated bytes, headed `on disk`. It rounds it
-to three significant digits in binary units and groups the counts' digits (`60,004`). A local tree's table
-calls its objects `files` and its prefixes `path`, and indents each path two blanks a level below the first.
-It shows `max_last_modified` under `newest`, as the [list table](#the-table) shows times: local, to the second,
-the heading naming the zone (`newest (CET)`), `-` when no object had one. An unknown figure is `-`, and a partial one is a lower bound,
-`>= 12.0 KiB`. A directory that could not be read shows `-` for its figure and its counts, and the warning
-on stderr names it. The total row, last, names the SOURCE as typed (`/data/photos (total)`). For a source with allocated bytes, a line on stderr under the table gives the total of both
-figures, the shown one first, so a sparse file or a tree of small files shows at a glance; `-q` leaves it out:
-
-```text
-$ swath du -d 2 /data/photos
-    size  files  dirs  newest (CET)         path
- 410 KiB      2     1  2026-03-01 11:00:00  2025/
- 117 KiB      1     0  2026-03-01 11:00:00    2025/raw/
-48.8 KiB      1     0  2026-11-02 10:30:00  2026/
- 459 KiB      5     3  2026-11-02 10:30:00  /data/photos (total)
-  459 KiB in 5 files · 472 KiB on disk
-```
-
-With `--allocated` the line reads `472 KiB on disk in 5 files · 459 KiB of data`; when no file's allocated bytes
-were read, `on disk unknown`. A bucket's table has no such line:
-
-```text
-$ swath du -d 1 s3://bucket
-   size  objects  newest (CET)         prefix
-357 MiB   60,000  2026-11-15 06:59:58  logs/
-   18 B        3  2026-01-01 01:00:00  weird/
-357 MiB   60,004  2026-11-15 06:59:58  s3://bucket (total)
-```
-
-Without `-d` or `--format`, on a terminal, `swath du` draws [the view](totals.md#the-view) instead
-of the table: the largest prefixes and objects at any depth, with their shares of the total. It is for reading
-only; the rows above are what a pipe, `-d` and `--format` print.
+before its children (`--sort size`: the largest first among each parent's children). Select the total by
+`row_type`, not by its place: `jq 'select(.row_type == "total") | .size'`. Three members depend on the source
+or the data, and every other is in every row: `dirs` (a local tree's rows only), `dataset` (JSONL read from a
+saved dataset) and `prefix_base64` (in place of `prefix`, for a prefix that is not valid UTF-8).
 
 The totals are printed when the count completes. A run that fails or stops before prints none; one that
 fails while they are written exits non-zero. `--report FILE` adds the total and the counts to the report's

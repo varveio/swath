@@ -337,8 +337,9 @@ S3, GCS, Azure Blob and local datasets independently of the Go reader: swath met
 row counts, key order and the manifest's part bounds, footer stamps and part SHA-256 digests; for Azure also
 the `azure` source kind and every part's column types and nullability, including UTC microsecond timestamps.
 It expects the producer's flat `data/part-NNNNN.parquet` layout and `run.json`, so it is not a general
-validator for a bucket dataset copied locally with its nested run/attempt part paths. Its checks and optional
-reference comparison: [testing.md](testing.md#verifypy).
+validator for a bucket dataset copied locally with its nested run/attempt part paths. A dataset with no parts
+(an empty source) fails it: DuckDB finds no file to read in `data/`, and the script stops with that error,
+exit 1. Its checks and optional reference comparison: [testing.md](testing.md#verifypy).
 
 ## Schemas
 
@@ -374,7 +375,9 @@ carry no link identity: `swath du --from-dataset` counts such a dataset's hard-l
 the live run's `CheckTotals` does. Each provider
 lists its bound schemas' `Info` in `registry.Factory.Schemas`, so `registry.SchemaInfo` finds a dataset's
 declarations by its schema id: `swath du --from-dataset` binds the same totals and filters to a payload that reads
-the dataset's columns (`registry.DatasetTotals`).
+the dataset's columns (`registry.DatasetTotals`). It seeks to SOURCE's prefix and reads the key and only the
+columns the totals and the filters need, in parallel scans, once every part's footer and columns are checked
+against the dataset's schema (a dataset that breaks it is refused, exit 1).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
 `registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer

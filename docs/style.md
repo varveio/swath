@@ -128,7 +128,7 @@ sentences and link to that owner.
 | Fact | Owner |
 | --- | --- |
 | Product promise, fit and release status | root `README.md` |
-| First successful workflow | `docs/first-inventory.md`; what a result means: `docs/results.md` |
+| First successful workflow | `docs/first-inventory.md`; result scope, coverage and observation time: `docs/results.md` |
 | Go commands and options | `docs/commands/` (options generated from the flag table) and installed Go CLI help |
 | Go output formats and filters | `docs/output.md`, `docs/filters.md` |
 | Go sources, credentials and endpoints | `docs/sources/` (one page per source) |
