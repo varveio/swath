@@ -76,7 +76,8 @@ func TestLookup(t *testing.T) {
 // TestLookupLocal: a local key names a file or, without a trailing "/", a
 // directory too, answered with its directory key; a directory key names
 // a directory only. The root has no entry. Nothing at or under an entry
-// of unknown kind is absent.
+// of unknown kind is absent; a key below a symbolic link is not reached,
+// on a listing that may lack entries too.
 func TestLookupLocal(t *testing.T) {
 	ctx := context.Background()
 	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
@@ -117,6 +118,13 @@ func TestLookupLocal(t *testing.T) {
 	}
 	if _, err := inv.Lookup(ctx, nil); !errors.Is(err, listing.ErrInvalidRequest) {
 		t.Errorf("Lookup of the root: %v", err)
+	}
+
+	// A listing that may lack entries still names the link on the way.
+	partial := open(t, write(t, fixture{id: reader.LocalV1, rows: tree(),
+		ext: coverage(extension(reader.LocalV1), map[string]any{"complete": false, "unreadable": 1})}))
+	if r, err := partial.Lookup(ctx, []byte("link/x")); err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrNotDirectory) {
+		t.Errorf("partial, Lookup(link/x) = %v %v, %v; want ErrNotDirectory", r.State, r.Reason, err)
 	}
 }
 

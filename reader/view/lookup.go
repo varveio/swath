@@ -48,14 +48,10 @@ func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupRes
 	return result, nil
 }
 
-// keys are the keys whose entries answer what is at key: its names and,
-// when the inventory proves absence, its ancestors.
+// keys are the keys whose entries answer what is at key: its names and
+// its ancestors.
 func (inv *Inventory) keys(key []byte) [][]byte {
-	keys := inv.names(key)
-	if inv.provable {
-		keys = append(keys, inv.ancestors(key)...)
-	}
-	return keys
+	return append(inv.names(key), inv.ancestors(key)...)
 }
 
 // names are the keys an entry at key may have: key, and on a local
@@ -96,25 +92,25 @@ var (
 )
 
 // resolve answers what is at key from the entries found at its keys: the
-// entry at key itself before a directory's; else absent when the
-// inventory proves it and no ancestor found is of unknown kind or a
-// symbolic link; else unknown, with errUnresolvedKind or errThroughLink
-// when such an ancestor is the reason.
+// entry at key itself before a directory's; else unknown with
+// errThroughLink when an ancestor found is a symbolic link; else absent
+// when the inventory proves it and no ancestor found is of unknown kind;
+// else unknown, with errUnresolvedKind when such an ancestor is the
+// reason.
 func (inv *Inventory) resolve(key []byte, found map[string]*listing.Entry) (listing.LookupState, *listing.Entry, error) {
 	for _, name := range inv.names(key) {
 		if e := found[string(name)]; e != nil {
 			return listing.LookupPresent, cloneEntry(e), nil
 		}
 	}
-	if !inv.provable {
-		return listing.LookupUnknown, nil, nil
-	}
 	ancestors := inv.ancestors(key)
 	switch {
-	case foundKind(found, ancestors, listing.KindUnknown):
-		return listing.LookupUnknown, nil, errUnresolvedKind
 	case foundKind(found, ancestors, listing.KindSymlink):
 		return listing.LookupUnknown, nil, errThroughLink
+	case !inv.provable:
+		return listing.LookupUnknown, nil, nil
+	case foundKind(found, ancestors, listing.KindUnknown):
+		return listing.LookupUnknown, nil, errUnresolvedKind
 	}
 	return listing.LookupAbsent, nil, nil
 }
