@@ -247,7 +247,7 @@ func TestInvalidPages(t *testing.T) {
 			for range 2 {
 				page, err := src.Page(context.Background(), req)
 				if err != nil {
-					if !errors.Is(err, listing.ErrInvalidPage) || listing.Retryable(err) {
+					if !errors.Is(err, listing.ErrInvalidPage) {
 						t.Fatalf("%v, want ErrInvalidPage", err)
 					}
 					return

@@ -23,12 +23,11 @@ import (
 //   - auth and access_denied are ErrAuth;
 //   - not_found and region_redirect are ErrNotFound: the bucket is not
 //     there, or not where the source looks for it;
-//   - throttle is ErrThrottled;
 //   - an answer outside 2xx that is not transient and has no class of its
 //     own, such as a 400, is ErrUnsupported: asking again changes nothing;
-//   - anything else, a failure that outlasted the retries (timeout, parse,
-//     a server error, a transport failure, unreachable) or one that does
-//     not pass (a certificate refused), is ErrUnavailable.
+//   - anything else, a failure that outlasted the retries (throttle,
+//     timeout, parse, a server error, a transport failure, unreachable) or
+//     one that does not pass (a certificate refused), is ErrUnavailable.
 //
 // The caller tells its context's own end apart first: it is no class.
 func ListingClass(err error) error {
@@ -44,7 +43,7 @@ func ListingClass(err error) error {
 	case ClassAuth, ClassAccessDenied:
 		return listing.ErrAuth
 	case ClassThrottle:
-		return listing.ErrThrottled
+		return listing.ErrUnavailable
 	case ClassNotFound, ClassRegionRedirect:
 		return listing.ErrNotFound
 	case ClassUnsupported:

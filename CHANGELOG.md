@@ -37,7 +37,7 @@ Notable changes per release. The human summary of the current release is in the
 - `reader/listing` (experimental: it may change in any release) is the contract of the four questions swath
   answers about a listed location: `Page`, `Lookup`, `Walk` and `Summarize`, their requests and results, the
   common `Entry`, the `Evidence` every answer carries, the `Unread` places a walk could not read, and the error
-  classes with `Retryable`. It holds types only and imports nothing beyond the standard library.
+  classes. It holds types only and imports nothing beyond the standard library.
 - `reader/view` (experimental) answers those four questions from an opened dataset, an inventory (`view.Open`):
   pages with opaque tokens and optional child totals, lookups, walks and summaries, every answer's
   evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when

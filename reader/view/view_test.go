@@ -230,9 +230,6 @@ func TestFailureClasses(t *testing.T) {
 		if !errors.Is(err, c.want) || c.ctx.Err() == nil && !errors.Is(err, c.err) {
 			t.Errorf("failed(%v) = %v, want %v", c.err, err, c.want)
 		}
-		if c.want == listing.ErrUnavailable != listing.Retryable(err) {
-			t.Errorf("failed(%v) = %v, retryable %t", c.err, err, listing.Retryable(err))
-		}
 	}
 }
 

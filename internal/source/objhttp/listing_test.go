@@ -27,7 +27,7 @@ func TestListingClass(t *testing.T) {
 		{"auth", failure(ClassAuth, 403, false), listing.ErrAuth},
 		{"credentials", &CredentialError{Source: "env", Err: cause}, listing.ErrAuth},
 		{"access_denied", failure(ClassAccessDenied, 403, false), listing.ErrAuth},
-		{"throttle", &ExhaustedError{Attempts: 9, Err: failure(ClassThrottle, 503, true)}, listing.ErrThrottled},
+		{"throttle", &ExhaustedError{Attempts: 9, Err: failure(ClassThrottle, 503, true)}, listing.ErrUnavailable},
 		{"timeout", &ExhaustedError{Attempts: 9, Err: failure(ClassTimeout, 0, true)}, listing.ErrUnavailable},
 		{"parse", &ExhaustedError{Attempts: 9, Err: failure(ClassParse, 200, true)}, listing.ErrUnavailable},
 		{"unsupported", failure(ClassUnsupported, 0, false), listing.ErrUnsupported},
@@ -44,9 +44,6 @@ func TestListingClass(t *testing.T) {
 		got := Classed(c.err)
 		if !errors.Is(got, c.want) || !errors.Is(got, c.err) {
 			t.Errorf("%s: %v, want %v around the failure", c.name, got, c.want)
-		}
-		if retry := c.want == listing.ErrThrottled || c.want == listing.ErrUnavailable; listing.Retryable(got) != retry {
-			t.Errorf("%s: Retryable = %v", c.name, !retry)
 		}
 	}
 }

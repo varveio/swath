@@ -173,8 +173,7 @@ func invalid(format string, args ...any) error {
 // refused access, or a store's answer of 401 or 403, ErrAuth; a feature or
 // limit the reader does not support ErrUnsupported; any other failure,
 // such as an I/O or network error past the storage's retries,
-// ErrUnavailable, which listing.Retryable reports. An error the view gave
-// a class keeps it.
+// ErrUnavailable. An error the view gave a class keeps it.
 func failed(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()

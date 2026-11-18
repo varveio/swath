@@ -203,10 +203,9 @@ or empty for a walk that did not finish and a lookup left unknown, whose evidenc
 
 A call that fails returns an error that `errors.Is` matches to one of the contract's classes, read from the failure
 as swath's command reads it for its outcome: `ErrAuth` for credentials that do not load or a refusal,
-`ErrNotFound` for a bucket that is not there or is in another region, `ErrThrottled` and `ErrUnavailable` once the
-client's retries are spent, `ErrInvalidPage`, `ErrInvalidToken`, `ErrInvalidRequest` and `ErrUnsupported`.
-`listing.Retryable` says whether asking again later can succeed. A call whose context ends returns the context's
-error. Error messages pass through swath's redaction and carry no credential.
+`ErrNotFound` for a bucket that is not there or is in another region, `ErrUnavailable` once the client's retries are
+spent (throttling included), `ErrInvalidPage`, `ErrInvalidToken`, `ErrInvalidRequest` and `ErrUnsupported`. A call
+whose context ends returns the context's error. Error messages pass through swath's redaction and carry no credential.
 
 To count or trace the requests a call sends, put an `objfile.Observer` on its context (`objfile.WithObserver`), as
 for dataset reads: every attempt, retries included, is reported to it, a page's and each of a walk's as a list

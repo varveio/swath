@@ -216,7 +216,7 @@ func TestUnorderedLevel(t *testing.T) {
 	s.Short = func(int) int { return 1 }
 	endpoint, _ := fake(t, s)
 	_, children, err := page(t, open(t, endpoint), "e/", 10)
-	if !errors.Is(err, listing.ErrUnsupported) || listing.Retryable(err) {
+	if !errors.Is(err, listing.ErrUnsupported) {
 		t.Fatalf("%q, %v; want ErrUnsupported", children, err)
 	}
 }
@@ -312,7 +312,7 @@ func TestFlatDirectoryMetadata(t *testing.T) {
 	}
 
 	src = open(t, serve(t, azblobtest.Handler(store(), account, container)))
-	if _, err := src.Page(context.Background(), listing.PageRequest{Limit: 10}); !errors.Is(err, listing.ErrUnsupported) || listing.Retryable(err) {
+	if _, err := src.Page(context.Background(), listing.PageRequest{Limit: 10}); !errors.Is(err, listing.ErrUnsupported) {
 		t.Errorf("an unknown namespace's page: %v, want ErrUnsupported", err)
 	}
 	r, err = src.Lookup(context.Background(), []byte("report"))
@@ -375,7 +375,7 @@ func TestInvalidPages(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, children, err := page(t, open(t, scripted(t, c.pages)), "a/", 10)
-			if !errors.Is(err, listing.ErrInvalidPage) || listing.Retryable(err) {
+			if !errors.Is(err, listing.ErrInvalidPage) {
 				t.Fatalf("%q, %v; want ErrInvalidPage", children, err)
 			}
 		})

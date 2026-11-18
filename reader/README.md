@@ -145,8 +145,7 @@ swath answers about a listed location, from a live source or from an opened inve
 of a prefix), Lookup (what is at exactly one key), Walk (every entry under a prefix) and Summarize (count, bytes,
 space on disk and newest change under each of several targets). It defines their requests and results, the
 common `Entry`, the `Evidence` every answer carries (its origin, acquisition interval, scope, unlocated gaps and
-whether the call completed), the `Unread` places a live walk could not read, and the error classes with
-`Retryable`.
+whether the call completed), the `Unread` places a live walk could not read, and the error classes.
 It holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
 any release.
 
@@ -176,5 +175,5 @@ key's state is known. The view checks every value it reads (a missing column, a 
 does not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
 A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
 is `ErrInvalidPage`, a missing object `ErrNotFound`, a refused access `ErrAuth`, and any other failure to read the
-dataset `ErrUnavailable`, which `listing.Retryable` reports.
+dataset `ErrUnavailable`.
 [view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.
