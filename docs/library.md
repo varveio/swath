@@ -163,8 +163,9 @@ Without `Kinds` a summary counts objects and regular files, never folders or lin
 A target is `Complete` when its key's state is known (the root's excepted) and its walk handed on no `Unread`;
 `Unread` counts what its walk could not read, and its totals then cover what was read. A summary lists no names: a
 program that wants them walks the target. A subtree whose lookup was left unknown is still walked; if that walk
-fails the target counts what it read and stays incomplete. Any other failure is the call's error, and so is its
-context ending.
+fails the target counts what it read and stays incomplete. A subtree whose walk is refused (`ErrAuth`) or reaches
+another device (`ErrOtherDevice`) counts one `Unread`, as a walk above it would. Any other failure is the call's
+error, and so is its context ending.
 
 ```go
 targets := []listing.Target{

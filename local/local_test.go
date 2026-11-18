@@ -762,6 +762,13 @@ func TestSummarize(t *testing.T) {
 		t.Errorf("d/: self %+v", s.Self)
 	}
 
+	if locked {
+		got, _, err := src.Summarize(context.Background(), []listing.Target{{Key: []byte("d/"), Subtree: true}, {Key: []byte("locked/"), Subtree: true}}, listing.SummaryOptions{})
+		if err != nil || !got[0].Complete || got[0].Entries != 2 || got[1].State != listing.LookupPresent || got[1].Complete || got[1].Unread != 1 {
+			t.Errorf("d/ and locked/: %+v, %v", got, err)
+		}
+	}
+
 	dirs, _, err := src.Summarize(context.Background(), targets[1:2], listing.SummaryOptions{Kinds: []listing.Kind{listing.KindDir}})
 	if err != nil || dirs[0].Entries != 2 { // d/ itself and d/e/
 		t.Errorf("d/, counting directories: %+v, %v", dirs, err)

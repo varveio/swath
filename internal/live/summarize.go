@@ -30,10 +30,12 @@ var errRoot = errors.New("swath: the root has no entry")
 // known. A subtree whose Lookup left it unknown is still walked, and when
 // that walk fails the target counts what it read, incomplete, rather than
 // failing the call; so is one shown absent whose walk finds no local
-// directory (ErrNotFound), which holds nothing. Any other walk's failure,
-// and a lookup's, is Summarize's error; when ctx ends, Summarize returns
-// its error. A counted entry without a size or a time, and a sum that
-// overflows, make that total nil.
+// directory (ErrNotFound), which holds nothing. A walk refused its
+// subtree (ErrAuth) or stopped at another device (ErrOtherDevice) counts
+// one Unread, as a walk above the target hands it on, and the call goes
+// on. Any other walk's failure, and a lookup's, is Summarize's error;
+// when ctx ends, Summarize returns its error. A counted entry without a
+// size or a time, and a sum that overflows, make that total nil.
 func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	counted, err := s.checkSummary(targets, opts)
 	if err != nil {
@@ -114,6 +116,8 @@ func (s *Source) target(ctx context.Context, t listing.Target, counted []bool) (
 		return listing.TargetSummary{}, ctx.Err()
 	case ts.State == listing.LookupUnknown && len(t.Key) > 0: // incomplete, and the Lookup's Reason says why
 	case ts.State == listing.LookupAbsent && errors.Is(err, listing.ErrNotFound): // nothing there
+	case errors.Is(err, listing.ErrAuth) || errors.Is(err, listing.ErrOtherDevice): // a place it could not read, as a walk above it hands on
+		res.Unread++
 	default:
 		return listing.TargetSummary{}, err
 	}
