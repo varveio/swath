@@ -17,17 +17,17 @@
 // methods answer the four questions, with the request, result, evidence
 // and error types of package listing.
 //
-// Every answer's Evidence has OriginLive and the call's own start and
-// finish: a live answer is read during the call, and is not a
-// point-in-time snapshot of a location that changes meanwhile. A call that
-// fails returns an error of one of package listing's classes, read from
-// the failure as the swath command reads it for its outcome, or ctx's own
-// error once ctx has ended. Error messages pass through swath's redaction
-// (objfile.RedactError) and carry no credential. Every request a call
-// sends, retries included, is reported to the objfile.Observer on ctx
-// (objfile.WithObserver): a page, and each of an object store walk's, as
-// an objfile.ListRequest, a lookup's (S3's HeadObject and HeadBucket, say)
-// as objfile.MetadataRequest; a local walk's directory reads are not
+// Every answer's Evidence has the call's own start and finish: a live
+// answer is read during the call, and is not a point-in-time snapshot of a
+// location that changes meanwhile. A call that fails returns an error of
+// one of package listing's classes, read from the failure as the swath
+// command reads it for its outcome, or ctx's own error once ctx has ended.
+// Error messages pass through swath's redaction (objfile.RedactError) and
+// carry no credential. Every request a call sends, retries included, is
+// reported to the objfile.Observer on ctx (objfile.WithObserver): a page,
+// and each of an object store walk's, as an objfile.ListRequest, a
+// lookup's (S3's HeadObject and HeadBucket, say) as
+// objfile.MetadataRequest; a local walk's directory reads are not
 // reported. Walk and Summarize set no limit: a caller stops them by
 // cancelling ctx.
 //

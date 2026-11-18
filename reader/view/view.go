@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -32,6 +31,8 @@ type Inventory struct {
 	rows rowShape
 	// base is every answer's Evidence, without its Stop.
 	base listing.Evidence
+	// digest is the SHA-256 of the manifest's bytes, which binds tokens.
+	digest [sha256.Size]byte
 	// provable: the evidence proves absence inside its scope (Unlocated
 	// is 0).
 	provable bool
@@ -89,12 +90,8 @@ func Open(d *reader.Dataset) (*Inventory, error) {
 		return nil, fmt.Errorf("%w: the manifest records no scope", listing.ErrUnsupported)
 	}
 
-	inv := &Inventory{sp: d.SeekParquet(), rows: shapeOf(spec.ID)}
-	sum := sha256.Sum256(m.Manifest.Manifest)
+	inv := &Inventory{sp: d.SeekParquet(), rows: shapeOf(spec.ID), digest: sha256.Sum256(m.Manifest.Manifest)}
 	inv.base = listing.Evidence{
-		Origin:    listing.OriginInventory,
-		Manifest:  "sha256:" + hex.EncodeToString(sum[:]),
-		Published: m.PublishedAt,
 		Scope:     scope,
 		Unlocated: unlocated(m.Coverage),
 	}
@@ -140,7 +137,7 @@ func unlocated(c *reader.Coverage) *int64 {
 // with stop.
 func (inv *Inventory) evidence(stop listing.StopReason) listing.Evidence {
 	e := inv.base
-	e.Started, e.Finished, e.Published = clone(e.Started), clone(e.Finished), clone(e.Published)
+	e.Started, e.Finished = clone(e.Started), clone(e.Finished)
 	e.Scope = bytes.Clone(e.Scope)
 	e.Unlocated = clone(e.Unlocated)
 	e.Stop = stop

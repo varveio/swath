@@ -5,11 +5,8 @@ package view
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,17 +23,11 @@ import (
 var objectSchemas = []reader.SchemaID{reader.S3ObjectsV1, reader.GCSObjectsV1, reader.AzureObjectsV1}
 
 // TestEvidenceFromTheManifest: every answer carries the manifest's
-// evidence and never widens it: its digest, interval, publication, scope
+// evidence and never widens it: its interval, scope
 // and, only for a complete, unfiltered listing with nothing excluded, its
 // count of unreadable entries.
 func TestEvidenceFromTheManifest(t *testing.T) {
-	dir := write(t, fixture{id: reader.S3ObjectsV1, rows: objects()})
-	inv := open(t, dir)
-	raw, err := os.ReadFile(filepath.Join(dir, seekparquet.ManifestName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
+	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
 	e := inv.evidence(listing.StopCompleted)
 	at := func(s string) time.Time {
 		v, err := time.Parse(time.RFC3339, s)
@@ -45,9 +36,8 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 		}
 		return v
 	}
-	if e.Origin != listing.OriginInventory || e.Manifest != "sha256:"+hex.EncodeToString(sum[:]) || e.Scope != nil ||
-		!e.Started.Equal(at("2026-11-12T09:00:00Z")) || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) ||
-		!e.Published.Equal(at("2026-11-12T09:00:02Z")) || e.Unlocated == nil || *e.Unlocated != 0 || e.Stop != listing.StopCompleted {
+	if e.Scope != nil || !e.Started.Equal(at("2026-11-12T09:00:00Z")) || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) ||
+		e.Unlocated == nil || *e.Unlocated != 0 || e.Stop != listing.StopCompleted {
 		t.Fatalf("evidence %+v", e)
 	}
 	*e.Unlocated, e.Started = 9, nil

@@ -131,7 +131,7 @@ func TestPage(t *testing.T) {
 	if self.Kind != listing.KindDir || *self.Device != *f.Device || self.Inode == nil || self.LastModified == nil {
 		t.Errorf("self of a/: %+v", self)
 	}
-	if page.Evidence.Origin != listing.OriginLive || page.Evidence.Stop != listing.StopCompleted {
+	if page.Evidence.Stop != listing.StopCompleted {
 		t.Errorf("a/: evidence %+v", page.Evidence)
 	}
 }

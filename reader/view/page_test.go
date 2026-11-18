@@ -53,7 +53,7 @@ func level(t *testing.T, inv *Inventory, prefix string, limit int, totals *listi
 		if err != nil {
 			t.Fatalf("page %d of %q by %d: %v", n, prefix, limit, err)
 		}
-		if p.Evidence.Stop != listing.StopCompleted || p.Evidence.Origin != listing.OriginInventory {
+		if p.Evidence.Stop != listing.StopCompleted {
 			t.Fatalf("page %d of %q: evidence %+v", n, prefix, p.Evidence)
 		}
 		if len(p.Entries) > limit || p.Next != "" && len(p.Entries) != limit {

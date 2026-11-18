@@ -121,7 +121,7 @@ func TestWalkEachEntryOnce(t *testing.T) {
 			t.Fatalf("%q at %d: %d keys, want %d", c.prefix, c.workers, len(w.keys), len(want))
 		}
 		ev := sum.Evidence
-		if sum.Entries != int64(len(w.keys)) || w.unread != 0 || ev.Stop != listing.StopCompleted || ev.Origin != listing.OriginLive ||
+		if sum.Entries != int64(len(w.keys)) || w.unread != 0 || ev.Stop != listing.StopCompleted ||
 			ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Started == nil || ev.Finished == nil {
 			t.Errorf("%q at %d: %+v, unread %v, evidence %+v", c.prefix, c.workers, sum, w.unread, ev)
 		}
@@ -287,7 +287,7 @@ func TestSummarize(t *testing.T) {
 	states := []listing.LookupState{listing.LookupPresent, listing.LookupAbsent, listing.LookupAbsent, listing.LookupAbsent,
 		listing.LookupPresent, listing.LookupPresent, listing.LookupAbsent, listing.LookupAbsent}
 	out, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
-	if err != nil || ev.Stop != listing.StopCompleted || ev.Origin != listing.OriginLive || len(out) != len(targets) {
+	if err != nil || ev.Stop != listing.StopCompleted || len(out) != len(targets) {
 		t.Fatalf("%v, %+v, %d answers", err, ev, len(out))
 	}
 	for i, ts := range out {

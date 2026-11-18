@@ -445,7 +445,7 @@ func TestLookup(t *testing.T) {
 		t.Fatalf("present: %+v %+v", found, found.Entry)
 	}
 	ev := found.Evidence
-	if ev.Origin != listing.OriginLive || ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
+	if ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
 		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Stop != listing.StopCompleted {
 		t.Errorf("evidence %+v", ev)
 	}

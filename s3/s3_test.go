@@ -317,7 +317,7 @@ func TestLookup(t *testing.T) {
 		t.Fatalf("present: %+v %+v", found, found.Entry)
 	}
 	ev := found.Evidence
-	if ev.Origin != listing.OriginLive || ev.Manifest != "" || ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
+	if ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
 		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Stop != listing.StopCompleted {
 		t.Errorf("evidence %+v", ev)
 	}
@@ -387,7 +387,7 @@ func TestLookupUnknown(t *testing.T) {
 			if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrAuth) || r.Entry != nil {
 				t.Errorf("%+v, %v; want unknown, ErrAuth", r, err)
 			}
-			if r.Evidence.Origin != listing.OriginLive {
+			if r.Evidence.Stop == listing.StopCompleted {
 				t.Errorf("evidence %+v", r.Evidence)
 			}
 			if got := sent.list(); !slices.Equal(got, c.want) {

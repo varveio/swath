@@ -43,8 +43,7 @@ Notable changes per release. The human summary of the current release is in the
   evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
   nothing in it was unreadable, and never at or under a local entry of unknown kind
   ([reader guide](reader/README.md#the-inventory-view)).
-- `reader/listing`: `Evidence.Manifest` names its algorithm (`sha256:` and the hex digest of the manifest's
-  bytes), and `Evidence.Started` and `Finished` are each nil when the source does not know them.
+- `reader/listing`: `Evidence.Started` and `Finished` are each nil when the source does not know them.
 - The root package `github.com/varveio/swath` (experimental) answers `Page` and `Lookup` live: `s3.Open` opens a
   bucket of S3 or an S3-compatible store as a `Source`, whose pages list one level by `/` with opaque tokens and
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a

@@ -62,7 +62,7 @@ func (s *Source) Close() error {
 // finished, with stop. A completed answer has every gap located
 // (Unlocated 0); any other has an unknown count (nil).
 func evidence(started, finished time.Time, stop listing.StopReason) listing.Evidence {
-	e := listing.Evidence{Origin: listing.OriginLive, Started: &started, Finished: &finished, Stop: stop}
+	e := listing.Evidence{Started: &started, Finished: &finished, Stop: stop}
 	if stop == listing.StopCompleted {
 		var unlocated int64
 		e.Unlocated = &unlocated
