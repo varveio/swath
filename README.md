@@ -66,6 +66,8 @@ in 238 seconds on one 64-vCPU VM
 swath lists ranges of a bucket's keys in parallel, splitting ranges further when workers become idle.
 The [field guide](https://swath.varve.io/field-guide/) shows how on a recorded run.
 
+The documentation is at [swath.varve.io](https://swath.varve.io/):
+
 - [Start here](https://swath.varve.io/docs/start-here.html): pick a job, and when swath fits.
 - [Run large listings](https://swath.varve.io/docs/running.html): a bucket of your own, start to finish,
   with stopping and resuming.
