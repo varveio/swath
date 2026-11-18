@@ -6,10 +6,11 @@ scheme and the per-release steps. The heavy lifting is automated by
 human side of it.
 
 A release ships the Go implementation (the module at the repository root): the `swath` lister and the `swath-replay`
-server. It also versions the nested Go modules `github.com/varveio/swath/reader` and
-`github.com/varveio/swath/objfile` at the same commit and version, so a program can require them
-by version. The Java implementation's last release was v0.3.2; it is no longer on `main` and is
-preserved at the tag `java-final`.
+server. The nested Go modules `github.com/varveio/swath/reader` and
+`github.com/varveio/swath/objfile` have versions of their own, so a program can require them by
+version, and the root module requires those versions, so a program can require it too. The Java
+implementation's last release was v0.3.2; it is no longer on `main` and is preserved at the tag
+`java-final`.
 
 ## Versioning
 
@@ -23,12 +24,18 @@ preserved at the tag `java-final`.
   Parquet footer's `created_by`, the archive names, the image tags and the image labels
   all carry it. There is no version file to bump. A build from a source checkout reports
   `devel`.
-- **Every module is tagged with it.** Go requires a nested module's version tag to carry its
-  directory, so release `0.4.0` is three tags at one commit: `v0.4.0` (the root module, and the
-  tag that triggers the workflow), `reader/v0.4.0` and `objfile/v0.4.0`. `just release` creates
-  all three, one for each `go.mod` below the root, and the workflow's `source` job fails unless
-  every one of them is on `origin` and names the tagged commit. Each module is at version 0: no
-  API promise yet.
+- **The nested modules keep their own versions.** Go requires a nested module's version tag to
+  carry its directory: `reader/v0.5.0`, `objfile/v0.5.0`. The root's `go.mod` requires each nested
+  module by version and carries no `replace`, and the release checks that each required tag holds
+  that module's code at the release commit. So a release where `reader/` and `objfile/` did not
+  change is one tag, `v0.5.0`, and its `go.mod` keeps requiring the nested versions it already
+  names. A release where one changed tags that module first, at this release's version, and points
+  `go.mod` at it through a pull request ([Cutting a release](#cutting-a-release)). Each module is at
+  version 0: no API promise yet.
+- **Local builds use the local copies.** `go.work` at the repository root joins the three
+  modules, so a build, test or CI job in a checkout compiles `reader/` and `objfile/` as they are,
+  whatever version `go.mod` requires. The release builds without it (`GOWORK=off`), as an outside
+  project does.
 - **The binaries are checked against it.** The build job fails unless each linux/amd64
   binary prints exactly `swath X.Y.Z (<commit>)` or `swath-replay X.Y.Z (<commit>)`,
   and the publish job checks the same of each pushed image digest.
@@ -75,8 +82,11 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 ## What gates a release
 
-The `source` job verifies that every module's tag names the event's commit and that the commit is
-an ancestor of main, then independently requires a successful
+The `source` job verifies that the root tag names the event's commit and that the commit is an
+ancestor of main, and that the commit's `go.mod` is what an outside project resolves: it carries no
+`replace`, and each nested tag it requires is an ancestor of the commit with the same directory
+tree, so the nested modules a program downloads are the code main CI validated through the
+workspace. It then independently requires a successful
 **`go-full-gate`** from that exact commit's `ci.yml` main push run. This gate certifies all Go modules,
 race shards, non-race checks, platforms, cross-builds, images and replay fixtures. Being on main or
 having a green PR is insufficient. The verifier selects the newest run and its current attempt;
@@ -94,9 +104,11 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
 
 - `go-tests`: the race tests of the main module in the shards of
   `scripts/ci/go-race-shards.sh`, one leg per shard and every leg on linux/amd64, and one more
-  leg, `vet-reader`: `go vet` of the main module and of the reader module it compiles in, the
-  shard table's check that every test of the main module runs in exactly one shard, and the
-  reader module's race tests. A failed or cancelled leg stops the release before `publish`;
+  leg, `vet-reader`: the main module built as an outside project builds it (`go build ./...` and
+  `go mod tidy -diff`, with the workspace off like every job of the workflow), `go vet` of the
+  main module and of the reader module it compiles in, the shard table's check that every test of
+  the main module runs in exactly one shard, and the reader module's race tests. A failed or
+  cancelled leg stops the release before `publish`;
 - `build`: the static builds for all five targets and their `--version` stamp, and the
   license gate: `notices.sh` fails on a linked module whose license go-licenses does not
   recognize or that is not on its allow-list (SPDX identifiers), or when
@@ -148,11 +160,10 @@ substitute its version.
    `PUBLIC_RELEASE_ENABLED` variable is `true`, `SWATH_SMOKE_BUCKET` is unset (the image
    smoke's default public prefix) or names a prefix it can list anonymously, and the
    `public-release` environment has its reviewers.
-3. On a clean checkout of `main` at that commit, tag and push:
-   ```sh
-   just release 0.4.0-rc.1
-   git push --atomic origin v0.4.0-rc.1 objfile/v0.4.0-rc.1 reader/v0.4.0-rc.1
-   ```
+3. On a clean checkout of `main` at that commit, release as steps 3 and 4 of
+   [Cutting a release](#cutting-a-release) do, with the version `0.4.0-rc.1`. A nested module that
+   changed is tagged `reader/v0.4.0-rc.1` (or `objfile/`), and the final release keeps requiring
+   that tag while the module does not change again: the same code under a pre-release version.
 4. Approve the `public-release` environment when the `Release` run waits on it.
 5. Check that the SBOM lists the Go modules, not Java artifacts: the names include `stdlib`
    and module paths such as `github.com/aws/aws-sdk-go-v2/service/s3`, and no Maven
@@ -180,7 +191,7 @@ do not repair the published candidate by hand.
    [`docs/ops/dev/RELEASE_NOTES.md`](docs/ops/dev/RELEASE_NOTES.md): replace the version
    in its title, fill all three sections, and commit it through a pull request. Lead with
    what users will notice, then the evidence for the release and its honest limits. The
-   release recipe and workflow reject an untouched or incomplete template.
+   release recipes and workflow reject an untouched or incomplete template.
 2. Make sure `main` is green and you are on a clean checkout of `main` at the commit you
    want to release, with that commit already on `origin/main`. Check by hand that the
    `go-race-nightly` job (not just its run: a dispatch with another `jobs` value skips it)
@@ -192,23 +203,46 @@ do not repair the published candidate by hand.
    gh run view RUN --json jobs --jq '.jobs[] | select(.name == "go-race-nightly") | .conclusion'
    git diff --stat SHA HEAD -- '*.go' '*go.mod' '*go.sum'   # empty: the same Go sources
    ```
-3. Tag it:
+3. **Only if `reader/` or `objfile/` changed since the tag `go.mod` requires:** release that module
+   first. You need not work it out: `just release` (step 4) refuses and names the changed
+   directory. Otherwise go to step 4.
+   1. Tag each changed nested module at `HEAD`, and push the tags it prints in one push:
+      ```sh
+      just release-modules 0.5.0
+      git push --atomic origin reader/v0.5.0
+      ```
+      The recipe tags only the modules that changed (`reader/v0.5.0`, `objfile/v0.5.0`, or both).
+      It makes no commit and does **not** push. A nested tag starts no workflow, but once pushed
+      it is public: the Go module proxy serves it and keeps it, so tag only a commit you mean to
+      release.
+   2. Point `go.mod` at them through a pull request, and merge it:
+      ```sh
+      just release-prep 0.5.0
+      git push -u origin release-prep-0.5.0
+      gh pr create --fill
+      ```
+      On a new branch `release-prep-0.5.0` the recipe requires the new tags in `go.mod` (`go get`,
+      then `go mod tidy`, with the workspace off), builds the root as an outside project would,
+      commits `go.mod` and `go.sum` (signed off) and checks the commit. The merge commit differs
+      from step 2's commit in `go.mod` and `go.sum` alone, so step 2's `go-race-nightly` check
+      still holds. Nothing may change the tagged module between its tag and that merge commit:
+      the release refuses it, and as tags are immutable the way out is the next version.
+   3. Wait for `ci.yml` on `main` to be green at the merge commit, and check it out:
+      `git switch main && git pull --ff-only`.
+4. Tag the root module and push its tag, which starts the release pipeline:
    ```sh
-   just release 0.4.0
+   just release 0.5.0
+   git push origin v0.5.0
    ```
    The recipe checks the version's form, the branch, a clean tree, that `HEAD` is on
-   `origin/main`, that each tag is new locally and on `origin`, and the release notes, then
-   creates the annotated tags `v0.4.0`, `objfile/v0.4.0` and `reader/v0.4.0`. It makes no
-   commit and does **not** push.
-4. Push the tags in one atomic push, as the recipe prints it; `v0.4.0` triggers the release
-   pipeline:
-   ```sh
-   git push --atomic origin v0.4.0 objfile/v0.4.0 reader/v0.4.0
-   ```
-   If a module tag is missing, the `source` job fails and names the tags it needs; push the
-   missing one and rerun the job, which reads the tags from `origin`, not from the push event.
-5. The `Release` workflow first proves that every module's tag names the tagged commit and
-   that it is an ancestor of `origin/main`, requires its successful full Go qualification,
+   `origin/main` and that `v0.5.0` is new locally and on `origin`; then that `go.mod` carries no
+   `replace` and that each nested tag it requires is on `origin`, is an ancestor of `HEAD` and holds
+   the same directory (`scripts/ci/verify-release-source.sh modules`); then the outside-project
+   build and the release notes. It creates the annotated tag `v0.5.0`, makes no commit and does
+   **not** push.
+5. The `Release` workflow first proves that the root tag names the tagged commit, that it is an
+   ancestor of `origin/main`, and that the nested tags its `go.mod` requires hold the same trees,
+   requires its successful full Go qualification,
    and checks the release notes, then runs the Go gate and builds the assets once on that
    exact tag SHA, and then waits on the protected `public-release` environment. **Approve it.**
    The publish job then pushes both images by digest, smokes those digests, tags them,
@@ -217,13 +251,28 @@ do not repair the published candidate by hand.
    it. If verification fails the release stays a draft — fix and re-tag rather than
    publishing by hand.
 
+### When a step fails half way
+
+The recipes push nothing and commit only on the prep branch, so a failure before a push is undone
+locally. A pushed tag is not: the Go module proxy keeps a nested tag, and a root tag starts the
+release; fix forward with the next version instead of moving or deleting it.
+
+| What failed | Run, then fix the cause and run the step again |
+|---|---|
+| The push of the tags `just release-modules` or `just release` made, or you will not push them | `git tag -d TAG...`, the tags the recipe printed (or, for a failed push, push again) |
+| `just release-prep` (it is left on its branch, and the next run refuses: "must be run from main") | `git checkout -- go.mod go.sum && git switch main && git branch -D release-prep-0.5.0` |
+| The prep pull request must be redone | the same, then `git push origin --delete release-prep-0.5.0` and close the pull request |
+| The nested tags are pushed but the prep was never merged | nothing to delete: run `just release-prep 0.5.0` again, or release the next version from a fixed `main` |
+
 ## Notes
 
 - GitHub appends generated merged-PR notes (`--generate-notes`) after the human summary;
   write PR titles with that in mind, but do not use them as a substitute for the summary's
   user-facing changes, evidence, and limits.
-- Choosing the version is manual by design; `just release` wraps the guards so the tag
-  names a commit the workflow will accept.
+- Choosing the version is manual by design; `just release-modules`, `just release-prep` and
+  `just release` wrap the guards so that the tags name commits the workflow will accept. None of
+  them commits to `main`: when a nested module changed, the one commit a release needs reaches
+  `main` through its pull request.
 - Artifact retention follows the [registry and artifacts](docs/ops/dev/CI.md#registry-and-artifacts)
   policy: `release-assets`, a hand-off between jobs, 1 day; the `go-race-release-SHARD` streams
   30 days.

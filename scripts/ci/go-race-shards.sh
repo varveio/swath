@@ -158,7 +158,8 @@ leg_cache() {
 # have no cgo, which -race needs).
 load_packages() {
   local module
-  module=$(go list -m)
+  # The root module alone: in the workspace (go.work) `go list -m` lists every module of it.
+  module=$(GOWORK=off go list -m)
   ALL=$(go list ${1:+"$1"} ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u)
   if [ -z "$ALL" ]; then echo "go list $1 ./... lists no package" >&2; return 1; fi
 }

@@ -20,8 +20,8 @@ require (
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/spf13/pflag v1.1.0
 	github.com/varveio/seekparquet/go v0.2.0
-	github.com/varveio/swath/objfile v0.0.0-00010101000000-000000000000
-	github.com/varveio/swath/reader v0.0.0-00010101000000-000000000000
+	github.com/varveio/swath/objfile v0.4.0
+	github.com/varveio/swath/reader v0.4.0
 	golang.org/x/oauth2 v0.38.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
@@ -105,9 +105,3 @@ require (
 	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
-
-// The reader and objfile modules are developed in this repository, in
-// ./reader and ./objfile.
-replace github.com/varveio/swath/reader => ./reader
-
-replace github.com/varveio/swath/objfile => ./objfile

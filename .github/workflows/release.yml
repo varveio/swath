@@ -11,6 +11,14 @@ concurrency:
   group: public-release-${{ github.repository }}
   cancel-in-progress: false
 
+# The release builds and tests the root module as an outside project does: without the go.work
+# workspace, against the reader and objfile versions its go.mod requires. The source job proves
+# that those tags hold the tagged commit's reader/ and objfile/ trees, so the sources are the ones
+# main CI validated through the workspace, and the binaries' embedded module list (the SBOM, the
+# OSV scan) names the published versions.
+env:
+  GOWORK: "off"
+
 jobs:
   source:
     runs-on: ubuntu-latest
@@ -36,27 +44,27 @@ jobs:
           ./scripts/ci/verify-release-notes.sh --self-test
 
       # Ancestor, rather than equality with origin/main: `just release` tags a commit already
-      # on main, and main may have moved on by the time the tag is pushed. A release tags every
-      # module: vX.Y.Z for this one and DIR/vX.Y.Z for each nested module (reader, objfile),
-      # all created by `just release` and pushed together. They are fetched from origin here,
-      # not taken from the event, so a rerun after pushing a missing tag sees it.
-      - name: Verify every module's tag SHA and origin/main ancestry
+      # on main, and main may have moved on by the time the tag is pushed. The tag commit's go.mod
+      # must carry no replace, and each nested-module tag it requires (DIR/vX.Y.Z, pushed before
+      # it by `just release-modules` when that module changed) must be its ancestor with the same
+      # DIR/ tree (verify-release-source.sh). The tags are fetched from origin here, not taken
+      # from the event, so a rerun after pushing a missing tag sees it.
+      - name: Verify the module tags, go.mod's requirements and origin/main ancestry
         run: |
           set -euo pipefail
           tags=$(./scripts/ci/verify-release-source.sh tags "$GITHUB_REF_NAME")
           tags=${tags//$'\n'/ }
           refspecs=(+refs/heads/main:refs/remotes/origin/main)
-          refs=()
           for tag in $tags; do
             refspecs+=("+refs/tags/${tag}:refs/remotes/release/${tag}")
-            refs+=("refs/remotes/release/${tag}")
           done
           git fetch --no-tags origin "${refspecs[@]}" || {
-            echo "::error::a release needs all of its tags on origin: $tags (just release creates them and prints the push)"
+            echo "::error::a release needs all of its tags on origin: $tags (RELEASING.md, Cutting a release)"
             exit 1
           }
-          ./scripts/ci/verify-release-source.sh "$GITHUB_SHA" refs/remotes/origin/main "${refs[@]}" || {
-            echo "::error::every one of $tags must name the tagged commit $GITHUB_SHA"
+          ./scripts/ci/verify-release-source.sh "$GITHUB_SHA" refs/remotes/origin/main \
+            refs/remotes/release/ "$GITHUB_REF_NAME" || {
+            echo "::error::$GITHUB_REF_NAME must name $GITHUB_SHA, whose go.mod requires the nested modules at their tags among $tags"
             exit 1
           }
 
@@ -87,9 +95,10 @@ jobs:
 
   # The Go gate on the tag SHA, from a cold cache: the race tests of the main module in the shards
   # of scripts/ci/go-race-shards.sh, every shard on amd64 (ci.yml races the heavy ones on arm64),
-  # and one more leg, vet-reader: go vet of the main and reader modules, the shard table's --check
-  # (every package's tests in exactly one shard), and the race tests of the reader module the main
-  # one compiles in (go.mod replaces it with ./reader). The source job separately requires main
+  # and one more leg, vet-reader: the outside-project check (go build and a strict go mod tidy
+  # -diff of the main module without the workspace), go vet of the main and reader modules, the
+  # shard table's --check (every package's tests in exactly one shard), and the race tests of the
+  # reader module the main one compiles in. The source job separately requires main
   # CI's full Go gate at this SHA; this reruns the suite that guards what ships. No leg runs all
   # of internal/listing's or cmd/swath's tests in one process; nightly's go-race-nightly does.
   # A failed or cancelled leg fails the job, so publish, which needs it, does not run. go test's
@@ -120,6 +129,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      # The one check of the root module as an outside project builds it (GOWORK is off for the
+      # whole workflow): every package compiles against the published nested modules, and go.mod
+      # and go.sum are tidy for them, which ci.yml's `go mod tidy -e -diff` cannot require while
+      # the root imports nested-module packages that are not released yet.
+      - name: Build as an outside project (go build, go mod tidy -diff)
+        if: matrix.leg == 'vet-reader'
+        run: |
+          go build ./...
+          go mod tidy -diff
 
       - name: go vet
         if: matrix.leg == 'vet-reader'
