@@ -249,8 +249,9 @@ func TestWalkRefuses(t *testing.T) {
 	}
 }
 
-// TestWrongRegion: a bucket in another region is ErrNotFound, its message
-// naming the region and not the command's flag.
+// TestWrongRegion: a bucket in another region exists, so a page and a walk
+// of it are ErrInvalidRequest, not ErrNotFound, and a lookup is unknown for
+// that reason; the message names the region and not the command's flag.
 func TestWrongRegion(t *testing.T) {
 	s3test.NoCredentials(t)
 	endpoint := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -262,8 +263,13 @@ func TestWrongRegion(t *testing.T) {
 	src := open(t, endpoint, "bkt")
 	_, perr := src.Page(context.Background(), listing.PageRequest{Limit: 10})
 	_, werr := src.Walk(context.Background(), listing.WalkRequest{}, func(listing.WalkBatch) error { return nil })
-	for _, err := range []error{perr, werr} {
-		if !errors.Is(err, listing.ErrNotFound) || !strings.Contains(err.Error(), "eu-west-1") || strings.Contains(err.Error(), "--s3-region") {
+	r, lerr := src.Lookup(context.Background(), []byte("k"))
+	if lerr != nil || r.State != listing.LookupUnknown {
+		t.Fatalf("lookup: %v, %v", r.State, lerr)
+	}
+
+	for _, err := range []error{perr, werr, r.Reason} {
+		if !errors.Is(err, listing.ErrInvalidRequest) || errors.Is(err, listing.ErrNotFound) || !strings.Contains(err.Error(), "eu-west-1") || strings.Contains(err.Error(), "--s3-region") {
 			t.Errorf("%v", err)
 		}
 	}

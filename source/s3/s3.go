@@ -29,7 +29,7 @@ type Options struct {
 	// Region is the bucket's region, which requests are signed for. Empty
 	// takes AWS_REGION, AWS_DEFAULT_REGION or the profile's, else
 	// us-east-1. A bucket in another region fails a call with
-	// listing.ErrNotFound, its message naming the bucket's region.
+	// listing.ErrInvalidRequest, its message naming the bucket's region.
 	Region string
 	// Endpoint is an S3-compatible store's URL, http(s)://host[:port][/path],
 	// without user information, a query or a fragment. Empty is AWS's own.

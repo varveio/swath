@@ -21,8 +21,9 @@ import (
 //   - a broken listing contract (source.ErrProtocol, ErrInvalidPage) is
 //     ErrInvalidPage;
 //   - auth and access_denied are ErrAuth;
-//   - not_found and region_redirect are ErrNotFound: the bucket is not
-//     there, or not where the source looks for it;
+//   - not_found is ErrNotFound: the bucket is not there;
+//   - region_redirect is ErrInvalidRequest: the bucket is there, and the
+//     source is configured with another region than its own;
 //   - an answer outside 2xx that is not transient and has no class of its
 //     own, such as a 400, is ErrUnsupported: asking again changes nothing;
 //   - anything else, a failure that outlasted the retries (throttle,
@@ -44,8 +45,10 @@ func ListingClass(err error) error {
 		return listing.ErrAuth
 	case ClassThrottle:
 		return listing.ErrUnavailable
-	case ClassNotFound, ClassRegionRedirect:
+	case ClassNotFound:
 		return listing.ErrNotFound
+	case ClassRegionRedirect:
+		return listing.ErrInvalidRequest
 	case ClassUnsupported:
 		return listing.ErrUnsupported
 	}
