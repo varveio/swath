@@ -8,7 +8,6 @@ package local_test
 import (
 	"context"
 	"errors"
-	"syscall"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
