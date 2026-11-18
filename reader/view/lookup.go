@@ -17,8 +17,8 @@ import (
 // Lookup says what is at exactly key: present when the inventory has a row
 // for it; absent only where the package documentation says the inventory
 // proves it; otherwise unknown. A key at or under a local entry of unknown
-// kind is unknown with a Reason that says so, and a read that fails leaves
-// it unknown with the failure as its Reason.
+// kind is unknown with a Reason that says so. A read that fails is
+// Lookup's error.
 func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := inv.checkKey(key); err != nil {
 		return listing.LookupResult{}, err
@@ -31,11 +31,7 @@ func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupRes
 
 	found, err := inv.entries(ctx, inv.keys(key))
 	if err != nil {
-		if ctx.Err() != nil {
-			return listing.LookupResult{}, ctx.Err()
-		}
-		result.Reason = failed(ctx, err)
-		return result, nil
+		return listing.LookupResult{}, failed(ctx, err)
 	}
 	result.State, result.Entry, result.Reason = inv.resolve(key, found)
 	return result, nil

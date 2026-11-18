@@ -139,7 +139,7 @@ func TestEmptyInventory(t *testing.T) {
 }
 
 // TestRowFaults: a value swath never writes is refused when the view reads
-// it, never handed on or counted: by Walk and Page, and by Summarize where
+// it, never handed on or counted: by Walk, Page and Lookup, and by Summarize where
 // it sums the value (a key's form is not one), as listing.ErrInvalidPage
 // with the reader's error beside it. A common prefix holding a NUL is
 // refused as its rows' keys are.
@@ -167,7 +167,13 @@ func TestRowFaults(t *testing.T) {
 			if _, err := inv.Page(ctx, listing.PageRequest{Limit: 5}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
 				t.Errorf("Page = %v, want %v", err, c.want)
 			}
-			if c.want == listing.ErrInvalidPage || strings.Contains(c.name, "slash") {
+			if c.want == listing.ErrInvalidPage {
+				return
+			}
+			if _, err := inv.Lookup(ctx, []byte("a")); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
+				t.Errorf("Lookup = %v, want %v", err, c.want)
+			}
+			if strings.Contains(c.name, "slash") {
 				return
 			}
 			if _, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
