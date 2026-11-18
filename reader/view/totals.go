@@ -177,7 +177,7 @@ func (inv *Inventory) filter(sel selection) *seekparquet.BatchFilter {
 		return &seekparquet.BatchFilter{
 			Columns: []string{"size", "last_modified"},
 			Apply: func(b *seekparquet.ValueBatch, _ []bool) error {
-				if err := present(b.Column(1), "last_modified", seekparquet.KindInt64); err != nil {
+				if err := times(b.Column(1), "last_modified"); err != nil {
 					return err
 				}
 				return sizes(b.Column(0), "size")
@@ -191,7 +191,7 @@ func (inv *Inventory) filter(sel selection) *seekparquet.BatchFilter {
 			if err := present(kind, "kind", seekparquet.KindByteArray); err != nil {
 				return err
 			}
-			if err := present(b.Column(3), "last_modified", seekparquet.KindInt64); err != nil {
+			if err := times(b.Column(3), "last_modified"); err != nil {
 				return err
 			}
 			for i := range b.Len() {
@@ -229,6 +229,19 @@ func sizes(c seekparquet.ColumnView, name string) error {
 	for i := range c.Len() {
 		if !c.IsNull(i) && c.Int64(i) < 0 {
 			return &reader.SemanticError{Kind: reader.KindRow, Column: name, Err: errors.New("negative")}
+		}
+	}
+	return nil
+}
+
+// times refuses a timestamp outside the years 1 to 9999.
+func times(c seekparquet.ColumnView, name string) error {
+	if err := present(c, name, seekparquet.KindInt64); err != nil {
+		return err
+	}
+	for i := range c.Len() {
+		if !c.IsNull(i) && !dated(c.Int64(i)) {
+			return &reader.SemanticError{Kind: reader.KindRow, Column: name, Err: errors.New(undated)}
 		}
 	}
 	return nil

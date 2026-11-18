@@ -62,6 +62,8 @@ Notable changes per release. The human summary of the current release is in the
   objects, bytes and newest time, whether it is complete, and how many places under it were not read
   ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
+- `reader/view` refuses a dataset holding a time outside the years 1 to 9999, which RFC 3339 cannot carry, as
+  `ErrInvalidPage` in every answer that reads it: a page, a lookup, a walk or a summary.
 - `WalkSummary.Complete` says a walk read everything under its prefix: it finished, handed on no `Unread` and,
   over an inventory, the inventory's coverage is complete.
 - `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
