@@ -5,18 +5,6 @@ package listing
 
 import "time"
 
-// Origin says which backend answered. Its values are stable.
-type Origin string
-
-const (
-	// OriginLive is an answer from a live source, read from the store or
-	// the filesystem during the call.
-	OriginLive Origin = "live"
-	// OriginInventory is an answer from an opened inventory: the rows of
-	// one immutable dataset.
-	OriginInventory Origin = "inventory"
-)
-
 // StopReason says whether a call completed or which bound of its request
 // stopped it: only a Page's MaxDuration stops a call without an error, and
 // the call returns what it read. Any value other than StopCompleted, the
@@ -30,16 +18,10 @@ const (
 	StopTimeBudget StopReason = "time_budget"
 )
 
-// Evidence says where an answer came from and what it can prove. The zero
-// Evidence proves nothing: no origin, an unknown count of unread entries,
-// and no completed call.
+// Evidence says when an answer's entries were acquired and what it can
+// prove. The zero Evidence proves nothing: an unknown count of unread
+// entries, and no completed call.
 type Evidence struct {
-	// Origin is the backend that answered.
-	Origin Origin
-	// Manifest is the inventory's manifest digest, its algorithm first:
-	// "sha256:" and the lowercase hex of the SHA-256 of the manifest's
-	// bytes. Empty on a live answer.
-	Manifest string
 	// Started and Finished bound the interval over which the entries were
 	// acquired: the call's own on a live answer, the listing's, across its
 	// resumes, on an inventory's. A listing is not a point-in-time snapshot,
@@ -50,8 +32,6 @@ type Evidence struct {
 	// finished and not when it started, or neither.
 	Started  *time.Time
 	Finished *time.Time
-	// Published is the inventory's publication time; nil on a live answer.
-	Published *time.Time
 	// Scope is the key prefix the answering source covers; empty for the
 	// whole resource, as on every live answer. A question outside an
 	// inventory's scope is unknown there, never absent (ErrOutOfScope).

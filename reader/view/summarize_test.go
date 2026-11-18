@@ -47,7 +47,7 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 
 		for _, kinds := range c.kinds {
 			sums, e, err := inv.Summarize(context.Background(), targets, listing.SummaryOptions{Kinds: kinds})
-			if err != nil || len(sums) != len(targets) || e.Stop != listing.StopCompleted || e.Origin != listing.OriginInventory {
+			if err != nil || len(sums) != len(targets) || e.Stop != listing.StopCompleted {
 				t.Fatalf("%s %v: %d summaries, %+v, %v", c.id, kinds, len(sums), e, err)
 			}
 			for i, target := range targets {

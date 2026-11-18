@@ -14,14 +14,12 @@
 // # Evidence
 //
 // Every answer's Evidence comes from the manifest and is never wider than
-// it: the origin is OriginInventory, the manifest digest is "sha256:" and
-// the hex SHA-256 of the manifest's bytes, the acquisition interval is the
-// listing's start and finish, each as the manifest records it, and the
-// publication time is the manifest's. Its Scope is the
-// listing's prefix scope; a question outside it is unknown (ErrOutOfScope),
-// never absent. Unlocated is the manifest's count of unreadable entries only
-// when the listing reached the end of its scope and records no filter and no
-// exclusion; otherwise it is nil. A key is proven absent only when
+// it: the acquisition interval is the listing's start and finish, each as
+// the manifest records it, and its Scope is the listing's prefix scope; a
+// question outside it is unknown (ErrOutOfScope), never absent. Unlocated
+// is the manifest's count of unreadable entries only when the listing
+// reached the end of its scope and records no filter and no exclusion;
+// otherwise it is nil. A key is proven absent only when
 // Unlocated is 0, never at or under a local entry of unknown kind
 // (listing.KindUnknown), which may be a directory the listing did not
 // read, never below a symbolic link, which no listing follows (unknown,
@@ -46,10 +44,9 @@
 // It does not check every part's columns: an application that admits an
 // inventory runs reader.Dataset.CheckSchema first. Every value the view
 // reads is checked as it is read: a column a part lacks or holds with
-// another physical type, a negative size, a time outside the years 1 to
-// 9999 (what RFC 3339 carries), a local kind swath does not write, or a
-// directory whose key does not end in "/" (and the reverse) is a
-// *reader.SemanticError, and it, a key holding a NUL byte, which no
+// another physical type, a negative size, a local kind swath does not
+// write, or a directory whose key does not end in "/" (and the reverse)
+// is a *reader.SemanticError, and it, a key holding a NUL byte, which no
 // listing key may hold, and any data SeekParquet refuses are
 // listing.ErrInvalidPage. Summarize checks the values it sums, and the
 // order of the keys it counts but not their form.
@@ -57,8 +54,8 @@
 // # Errors
 //
 // A call that fails returns an error of a class of package listing, with
-// the cause wrapped beside it: a missing object is listing.ErrNotFound, a
-// refused access (fs.ErrPermission, a store's 401 or 403) listing.ErrAuth,
+// the cause wrapped beside it: data the reader refuses is
+// listing.ErrInvalidPage, a refused access (fs.ErrPermission, a store's 401 or 403) listing.ErrAuth,
 // a feature or limit SeekParquet does not support listing.ErrUnsupported,
 // and any other failure to read the dataset, an I/O or network error
 // past the storage's retries, listing.ErrUnavailable. A context's error

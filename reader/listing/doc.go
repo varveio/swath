@@ -77,11 +77,10 @@
 // # Errors
 //
 // A page that reaches its MaxDuration stops without an error and says so in
-// Evidence.Stop; Walk and Summarize have no bound but ctx. A call
-// that fails returns an error matching one of the classes ErrInvalidRequest
-// to ErrUnavailable with errors.Is, and Retryable says whether trying it
-// again later can succeed. Error messages carry no credential. Every storage
-// request a call makes, retries included, is reported to the storage
+// Evidence.Stop; Walk and Summarize have no bound but ctx. A call that
+// fails returns an error matching one of the classes ErrInvalidRequest to
+// ErrUnavailable with errors.Is. Error messages carry no credential. Every
+// storage request a call makes, retries included, is reported to the storage
 // observer on ctx (objfile.Observer), as dataset reads are.
 //
 // # Ownership

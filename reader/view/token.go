@@ -29,7 +29,7 @@ const tokenVersion = "inv1"
 func (inv *Inventory) binding(prefix []byte, totals *selection) string {
 	h := sha256.New()
 	h.Write([]byte("swath view page token\x00"))
-	h.Write([]byte(inv.base.Manifest))
+	h.Write(inv.digest[:])
 	h.Write([]byte{0})
 	h.Write(prefix)
 	h.Write([]byte{0})

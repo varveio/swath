@@ -144,9 +144,8 @@ The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds th
 swath answers about a listed location, from a live source or from an opened inventory: Page (the next children
 of a prefix), Lookup (what is at exactly one key), Walk (every entry under a prefix) and Summarize (count, bytes,
 space on disk and newest change under each of several targets). It defines their requests and results, the
-common `Entry`, the `Evidence` every answer carries (its origin, acquisition interval, scope, unlocated gaps and
-whether the call completed), the `Unread` places a live walk could not read, and the error classes with
-`Retryable`.
+common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope, unlocated gaps and
+whether the call completed), the `Unread` places a live walk could not read, and the error classes.
 It holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
 any release.
 
@@ -165,17 +164,16 @@ and says `time_budget`); `Lookup` reads the key's row; `Walk` is a range scan, i
 its context. An object store's prefix may be any key prefix; a local one is empty or a
 directory key, and a local inventory has no row for its root.
 
-Every answer's `Evidence` comes from the manifest and never widens it: the SHA-256 of the manifest's bytes (`sha256:` and its hex), the
-listing's interval and publication time, its scope, and its count of unreadable entries as `Unlocated` only when
+Every answer's `Evidence` comes from the manifest and never widens it: the listing's interval, its scope, and its
+count of unreadable entries as `Unlocated` only when
 the listing reached the end of its scope with no filter and no exclusion. A key is absent only inside the scope
 and when `Unlocated` is 0, never at or under a local entry of unknown kind (`listing.KindUnknown`, which may be a
 directory the listing did not read), and never below a symbolic link, which no listing follows (unknown, with
 `ErrNotDirectory`); a question outside the scope is unknown (`ErrOutOfScope`). The listing's own gaps stay
 unlocated: a walk hands on no `Unread`, and a summary target is `Complete` only when `Unlocated` is 0 and its
-key's state is known. The view checks every value it reads (a missing column, a negative size, a time outside the
-years 1 to 9999, a local kind swath does not write), not every part's schema: an application admitting an inventory
-runs `Dataset.CheckSchema` first.
+key's state is known. The view checks every value it reads (a missing column, a negative size, a local kind swath
+does not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
 A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
-is `ErrInvalidPage`, a missing object `ErrNotFound`, a refused access `ErrAuth`, and any other failure to read the
-dataset `ErrUnavailable`, which `listing.Retryable` reports.
+is `ErrInvalidPage`, a refused access `ErrAuth`, and any other failure to read the dataset, a missing file of it
+included, `ErrUnavailable`.
 [view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.

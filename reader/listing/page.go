@@ -5,21 +5,6 @@ package listing
 
 import "time"
 
-// Order names the order of a page's keys. Its values are stable.
-type Order string
-
-const (
-	// OrderBytes is unsigned byte order of the keys, with the "/" already
-	// on directories and prefixes, so a directory "a/" sorts after a file
-	// "a.txt". S3, Cloud Storage, local sources and every inventory page
-	// in this order.
-	OrderBytes Order = "bytes"
-	// OrderUTF16 is the order of the keys' UTF-16 code units: a live Azure
-	// Blob page, in the service's own order. Sorting each page cannot make
-	// byte order across pages.
-	OrderUTF16 Order = "utf16"
-)
-
 // PageRequest asks for the next children of a prefix: one level, with "/"
 // as the only delimiter.
 type PageRequest struct {
@@ -58,8 +43,9 @@ type PageRequest struct {
 }
 
 // Page is one page of a prefix's children. Entries are sorted by Key in
-// Order, and every key sorts after the last key of every earlier page of
-// the level. A backend checks each page before returning it: every key
+// unsigned byte order, with the "/" already on directories and prefixes,
+// so a directory "a/" sorts after a file "a.txt"; every key sorts after
+// the last key of every earlier page of the level. A backend checks each page before returning it: every key
 // begins with the prefix, names exactly one child, is not empty after the
 // prefix, holds no NUL, is valid UTF-8 on an object store, and sorts after
 // the key before it, across pages too. A continuation token from the store
@@ -82,8 +68,6 @@ type Page struct {
 	// that returns it; it never comes back as a child with an empty name.
 	// A nil Self proves nothing about that key: Lookup answers it.
 	Self *Entry
-	// Order is the order of the keys.
-	Order Order
 	// Next continues the level: pass it as the next request's Token. A
 	// page may be short or empty and still carry one. An empty Next ends
 	// the level only when Evidence.Stop is StopCompleted or the page holds

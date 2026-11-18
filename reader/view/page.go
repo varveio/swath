@@ -63,7 +63,7 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		return inv.stopped(ctx, op, req.Token, err)
 	}
 
-	page := listing.Page{Order: listing.OrderBytes, Evidence: inv.evidence(listing.StopCompleted)}
+	page := listing.Page{Evidence: inv.evidence(listing.StopCompleted)}
 	entries, next := listed.Entries, listed.Next
 	if limit > req.Limit {
 		if page.Self, entries, next, err = inv.self(req.Prefix, req.Limit, entries, next); err != nil {
@@ -106,7 +106,7 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 // its class, or ctx's once ctx has ended.
 func (inv *Inventory) stopped(ctx, op context.Context, token string, err error) (listing.Page, error) {
 	if timeUp(ctx, op) {
-		return listing.Page{Order: listing.OrderBytes, Next: token, Evidence: inv.evidence(listing.StopTimeBudget)}, nil
+		return listing.Page{Next: token, Evidence: inv.evidence(listing.StopTimeBudget)}, nil
 	}
 	return listing.Page{}, failed(ctx, err)
 }

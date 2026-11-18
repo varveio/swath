@@ -5,11 +5,8 @@ package view
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,17 +23,11 @@ import (
 var objectSchemas = []reader.SchemaID{reader.S3ObjectsV1, reader.GCSObjectsV1, reader.AzureObjectsV1}
 
 // TestEvidenceFromTheManifest: every answer carries the manifest's
-// evidence and never widens it: its digest, interval, publication, scope
+// evidence and never widens it: its interval, scope
 // and, only for a complete, unfiltered listing with nothing excluded, its
 // count of unreadable entries.
 func TestEvidenceFromTheManifest(t *testing.T) {
-	dir := write(t, fixture{id: reader.S3ObjectsV1, rows: objects()})
-	inv := open(t, dir)
-	raw, err := os.ReadFile(filepath.Join(dir, seekparquet.ManifestName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(raw)
+	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
 	e := inv.evidence(listing.StopCompleted)
 	at := func(s string) time.Time {
 		v, err := time.Parse(time.RFC3339, s)
@@ -45,9 +36,8 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 		}
 		return v
 	}
-	if e.Origin != listing.OriginInventory || e.Manifest != "sha256:"+hex.EncodeToString(sum[:]) || e.Scope != nil ||
-		!e.Started.Equal(at("2026-11-12T09:00:00Z")) || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) ||
-		!e.Published.Equal(at("2026-11-12T09:00:02Z")) || e.Unlocated == nil || *e.Unlocated != 0 || e.Stop != listing.StopCompleted {
+	if e.Scope != nil || !e.Started.Equal(at("2026-11-12T09:00:00Z")) || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) ||
+		e.Unlocated == nil || *e.Unlocated != 0 || e.Stop != listing.StopCompleted {
 		t.Fatalf("evidence %+v", e)
 	}
 	*e.Unlocated, e.Started = 9, nil
@@ -89,7 +79,7 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 
 // TestOpenRefuses: a dataset of versions, whose keys repeat, and one whose
 // manifest records no scope are refused as unsupported, by Open and by
-// OpenDir; OpenDir of a directory with no dataset is ErrNotFound.
+// OpenDir; OpenDir of a directory with no dataset is ErrInvalidPage.
 func TestOpenRefuses(t *testing.T) {
 	version := map[string]any{"is_latest": true, "is_delete_marker": false}
 	versions := write(t, fixture{id: reader.S3VersionsV1, rows: []rec{{key: "a", extra: version}, {key: "b", extra: version}}})
@@ -109,8 +99,8 @@ func TestOpenRefuses(t *testing.T) {
 			t.Errorf("%s: OpenDir = %v, want ErrUnsupported", name, err)
 		}
 	}
-	if _, err := OpenDir(context.Background(), t.TempDir()); !errors.Is(err, listing.ErrNotFound) {
-		t.Errorf("OpenDir of a directory with no dataset = %v, want ErrNotFound", err)
+	if _, err := OpenDir(context.Background(), t.TempDir()); !errors.Is(err, listing.ErrInvalidPage) {
+		t.Errorf("OpenDir of a directory with no dataset = %v, want ErrInvalidPage", err)
 	}
 }
 
@@ -139,7 +129,7 @@ func TestEmptyInventory(t *testing.T) {
 }
 
 // TestRowFaults: a value swath never writes is refused when the view reads
-// it, never handed on or counted: by Walk and Page, and by Summarize where
+// it, never handed on or counted: by Walk, Page and Lookup, and by Summarize where
 // it sums the value (a key's form is not one), as listing.ErrInvalidPage
 // with the reader's error beside it. A common prefix holding a NUL is
 // refused as its rows' keys are.
@@ -167,7 +157,13 @@ func TestRowFaults(t *testing.T) {
 			if _, err := inv.Page(ctx, listing.PageRequest{Limit: 5}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
 				t.Errorf("Page = %v, want %v", err, c.want)
 			}
-			if c.want == listing.ErrInvalidPage || strings.Contains(c.name, "slash") {
+			if c.want == listing.ErrInvalidPage {
+				return
+			}
+			if _, err := inv.Lookup(ctx, []byte("a")); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
+				t.Errorf("Lookup = %v, want %v", err, c.want)
+			}
+			if strings.Contains(c.name, "slash") {
 				return
 			}
 			if _, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{}); !errors.Is(err, c.want) || !errors.Is(err, listing.ErrInvalidPage) {
@@ -177,34 +173,31 @@ func TestRowFaults(t *testing.T) {
 	}
 }
 
-// TestTimestampYears: a timestamp is read when its year is one RFC 3339
-// carries, 1 to 9999, and refused otherwise by every question, as
-// listing.ErrInvalidPage with reader.ErrRow beside it.
+// TestTimestampYears: a timestamp outside the years 1 to 9999 is read as
+// it is by every question.
 func TestTimestampYears(t *testing.T) {
 	ctx := context.Background()
-	first, last := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)
-	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: []rec{{key: "a", modified: &first}, {key: "b", modified: &last}}}))
-	w, _, err := walk(t, inv, listing.WalkRequest{Workers: 1})
-	if err != nil || len(w.entries) != 2 || !w.entries[0].LastModified.Equal(first) || !w.entries[1].LastModified.Equal(last) {
-		t.Fatalf("walk of the first and last instants RFC 3339 carries: %+v, %v", w.entries, err)
-	}
-
 	for name, f := range map[string]fixture{
-		"year 10000": {id: reader.S3ObjectsV1, rows: []rec{{key: "a", modified: ptr(last.Add(time.Microsecond))}}},
-		"year 0":     {id: reader.LocalV1, rows: []rec{{key: "a", kind: "file", modified: ptr(first.Add(-time.Microsecond))}}},
+		"year 10000": {id: reader.S3ObjectsV1, rows: []rec{{key: "a", modified: ptr(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC))}}},
+		"year 0":     {id: reader.LocalV1, rows: []rec{{key: "a", kind: "file", modified: ptr(time.Date(0, 12, 31, 23, 59, 59, 999999000, time.UTC))}}},
 	} {
+		want := *f.rows[0].modified
 		inv := open(t, write(t, f))
-		_, walkErr := inv.Walk(ctx, listing.WalkRequest{Workers: 1}, func(listing.WalkBatch) error { return nil })
-		_, pageErr := inv.Page(ctx, listing.PageRequest{Limit: 5})
-		lookup, err := inv.Lookup(ctx, []byte("a"))
-		if err != nil {
-			t.Fatal(err)
+		w, _, err := walk(t, inv, listing.WalkRequest{Workers: 1})
+		if err != nil || len(w.entries) != 1 || !w.entries[0].LastModified.Equal(want) {
+			t.Errorf("%s: walk %+v, %v", name, w.entries, err)
 		}
-		_, _, summaryErr := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{})
-		for op, err := range map[string]error{"Walk": walkErr, "Page": pageErr, "Lookup": lookup.Reason, "Summarize": summaryErr} {
-			if !errors.Is(err, listing.ErrInvalidPage) || !errors.Is(err, reader.ErrRow) {
-				t.Errorf("%s: %s = %v, want %v and %v", name, op, err, listing.ErrInvalidPage, reader.ErrRow)
-			}
+		page, err := inv.Page(ctx, listing.PageRequest{Limit: 5})
+		if err != nil || len(page.Entries) != 1 || !page.Entries[0].LastModified.Equal(want) {
+			t.Errorf("%s: page %+v, %v", name, page.Entries, err)
+		}
+		lookup, err := inv.Lookup(ctx, []byte("a"))
+		if err != nil || lookup.State != listing.LookupPresent || !lookup.Entry.LastModified.Equal(want) {
+			t.Errorf("%s: lookup %+v, %v", name, lookup, err)
+		}
+		sums, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{})
+		if err != nil || len(sums) != 1 || sums[0].Totals.Newest == nil || !sums[0].Totals.Newest.Equal(want) {
+			t.Errorf("%s: summary %+v, %v", name, sums, err)
 		}
 	}
 }
@@ -222,7 +215,8 @@ func TestFailureClasses(t *testing.T) {
 	}{
 		{context.Background(), &os.PathError{Op: "open", Err: os.ErrPermission}, listing.ErrAuth},
 		{context.Background(), statusError(403), listing.ErrAuth},
-		{context.Background(), &os.PathError{Op: "open", Err: os.ErrNotExist}, listing.ErrNotFound},
+		{context.Background(), &os.PathError{Op: "open", Err: os.ErrNotExist}, listing.ErrUnavailable},
+		{context.Background(), &seekparquet.RefusalError{Code: seekparquet.CodeNoManifest}, listing.ErrInvalidPage},
 		{context.Background(), &seekparquet.RefusalError{Code: seekparquet.CodeInvalidParquet}, listing.ErrInvalidPage},
 		{context.Background(), &seekparquet.UnsupportedError{Code: seekparquet.UnsupportedEncoding}, listing.ErrUnsupported},
 		{context.Background(), io, listing.ErrUnavailable},
@@ -232,9 +226,6 @@ func TestFailureClasses(t *testing.T) {
 		err := failed(c.ctx, c.err)
 		if !errors.Is(err, c.want) || c.ctx.Err() == nil && !errors.Is(err, c.err) {
 			t.Errorf("failed(%v) = %v, want %v", c.err, err, c.want)
-		}
-		if c.want == listing.ErrUnavailable != listing.Retryable(err) {
-			t.Errorf("failed(%v) = %v, retryable %t", c.err, err, listing.Retryable(err))
 		}
 	}
 }

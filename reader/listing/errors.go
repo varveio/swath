@@ -47,38 +47,8 @@ var (
 	// ErrOutOfScope is a question outside an inventory's scope, which the
 	// inventory cannot answer: unknown there, never absent.
 	ErrOutOfScope = errors.New("listing: outside the inventory's scope")
-	// ErrThrottled is a store that kept pushing back past the retry
-	// budget.
-	ErrThrottled = errors.New("listing: throttled")
-	// ErrUnavailable is a store that could not be reached or kept failing
-	// past the retry budget: network errors, timeouts, server errors.
+	// ErrUnavailable is a store that could not be reached, kept failing or
+	// kept pushing back past the retry budget: network errors, timeouts,
+	// server errors, throttling.
 	ErrUnavailable = errors.New("listing: unavailable")
 )
-
-// lasting are the classes that trying again later does not change.
-var lasting = []error{
-	ErrInvalidRequest,
-	ErrInvalidToken,
-	ErrNotFound,
-	ErrNotDirectory,
-	ErrOtherDevice,
-	ErrAuth,
-	ErrUnsupported,
-	ErrInvalidPage,
-	ErrOutOfScope,
-}
-
-// Retryable reports whether trying the call again later can succeed: err
-// matches ErrThrottled or ErrUnavailable and no other class. A nil error,
-// an error of no class and a context's error are not retryable.
-func Retryable(err error) bool {
-	if !errors.Is(err, ErrThrottled) && !errors.Is(err, ErrUnavailable) {
-		return false
-	}
-	for _, class := range lasting {
-		if errors.Is(err, class) {
-			return false
-		}
-	}
-	return true
-}
