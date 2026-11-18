@@ -35,8 +35,7 @@ type PageRequest struct {
 	// level's pages hold: whether ChildTotals is set, and the kinds it
 	// counts. A token that does not match them is ErrInvalidToken, refused
 	// before any request.
-	// Limit and the bounds of work (MaxDuration, the ChildTotals Budget)
-	// may change from page to page. Tokens are not signed; a caller that
+	// Limit and MaxDuration may change from page to page. Tokens are not signed; a caller that
 	// hands them to others signs its own.
 	Token string
 	// Limit is the most children the page returns. It must be positive.
@@ -50,9 +49,8 @@ type PageRequest struct {
 	// request's Token, which asks again. Zero sets no bound.
 	MaxDuration time.Duration
 	// ChildTotals, when not nil, asks for the totals of each child prefix
-	// or directory, counted as it says and within its Budget. An inventory
-	// provides them; a live source refuses the request with ErrUnsupported,
-	// before any request.
+	// or directory, counted as it says. An inventory provides them; a live
+	// source refuses the request with ErrUnsupported, before any request.
 	ChildTotals *SummaryOptions
 }
 
@@ -74,7 +72,7 @@ type Page struct {
 	// totals, which only an inventory gives: a KindPrefix or KindDir
 	// entry's totals, as Summarize counts a Subtree target at its key, or
 	// nil for any other entry and wherever they are not known within the
-	// budget. Nil when not asked for.
+	// page's MaxDuration. Nil when not asked for.
 	Totals []*Totals
 	// Self is the entry whose key is exactly the request's Prefix, such as
 	// an object "a/" in the level of "a/", on the one page of the level

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"runtime"
@@ -67,6 +68,10 @@ type entry struct {
 // errTooLarge: a directory whose names or keys exceed 4 GiB does not fit an
 // entry's 32-bit offsets; it is skipped and counted as a read error.
 var errTooLarge = errors.New("directory too large: its names or keys exceed 4 GiB")
+
+// errTypeChanged: an entry read as a directory statted as anything else,
+// or the reverse.
+var errTypeChanged = errors.New("type changed during listing")
 
 // fitsOffsets reports whether sc's names, and the keys buildKeys would make
 // under a prefix of plen bytes, fit an entry's 32-bit offsets.
@@ -137,7 +142,7 @@ func (p *Provider) expandNative(ctx context.Context, r Range, e source.Emitter[R
 	}
 	if !fitsOffsets(len(r.prefix), sc) {
 		st.note(&st.ReadErrors, r.path, errTooLarge)
-		p.unread(st, r.prefix, listing.UnreadListing, listing.UnreadBudget)
+		p.unread(st, r.prefix, fmt.Errorf("%w: %w", listing.ErrUnsupported, errTooLarge))
 		p.warnf(source.WarnDirectoryTooLarge, "%s is not listed: %v, more than a listing can sort in memory (counted in read_errors; swath du still counts it)", r.path, errTooLarge)
 		return nil
 	}
@@ -548,8 +553,8 @@ func (p *Provider) statInto(ctx context.Context, fd int, path string, names, key
 			continue
 		}
 		if (r.Data.Kind == KindDir) != (e.typ == unix.DT_DIR) {
-			st.note(&st.Changed, path+string(os.PathSeparator)+name, errors.New("type changed during listing"))
-			p.unread(st, r.Key, listing.UnreadSubtree, listing.UnreadUnstable)
+			st.note(&st.Changed, path+string(os.PathSeparator)+name, errTypeChanged)
+			p.unread(st, r.Key, unreadReason(errTypeChanged))
 			*r = Row{}
 			continue
 		}

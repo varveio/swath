@@ -51,16 +51,6 @@ func (e erased[R, P]) Replay(r any) (int, bool) {
 	return rp.Replay(rr)
 }
 
-// Dropped forwards the provider's Dropper (nothing without it).
-func (e erased[R, P]) Dropped(r any) (listing.Unread, bool) {
-	d, ok := e.p.(Dropper[R])
-	rr, isR := r.(R)
-	if !ok || !isR {
-		return listing.Unread{}, false
-	}
-	return d.Dropped(rr)
-}
-
 // Planner forwards the provider's Planning (nil without it).
 func (e erased[R, P]) Planner() Planner[any] {
 	pl, ok := e.p.(Planning[R])

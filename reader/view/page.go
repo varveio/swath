@@ -30,8 +30,8 @@ import (
 //
 // With req.ChildTotals, each child prefix or directory gets the totals
 // Summarize gives a subtree target at its key, from the rows the listing
-// established, within ChildTotals.Budget and the page's MaxDuration:
-// totals the budget does not reach are nil, and leave the page complete.
+// established, within the page's MaxDuration: totals it does not reach
+// are nil, and leave the page complete.
 // They check the values they read, not the order of the keys.
 func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	sel, err := inv.checkPage(req)
@@ -88,7 +88,7 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		}
 	}
 	if req.ChildTotals != nil {
-		if page.Totals, err = inv.childTotals(ctx, op, entries, *sel, req.ChildTotals.Budget); err != nil {
+		if page.Totals, err = inv.childTotals(ctx, op, entries, *sel); err != nil {
 			return listing.Page{}, err
 		}
 	}
@@ -139,9 +139,6 @@ func (inv *Inventory) checkPage(req listing.PageRequest) (*selection, error) {
 		return nil, invalid("a negative bound")
 	case req.ChildTotals == nil:
 		return nil, nil
-	}
-	if err := checkBudget(req.ChildTotals.Budget); err != nil {
-		return nil, err
 	}
 	sel, err := selectionOf(req.ChildTotals.Kinds)
 	if err != nil {
@@ -209,11 +206,10 @@ var (
 
 // childTotals are the totals of each child prefix or directory of a
 // page, aligned with listed: nil for any other entry, and for one whose
-// rows the listing did not establish or the budget did not reach. Their
-// time budget is the budget's and op's, the page's; ctx is the caller's.
-func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.PageEntry, sel selection, budget listing.Budget) ([]*listing.Totals, error) {
+// rows the listing did not establish, and all nil when op, bounded by the
+// page's MaxDuration, ends first; ctx is the caller's.
+func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.PageEntry, sel selection) ([]*listing.Totals, error) {
 	out := make([]*listing.Totals, len(listed))
-	rows := rowBudget{max: budget.MaxEntries}
 	var counted []int
 	var spans []seekparquet.RowSpan
 	for i, le := range listed {
@@ -223,9 +219,6 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 		if !established(le.Rows) {
 			continue
 		}
-		if fits, err := rows.admit([]seekparquet.RowSpan{le.Rows}); err != nil || !fits {
-			continue
-		}
 		counted = append(counted, i)
 		spans = append(spans, le.Rows)
 	}
@@ -233,11 +226,9 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 		return out, nil
 	}
 
-	totalsCtx, cancel := withBudget(op, budget.MaxDuration)
-	defer cancel()
-	totals, err := inv.aggregate(totalsCtx, spans, sel, false)
+	totals, err := inv.aggregate(op, spans, sel, false)
 	if err != nil {
-		if ctx.Err() == nil && totalsCtx.Err() != nil {
+		if ctx.Err() == nil && op.Err() != nil {
 			return out, nil
 		}
 		return nil, failed(ctx, err)

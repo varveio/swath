@@ -16,50 +16,33 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-const (
-	// maxPendingUnread bounds the extents not read that a walk holds
-	// before it hands them to emit; past it an extent is dropped, and the
-	// walk's Evidence.Unlocated is nil.
-	maxPendingUnread = 1 << 16
-	// unreadBatch is the most extents a batch holds once the workers have
-	// returned.
-	unreadBatch = 1024
-)
+// errStopped refuses a batch once the walk has stopped: it is not
+// emitted.
+var errStopped = errors.New("swath: the walk has stopped")
 
-var (
-	// errEntryBudget is the cause of a walk stopped at its MaxEntries.
-	errEntryBudget = errors.New("swath: the walk's entry budget is reached")
-	// errStopped refuses a batch once the walk has stopped: it is not
-	// emitted, and its range reports it unread.
-	errStopped = errors.New("swath: the walk has stopped")
-)
-
-// Walk hands emit every entry at or under req.Prefix, the object at
-// exactly the prefix included, each once, in no order, as package listing
-// states. The prefix is any key prefix, taken literally. Workers list key
+// Walk hands emit every entry at or under req.Prefix, each once, in no
+// order, as package listing states, and every place the walk could not
+// read and went on past (an Unread), each in a batch of its own as the
+// walk meets it. On an object store the prefix is any key prefix, taken
+// literally, and the object at exactly it is included; workers list key
 // ranges at once and split them at page boundaries while workers are idle,
 // so a prefix that fits in one page is one request; req.Workers 1 lists
 // one continuation chain, never split; zero selects the source's default,
-// 64 for an object store. Each walk has a range engine of its own; concurrent walks
-// share the source's client and request limits only.
+// 64 for an object store. Each walk has a range engine of its own;
+// concurrent walks share the source's client and request limits only.
 //
 // emit is called from the goroutine that called Walk, one batch at a time.
 // A batch and what it reaches belong to the walk until emit returns, and
 // a worker whose batch emit has not taken waits: that is the backpressure,
-// and it counts toward the time budget. Every entry is checked before it
-// reaches emit: inside the prefix, no NUL in its key, a size on every
-// object, else ErrInvalidPage. An error from emit stops the walk, and
-// Walk returns it unchanged once the workers have returned; nothing is
-// emitted after Walk returns.
-//
-// req.Budget.MaxEntries stops the walk after the batch that reaches it,
-// MaxDuration once that time has passed: Evidence.Stop names the bound,
-// with no error, and every key interval left unread is handed to emit as
-// an UnreadInterval of class UnreadBudget, before Walk returns. A walk
-// that meets more unread extents than it holds at once (65,536) drops the
-// rest and says so with a nil Evidence.Unlocated. When ctx ends,
-// Walk returns its error, even when emit has accepted every batch. A panic
-// in the walk's workers is returned as an error of no class.
+// and the walk holds no entry and no Unread it has not handed on. Every
+// entry is checked before it reaches emit: inside the prefix, no NUL in
+// its key, a size on every object, else ErrInvalidPage. An error from emit
+// stops the walk, and Walk returns it unchanged once the workers have
+// returned; nothing is emitted after Walk returns. The walk sets no limit:
+// when ctx ends, Walk returns its error, even when emit has accepted every
+// batch. A panic in the walk's workers is returned as an error of no class.
+// Whatever it returns, the WalkSummary counts what emit accepted, and its
+// Evidence.Stop is StopCompleted only when the walk returns no error.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
@@ -69,42 +52,26 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 		return listing.WalkSummary{}, fmt.Errorf("%w: this source does not walk", listing.ErrUnsupported)
 	}
 
-	timed, cancel := withBudget(ctx, req.Budget.MaxDuration)
-	defer cancel()
-	op, stop := context.WithCancelCause(timed)
+	op, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	w := &walk{op: op, stop: stop, prefix: req.Prefix, emit: emit, max: req.Budget.MaxEntries, queue: make(chan handoff)}
+	w := &walk{op: op, stop: stop, prefix: req.Prefix, emit: emit, queue: make(chan handoff)}
 	started := time.Now()
 	err := w.run(walker, Walk{Prefix: req.Prefix, Workers: req.Workers})
 	finished := time.Now()
 
+	res := listing.WalkSummary{Entries: w.entries, Unread: w.unread, Evidence: evidence(started, finished, "")}
 	switch {
 	case w.emitErr != nil:
-		return listing.WalkSummary{}, w.emitErr
+		return res, w.emitErr
 	case ctx.Err() != nil:
-		return listing.WalkSummary{}, ctx.Err()
+		return res, ctx.Err()
 	case w.invalid != nil:
-		return listing.WalkSummary{}, objfile.RedactError(w.invalid) // it quotes the store's keys
+		return res, objfile.RedactError(w.invalid) // it quotes the store's keys
+	case err != nil:
+		return res, failure(ctx, err)
 	}
-	reason := listing.StopCompleted
-	switch {
-	case err == nil:
-	case errors.Is(context.Cause(op), errEntryBudget):
-		reason = listing.StopEntryBudget
-	case timeUp(ctx, op):
-		reason = listing.StopTimeBudget
-	default:
-		return listing.WalkSummary{}, failure(ctx, err)
-	}
-
-	if err := emitUnread(ctx, emit, w.takeUnread()); err != nil {
-		return listing.WalkSummary{}, err
-	}
-	ev := evidence(started, finished, reason)
-	if w.lost {
-		ev.Unlocated = nil
-	}
-	return listing.WalkSummary{Entries: w.entries, Evidence: ev}, nil
+	res.Evidence = evidence(started, finished, listing.StopCompleted)
+	return res, nil
 }
 
 // checkWalk refuses a request of the wrong form, before any request.
@@ -112,14 +79,11 @@ func (s *Source) checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch)
 	if err := s.checkName("prefix", req.Prefix); err != nil {
 		return err
 	}
-	b := req.Budget
 	switch {
 	case emit == nil:
 		return invalid("no emit callback")
 	case req.Workers < 0:
 		return invalid("a negative number of workers")
-	case b.MaxEntries < 0 || b.MaxDuration < 0:
-		return invalid("a negative bound")
 	}
 	return nil
 }
@@ -134,27 +98,22 @@ type walk struct {
 	emit   func(listing.WalkBatch) error
 	queue  chan handoff
 
-	// The emitting goroutine's: the entries handed to emit, which max
-	// bounds (MaxEntries, zero for none), emit's error, and whether the
-	// walk emits no more entries.
-	max     int64
+	// The emitting goroutine's: the entries and Unread emit accepted, and
+	// emit's error.
 	entries int64
+	unread  int64
 	emitErr error
-	halted  bool
 
-	// mu guards the extents not read that wait for a batch, whether one
-	// was dropped (lost), and the first entry that failed its check.
+	// mu guards the first entry that failed its check.
 	mu      sync.Mutex
-	pending []listing.Unread
-	lost    bool
 	invalid error
 }
 
 // handoff is a worker's batch, and where its emitter answers: nil once
 // emitted, else errStopped.
 type handoff struct {
-	entries []listing.Entry
-	done    chan error
+	batch listing.WalkBatch
+	done  chan error
 }
 
 // run lists through walker on a goroutine of its own and emits the
@@ -203,27 +162,22 @@ func (w *walk) run(walker Walker, lw Walk) error {
 func (w *walk) serve(h handoff) {
 	err := errStopped
 	defer func() { h.done <- err }()
-	err = w.deliver(h.entries)
+	err = w.deliver(h.batch)
 }
 
-// deliver hands entries to emit, with the extents not read waiting so
-// far, and stops the walk at its entry budget or at emit's error. Once the
-// walk has stopped it emits nothing more: errStopped.
-func (w *walk) deliver(entries []listing.Entry) error {
-	if w.halted || w.op.Err() != nil {
+// deliver hands a batch to emit, and stops the walk at emit's error. Once
+// the walk has stopped it emits nothing more: errStopped.
+func (w *walk) deliver(b listing.WalkBatch) error {
+	if w.op.Err() != nil {
 		return errStopped
 	}
-	if err := w.emit(listing.WalkBatch{Entries: entries, Unread: w.takeUnread()}); err != nil {
-		w.emitErr, w.halted = err, true
+	if err := w.emit(b); err != nil {
+		w.emitErr = err
 		w.stop(err)
 		return errStopped
 	}
-
-	w.entries += int64(len(entries))
-	if w.max > 0 && w.entries >= w.max {
-		w.halted = true
-		w.stop(errEntryBudget)
-	}
+	w.entries += int64(len(b.Entries))
+	w.unread += int64(len(b.Unread))
 	return nil
 }
 
@@ -240,8 +194,20 @@ func (w *walk) Entries(ctx context.Context, entries []listing.Entry) error {
 		w.stop(err)
 		return err
 	}
+	return w.hand(ctx, listing.WalkBatch{Entries: entries})
+}
 
-	h := handoff{entries: entries, done: make(chan error, 1)}
+// Unread waits for the walk's goroutine to emit a place a worker could
+// not read, in a batch of its own (Sink); once the walk has stopped it is
+// dropped, as the walk did not finish.
+func (w *walk) Unread(u listing.Unread) {
+	_ = w.hand(w.op, listing.WalkBatch{Unread: []listing.Unread{u}})
+}
+
+// hand passes b to the walk's goroutine and waits until it is emitted:
+// nil, else errStopped, or ctx's cause once ctx has ended first.
+func (w *walk) hand(ctx context.Context, b listing.WalkBatch) error {
+	h := handoff{batch: b, done: make(chan error, 1)}
 	select {
 	case w.queue <- h:
 	case <-ctx.Done():
@@ -271,42 +237,4 @@ func checkEntries(prefix []byte, entries []listing.Entry) error {
 		}
 	}
 	return nil
-}
-
-// Unread keeps an extent not read for the next batch (Sink), or
-// drops it once maxPendingUnread wait.
-func (w *walk) Unread(u listing.Unread) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(w.pending) == maxPendingUnread {
-		w.lost = true
-		return
-	}
-	w.pending = append(w.pending, u)
-}
-
-// takeUnread takes the extents waiting.
-func (w *walk) takeUnread() []listing.Unread {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	u := w.pending
-	w.pending = nil
-	return u
-}
-
-// emitUnread hands emit the extents still waiting once a walk has stopped
-// reading, unreadBatch at a time: emit's error, else ctx's once it has
-// ended, whether before a batch or while emit took it.
-func emitUnread(ctx context.Context, emit func(listing.WalkBatch) error, pending []listing.Unread) error {
-	for len(pending) > 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		n := min(len(pending), unreadBatch)
-		if err := emit(listing.WalkBatch{Unread: pending[:n:n]}); err != nil {
-			return err
-		}
-		pending = pending[n:]
-	}
-	return ctx.Err()
 }

@@ -17,10 +17,9 @@ type LookupResult struct {
 	// Row is the entry when State is present, keyed as a listing keys it:
 	// a directory's key ends in "/".
 	Row Row
-	// Class says why the key was not reached when State is unknown, and
-	// Err the cause.
-	Class listing.UnreadClass
-	Err   error
+	// Err says why the key was not reached when State is unknown: the
+	// cause, beside its class in the listing contract (unreadReason).
+	Err error
 }
 
 // keyNames splits key, below a held root (OpenDir), into its names: none

@@ -4,7 +4,6 @@
 package s3_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -69,10 +68,10 @@ func under(keys []string, prefix string) []string {
 }
 
 // walked is what a walk handed emit: its keys, in the order emitted, and
-// its unread extents, copied.
+// how many places it could not read.
 type walked struct {
 	keys   []string
-	unread []listing.Unread
+	unread int
 }
 
 // walk walks src with req, keeping what it emits and checking each entry
@@ -87,9 +86,7 @@ func walk(t *testing.T, ctx context.Context, src *swath.Source, req listing.Walk
 			}
 			w.keys = append(w.keys, string(e.Key))
 		}
-		for _, u := range b.Unread {
-			w.unread = append(w.unread, listing.Unread{Key: bytes.Clone(u.Key), Hi: bytes.Clone(u.Hi), Scope: u.Scope, Class: u.Class})
-		}
+		w.unread += len(b.Unread)
 		return nil
 	})
 	return w, sum, err
@@ -124,7 +121,7 @@ func TestWalkEachEntryOnce(t *testing.T) {
 			t.Fatalf("%q at %d: %d keys, want %d", c.prefix, c.workers, len(w.keys), len(want))
 		}
 		ev := sum.Evidence
-		if sum.Entries != int64(len(w.keys)) || len(w.unread) != 0 || ev.Stop != listing.StopCompleted || ev.Origin != listing.OriginLive ||
+		if sum.Entries != int64(len(w.keys)) || w.unread != 0 || ev.Stop != listing.StopCompleted || ev.Origin != listing.OriginLive ||
 			ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Started == nil || ev.Finished == nil {
 			t.Errorf("%q at %d: %+v, unread %v, evidence %+v", c.prefix, c.workers, sum, w.unread, ev)
 		}
@@ -170,91 +167,9 @@ func TestWalkStopsAtEmitError(t *testing.T) {
 	}
 }
 
-// accounted checks that each of all was emitted once or lies in one
-// unread interval of class budget, never both and never neither: the
-// unread intervals, walked afterwards, complete the walk.
-func accounted(t *testing.T, name string, all []string, w walked) {
-	t.Helper()
-	emitted := map[string]int{}
-	for _, k := range w.keys {
-		emitted[k]++
-	}
-	for _, u := range w.unread {
-		if u.Scope != listing.UnreadInterval || u.Class != listing.UnreadBudget {
-			t.Fatalf("%s: unread %+v, want an interval of class budget", name, u)
-		}
-	}
-	for _, k := range all {
-		in := 0
-		for _, u := range w.unread {
-			if k > string(u.Key) && (len(u.Hi) == 0 || k <= string(u.Hi)) {
-				in++
-			}
-		}
-		if emitted[k]+in != 1 {
-			t.Fatalf("%s: %q emitted %d times and in %d unread intervals", name, k, emitted[k], in)
-		}
-	}
-	if len(emitted) != len(w.keys) {
-		t.Fatalf("%s: a key emitted twice", name)
-	}
-}
-
-// TestWalkBudgetLeavesUnread: a walk stopped by its entry or time budget
-// returns no error, says which stopped it, and hands emit the key
-// intervals it did not read; with what it emitted, they hold every key
-// under the prefix once, as a complete walk afterwards shows, at eight
-// workers and at one. On the slow store every page takes 20 ms, so the
-// time budget ends a walk of eight workers between its first page and
-// its fourth wave of pages, the least that lists every key.
-func TestWalkBudgetLeavesUnread(t *testing.T) {
-	s3test.NoCredentials(t)
-	keys := walkKeys()
-	endpoint, _ := serveKeys(t, keys, 2*time.Millisecond)
-	slowEndpoint, _ := serveKeys(t, keys, 20*time.Millisecond)
-	fast, slow := open(t, endpoint, s3test.Name), open(t, slowEndpoint, s3test.Name)
-	ctx := context.Background()
-
-	for _, c := range []struct {
-		name    string
-		src     *swath.Source
-		prefix  string
-		workers int
-		budget  listing.Budget
-		stop    listing.StopReason
-	}{
-		{"entries at 8", fast, "", 8, listing.Budget{MaxEntries: 2500}, listing.StopEntryBudget},
-		{"entries at 1", fast, "", 1, listing.Budget{MaxEntries: 2500}, listing.StopEntryBudget},
-		{"entries under a prefix", fast, "p0", 8, listing.Budget{MaxEntries: 1200}, listing.StopEntryBudget},
-		{"time at 8", slow, "", 8, listing.Budget{MaxDuration: 50 * time.Millisecond}, listing.StopTimeBudget},
-	} {
-		src := c.src
-		req := listing.WalkRequest{Prefix: []byte(c.prefix), Workers: c.workers, Budget: c.budget}
-		w, sum, err := walk(t, ctx, src, req)
-		if err != nil || sum.Evidence.Stop != c.stop || sum.Entries != int64(len(w.keys)) {
-			t.Fatalf("%s: %+v, %v", c.name, sum, err)
-		}
-		if c.budget.MaxEntries > 0 && (sum.Entries < c.budget.MaxEntries || sum.Entries >= int64(len(under(keys, c.prefix)))) {
-			t.Errorf("%s: %d entries emitted", c.name, sum.Entries)
-		}
-		if len(w.unread) == 0 {
-			t.Fatalf("%s: stopped with nothing unread", c.name)
-		}
-
-		all, _, err := walk(t, ctx, src, listing.WalkRequest{Prefix: []byte(c.prefix)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		slices.Sort(all.keys)
-		if !slices.Equal(all.keys, under(keys, c.prefix)) {
-			t.Fatalf("%s: the walk afterwards has %d keys", c.name, len(all.keys))
-		}
-		accounted(t, c.name, all.keys, w)
-	}
-}
-
 // TestWalkCancelled: a walk whose context ends returns the context's
-// error and emits nothing more.
+// error, with a summary that counts what emit took and says the walk did
+// not finish, and emits nothing more.
 func TestWalkCancelled(t *testing.T) {
 	s3test.NoCredentials(t)
 	endpoint, _ := serveKeys(t, walkKeys(), 5*time.Millisecond)
@@ -264,17 +179,19 @@ func TestWalkCancelled(t *testing.T) {
 	defer cancel()
 	var returned atomic.Bool
 	var after atomic.Int64
-	_, err := src.Walk(ctx, listing.WalkRequest{Workers: 8}, func(listing.WalkBatch) error {
+	took := int64(0)
+	sum, err := src.Walk(ctx, listing.WalkRequest{Workers: 8}, func(b listing.WalkBatch) error {
 		if returned.Load() {
 			after.Add(1)
 		}
+		took += int64(len(b.Entries))
 		cancel()
 		return nil
 	})
 	returned.Store(true)
 	time.Sleep(20 * time.Millisecond)
-	if !errors.Is(err, context.Canceled) || after.Load() != 0 {
-		t.Fatalf("err %v, %d batches after Walk returned", err, after.Load())
+	if !errors.Is(err, context.Canceled) || after.Load() != 0 || sum.Entries != took || sum.Evidence.Stop == listing.StopCompleted {
+		t.Fatalf("err %v, %d batches after Walk returned, %+v", err, after.Load(), sum)
 	}
 }
 
@@ -318,11 +235,10 @@ func TestWalkRefuses(t *testing.T) {
 		emit func(listing.WalkBatch) error
 		want error
 	}{
-		"no emit":    {listing.WalkRequest{}, nil, listing.ErrInvalidRequest},
-		"a NUL":      {listing.WalkRequest{Prefix: []byte("a\x00")}, emit, listing.ErrInvalidRequest},
-		"not UTF-8":  {listing.WalkRequest{Prefix: []byte{0xff}}, emit, listing.ErrInvalidRequest},
-		"a negative": {listing.WalkRequest{Budget: listing.Budget{MaxEntries: -1}}, emit, listing.ErrInvalidRequest},
-		"workers":    {listing.WalkRequest{Workers: -1}, emit, listing.ErrInvalidRequest},
+		"no emit":   {listing.WalkRequest{}, nil, listing.ErrInvalidRequest},
+		"a NUL":     {listing.WalkRequest{Prefix: []byte("a\x00")}, emit, listing.ErrInvalidRequest},
+		"not UTF-8": {listing.WalkRequest{Prefix: []byte{0xff}}, emit, listing.ErrInvalidRequest},
+		"workers":   {listing.WalkRequest{Workers: -1}, emit, listing.ErrInvalidRequest},
 	} {
 		if _, err := src.Walk(context.Background(), c.req, c.emit); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
@@ -376,9 +292,9 @@ func TestSummarize(t *testing.T) {
 	}
 	for i, ts := range out {
 		n, size := truth(keys, targets[i])
-		if ts.State != states[i] || ts.Entries != n || ts.Bytes == nil || *ts.Bytes != size || len(ts.Unread) != 0 {
-			t.Errorf("%q subtree=%v: %v %v, %d entries, bytes %v, unread %v; want %v, %d, %d",
-				targets[i].Key, targets[i].Subtree, ts.State, ts.Reason, ts.Entries, ts.Bytes, ts.Unread, states[i], n, size)
+		if ts.State != states[i] || ts.Entries != n || ts.Bytes == nil || *ts.Bytes != size || ts.Unread != 0 || !ts.Complete {
+			t.Errorf("%q subtree=%v: %v %v, %d entries, bytes %v, unread %d, complete %t; want %v, %d, %d",
+				targets[i].Key, targets[i].Subtree, ts.State, ts.Reason, ts.Entries, ts.Bytes, ts.Unread, ts.Complete, states[i], n, size)
 		}
 		if targets[i].Subtree && (n > 0) != (ts.Newest != nil) || ts.State == listing.LookupPresent && (ts.Self == nil || string(ts.Self.Key) != "p03/") {
 			t.Errorf("%q: newest %v, self %+v", targets[i].Key, ts.Newest, ts.Self)
@@ -391,48 +307,6 @@ func TestSummarize(t *testing.T) {
 	root, _, err := src.Summarize(context.Background(), []listing.Target{{Subtree: true}}, listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile}})
 	if err != nil || root[0].State != listing.LookupUnknown || root[0].Reason == nil || root[0].Entries != 0 || *root[0].Bytes != 0 {
 		t.Errorf("the root, counting files: %+v, %v", root, err)
-	}
-}
-
-// TestSummarizeBudget: each target is walked within the whole budget. A
-// target its walk's entry budget stopped counts what it read, holds the
-// intervals it did not read, which with those counts make its whole, is
-// unknown and says which bound stopped it; one that fits is complete.
-// Nothing incomplete passes as complete.
-func TestSummarizeBudget(t *testing.T) {
-	s3test.NoCredentials(t)
-	keys := walkKeys()
-	endpoint, _ := serveKeys(t, keys, time.Millisecond)
-	src := open(t, endpoint, s3test.Name)
-
-	targets := []listing.Target{{Key: []byte("p0"), Subtree: true}, {Key: []byte("p05/"), Subtree: true}, {Key: []byte("p1"), Subtree: true}}
-	out, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 2000}})
-	if err != nil || ev.Stop != listing.StopEntryBudget {
-		t.Fatalf("%v, %+v", err, ev)
-	}
-	for i, ts := range out {
-		n, _ := truth(keys, targets[i])
-		missing := int64(0)
-		for _, k := range under(keys, string(targets[i].Key)) {
-			for _, u := range ts.Unread {
-				if (len(u.Key) == 0 || k > string(u.Key)) && (len(u.Hi) == 0 || k <= string(u.Hi)) {
-					missing++
-					break
-				}
-			}
-		}
-		if ts.Entries+missing < n || ts.Entries < n && len(ts.Unread) == 0 {
-			t.Errorf("%q: %d entries and %d in its unread %v, of %d", targets[i].Key, ts.Entries, missing, ts.Unread, n)
-		}
-	}
-	for _, i := range []int{0, 2} {
-		if ts := out[i]; ts.State != listing.LookupUnknown || !errors.Is(ts.Reason, listing.ErrBudgetExceeded) || ts.Entries < 2000 ||
-			len(ts.Unread) == 0 || ts.Stop != listing.StopEntryBudget {
-			t.Errorf("%q, stopped: %+v", targets[i].Key, ts)
-		}
-	}
-	if ts := out[1]; ts.State != listing.LookupAbsent || ts.Entries != 500 || len(ts.Unread) != 0 || ts.Stop != listing.StopCompleted {
-		t.Errorf("%q, whole: %+v", targets[1].Key, ts)
 	}
 }
 

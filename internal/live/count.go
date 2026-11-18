@@ -26,7 +26,8 @@ type Walker interface {
 	// client, credentials and limiter, bound to its row schema and counted
 	// (Count). It returns when every worker has, with an error that
 	// matches a class of package listing, or with ctx's own once ctx has
-	// ended. What the walk did not read reaches sink.Unread.
+	// ended. Each place the walk could not read and went on past reaches
+	// sink.Unread.
 	Walk(ctx context.Context, w Walk, sink Sink) error
 }
 
@@ -40,24 +41,24 @@ type Walk struct {
 	Workers int
 }
 
-// Sink takes a walk's entries and the extents it did not read. Its
+// Sink takes a walk's entries and the places it could not read. Its
 // methods are called concurrently, from the walk's workers.
 type Sink interface {
 	// Entries takes a batch of entries of one range, which belong to the
 	// walk until Entries returns. An error stops the walk: it is the
-	// count's, and the batch counts as not emitted, so its range reports
-	// it unread.
+	// count's, and the batch counts as not emitted.
 	Entries(ctx context.Context, entries []listing.Entry) error
-	// Unread takes an extent the walk did not read, and keeps its keys.
+	// Unread takes a place the walk could not read and went on past, and
+	// keeps its key.
 	Unread(u listing.Unread)
 }
 
 // Count lists b's scope without ordering it across ranges
 // (bind.Prepared.Count, order.CountWithSink) into sink, with opt as the
 // order stage's options: each range's rows checked as opt says, made
-// entries by entries, and handed to sink.Entries; each extent the
-// provider reports through its emitter, and that of each range the count
-// drops at a stop, handed to sink.Unread. Unless opt.Unordered, the
+// entries by entries, and handed to sink.Entries; each place the
+// provider reports through its emitter that it could not read handed to
+// sink.Unread. Unless opt.Unordered, the
 // ranges are also checked disjoint before their rows reach sink: each
 // run of a range's rows spans the keys from its first to its last, and
 // no two spans meet, so with each range strictly ascending no key reaches

@@ -4,42 +4,38 @@
 package live
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/varveio/swath/reader/listing"
 )
 
-var (
-	// errRoot is the Reason of a subtree target at the root, which is no
-	// entry: no object has an empty key.
-	errRoot = errors.New("swath: the root has no entry")
-	// errUnreached is the Reason of a target whose own entry a bound of
-	// the request kept the call from reading.
-	errUnreached = fmt.Errorf("%w: a bound of the request kept the call from reading the target's entry", listing.ErrBudgetExceeded)
-)
+// errRoot is the Reason of a subtree target at the root, which is no
+// entry: no object has an empty key, and a local source's root is the
+// directory it holds.
+var errRoot = errors.New("swath: the root has no entry")
 
 // Summarize counts the entries of opts.Kinds at or under each target and
 // sums their sizes and newest change, one TargetSummary per target, in
-// order, as package listing states. Each target is answered on its own,
-// within the whole of opts.Budget: an exact target by a Lookup of its key,
-// whose State, Self and Reason it takes and whose entry is its totals; a
-// subtree target by one Walk of its key, whose entries it counts, so
-// nested and repeated targets are each walked and counted in full.
+// order, as package listing states. Each target is answered on its own:
+// its State, Self and Reason by a Lookup of its key (the root's, the empty
+// key's, is unknown: no entry); a subtree target's entries at and under
+// its key by one Walk of it, so nested and repeated targets are each
+// walked and counted in full. The entry at the key counts as the walk
+// hands it on, or as Self where the walk does not, as a local walk does
+// not hand on its directory's own entry; an exact target counts its Self.
 //
-// A subtree target is present when its walk handed on an entry at exactly
-// its key, absent when it did not and the walk read everything, and
-// unknown otherwise; the root's, the empty key's, is unknown. Its Unread
-// are its walk's, and its totals cover only what the walk read. A
-// target's Stop is the bound that stopped its walk or lookup, empty for an
-// exact target the lookup left unknown, and Evidence.Stop the first such
-// bound. A counted entry without a size or a
-// time, and a sum that overflows, make that total nil. A walk's or a
-// lookup's failure is Summarize's error; when ctx ends, Summarize returns
-// its error.
+// A subtree target's Unread counts what its walk handed on as Unread, and
+// it is Complete when its State is known (the root's excepted) and its
+// walk handed on none; an exact target is Complete when its State is
+// known. A subtree whose Lookup left it unknown is still walked, and when
+// that walk fails the target counts what it read, incomplete, rather than
+// failing the call; so is one shown absent whose walk finds no local
+// directory (ErrNotFound), which holds nothing. Any other walk's failure,
+// and a lookup's, is Summarize's error; when ctx ends, Summarize returns
+// its error. A counted entry without a size or a time, and a sum that
+// overflows, make that total nil.
 func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	counted, err := s.checkSummary(targets, opts)
 	if err != nil {
@@ -48,37 +44,17 @@ func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts l
 
 	started := time.Now()
 	out := make([]listing.TargetSummary, len(targets))
-	stop, lostAny := listing.StopCompleted, false
 	for i, t := range targets {
-		lost := false
-		if t.Subtree {
-			out[i], lost, err = s.subtree(ctx, t.Key, opts.Budget, counted)
-		} else {
-			out[i], err = s.exact(ctx, t.Key, opts.Budget, counted)
-		}
-		if err != nil {
+		if out[i], err = s.target(ctx, t, counted); err != nil {
 			return nil, listing.Evidence{}, err
 		}
-		if stop == listing.StopCompleted && out[i].Stop != "" {
-			stop = out[i].Stop
-		}
-		lostAny = lostAny || lost
 	}
-
-	ev := evidence(started, time.Now(), stop)
-	if lostAny {
-		ev.Unlocated = nil
-	}
-	return out, ev, nil
+	return out, evidence(started, time.Now(), listing.StopCompleted), nil
 }
 
 // checkSummary refuses targets and options of the wrong form, before any
 // request, and returns the kinds counted: counted[k] for each.
 func (s *Source) checkSummary(targets []listing.Target, opts listing.SummaryOptions) ([]bool, error) {
-	b := opts.Budget
-	if b.MaxEntries < 0 || b.MaxDuration < 0 {
-		return nil, invalid("a negative bound")
-	}
 	for _, t := range targets {
 		check := s.checkKey
 		if t.Subtree {
@@ -104,80 +80,53 @@ func (s *Source) checkSummary(targets []listing.Target, opts listing.SummaryOpti
 	return counted, nil
 }
 
-// exact answers an exact target by a Lookup of key within budget's time:
-// unknown and unread whole when the time ends first; an unknown answer's
-// Stop is empty.
-func (s *Source) exact(ctx context.Context, key []byte, budget listing.Budget, counted []bool) (listing.TargetSummary, error) {
-	op, cancel := withBudget(ctx, budget.MaxDuration)
-	defer cancel()
-	r, err := s.Lookup(op, key)
-	switch {
-	case err != nil && timeUp(ctx, op):
-		return listing.TargetSummary{State: listing.LookupUnknown, Reason: errUnreached, Totals: zeroTotals(),
-			Unread: []listing.Unread{{Scope: listing.UnreadInterval, Class: listing.UnreadBudget}}, Stop: listing.StopTimeBudget}, nil
-	case err != nil:
-		return listing.TargetSummary{}, err
-	}
-
-	var tl tally
-	stop := listing.StopCompleted
-	switch r.State {
-	case listing.LookupPresent:
-		tl.add(r.Entry, counted)
-	case listing.LookupUnknown:
-		stop = "" // not read, and no bound is why: never complete
-	}
-	return listing.TargetSummary{State: r.State, Self: r.Entry, Reason: r.Reason, Totals: tl.totals(), Stop: stop}, nil
-}
-
-// subtree answers a subtree target by one Walk of key within budget, and
-// reports whether the walk dropped extents it did not read.
-func (s *Source) subtree(ctx context.Context, key []byte, budget listing.Budget, counted []bool) (listing.TargetSummary, bool, error) {
-	var tl tally
-	var self *listing.Entry
-	var unread []listing.Unread
-	res, err := s.Walk(ctx, listing.WalkRequest{Prefix: key, Budget: budget}, func(b listing.WalkBatch) error {
-		for i := range b.Entries {
-			e := &b.Entries[i]
-			tl.add(e, counted)
-			if len(e.Key) == len(key) && e.Kind != listing.KindPrefix {
-				self = cloneEntry(e)
-			}
+// target answers one target: its own entry by a Lookup, and a subtree's
+// entries under its key by a Walk.
+func (s *Source) target(ctx context.Context, t listing.Target, counted []bool) (listing.TargetSummary, error) {
+	var ts listing.TargetSummary
+	if len(t.Key) == 0 {
+		ts.State, ts.Reason = listing.LookupUnknown, errRoot
+	} else {
+		r, err := s.Lookup(ctx, t.Key)
+		if err != nil {
+			return listing.TargetSummary{}, err
 		}
-		for _, u := range b.Unread {
-			unread = append(unread, listing.Unread{Key: bytes.Clone(u.Key), Hi: bytes.Clone(u.Hi), Scope: u.Scope, Class: u.Class})
+		ts.State, ts.Self, ts.Reason = r.State, r.Entry, r.Reason
+	}
+
+	var tl tally
+	ts.Complete = ts.State != listing.LookupUnknown || len(t.Key) == 0
+	if !t.Subtree {
+		if ts.Self != nil {
+			tl.add(ts.Self, counted)
+		}
+		ts.Totals = tl.totals()
+		return ts, nil
+	}
+
+	own := false // the walk handed on the entry at exactly the key
+	res, err := s.Walk(ctx, listing.WalkRequest{Prefix: t.Key}, func(b listing.WalkBatch) error {
+		for i := range b.Entries {
+			own = own || len(b.Entries[i].Key) == len(t.Key)
+			tl.add(&b.Entries[i], counted)
 		}
 		return nil
 	})
-	if err != nil {
-		return listing.TargetSummary{}, false, err
-	}
-
-	lost := res.Evidence.Unlocated == nil
-	ts := listing.TargetSummary{Self: self, Totals: tl.totals(), Unread: unread, Stop: res.Evidence.Stop}
 	switch {
-	case len(key) == 0:
-		ts.State, ts.Reason = listing.LookupUnknown, errRoot
-	case self != nil:
-		ts.State = listing.LookupPresent
-	case len(unread) > 0: // a walk that dropped extents handed on those it kept
-		ts.State, ts.Reason = listing.LookupUnknown, unreadReason(unread[0].Class)
+	case err == nil:
+	case ctx.Err() != nil:
+		return listing.TargetSummary{}, ctx.Err()
+	case ts.State == listing.LookupUnknown && len(t.Key) > 0: // incomplete, and the Lookup's Reason says why
+	case ts.State == listing.LookupAbsent && errors.Is(err, listing.ErrNotFound): // nothing there
 	default:
-		ts.State = listing.LookupAbsent
+		return listing.TargetSummary{}, err
 	}
-	return ts, lost, nil
-}
-
-// unreadReason is the Reason of a subtree target whose walk left an
-// extent of class c unread, which may hold the target's own entry.
-func unreadReason(c listing.UnreadClass) error {
-	switch c {
-	case listing.UnreadBudget:
-		return errUnreached
-	case listing.UnreadPermission:
-		return fmt.Errorf("%w: the target was not read: access was refused", listing.ErrAuth)
+	if !own && ts.Self != nil { // a local directory's own entry, which its walk does not hold
+		tl.add(ts.Self, counted)
 	}
-	return fmt.Errorf("swath: the target was not read: %s", c)
+	ts.Totals, ts.Unread = tl.totals(), res.Unread
+	ts.Complete = ts.Complete && res.Unread == 0
+	return ts, nil
 }
 
 // tally sums the counted entries of a set. A sum is unknown once an entry
@@ -231,32 +180,4 @@ func (t *tally) totals() listing.Totals {
 		out.Newest = &t.newest
 	}
 	return out
-}
-
-// zeroTotals are the totals of no counted entry.
-func zeroTotals() listing.Totals {
-	var t tally
-	return t.totals()
-}
-
-// cloneEntry is a copy of e that shares nothing with it.
-func cloneEntry(e *listing.Entry) *listing.Entry {
-	c := *e
-	c.Key = bytes.Clone(e.Key)
-	c.Size = clonePtr(e.Size)
-	c.AllocatedBytes = clonePtr(e.AllocatedBytes)
-	c.LastModified = clonePtr(e.LastModified)
-	c.StorageClass = clonePtr(e.StorageClass)
-	c.Device = clonePtr(e.Device)
-	c.Inode = clonePtr(e.Inode)
-	c.Links = clonePtr(e.Links)
-	return &c
-}
-
-func clonePtr[T any](p *T) *T {
-	if p == nil {
-		return nil
-	}
-	v := *p
-	return &v
 }

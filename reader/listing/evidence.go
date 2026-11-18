@@ -18,16 +18,14 @@ const (
 )
 
 // StopReason says whether a call completed or which bound of its request
-// stopped it. Reaching a bound is not an error: the call returns what it
-// read. Any value other than StopCompleted, the empty one included, is an
-// incomplete call. Its values are stable.
+// stopped it: only a Page's MaxDuration stops a call without an error, and
+// the call returns what it read. Any value other than StopCompleted, the
+// empty one included, is an incomplete call. Its values are stable.
 type StopReason string
 
 const (
 	// StopCompleted: the call did everything it was asked.
 	StopCompleted StopReason = "completed"
-	// StopEntryBudget: the call reached Budget.MaxEntries.
-	StopEntryBudget StopReason = "entry_budget"
 	// StopTimeBudget: the call reached its MaxDuration.
 	StopTimeBudget StopReason = "time_budget"
 )
@@ -61,7 +59,9 @@ type Evidence struct {
 	// Unlocated counts the entries in Scope the source may lack and whose
 	// keys it did not record; nil when that count is not known. While it is
 	// not 0, no key is proven absent and no walk is complete. A live answer
-	// locates every gap as an Unread, and its Unlocated is 0. An
+	// that completed has 0: a walk hands on every place it could not read
+	// as an Unread, and Summarize counts them; one that did not complete,
+	// an unknown Lookup included, has nil. An
 	// inventory's is a count only when its manifest proves the listing
 	// reached the end of its scope and records no filter and no exclusion:
 	// then it is the manifest's count of unreadable entries. Anything else
@@ -77,73 +77,23 @@ type Evidence struct {
 	Stop StopReason
 }
 
-// UnreadScope says how much of the space at an Unread's key was not read.
-// Its values are stable.
-type UnreadScope string
-
-const (
-	// UnreadSubtree: nothing at or under Key was read, Key's own entry
-	// included.
-	UnreadSubtree UnreadScope = "subtree"
-	// UnreadListing: Key's own enumeration did not end, so it may have
-	// children the call never met. A child the call returned, and whose
-	// own subtree it finished, was read.
-	UnreadListing UnreadScope = "listing"
-	// UnreadInterval: the keys in (Key, Hi] were not read: an object
-	// store's, or an inventory's when a bound of the request stopped its
-	// call. Key, exclusive, is empty when the interval starts at the
-	// beginning of the call's scope, or of the target's in a
-	// TargetSummary; Hi, inclusive, is empty when it runs to the end.
-	// Only keys within that scope are meant.
-	UnreadInterval UnreadScope = "interval"
-)
-
-// UnreadClass says why an extent was not read. Its values are stable.
-type UnreadClass string
-
-const (
-	// UnreadPermission: the source refused access (EACCES, EPERM, a
-	// store's access denial).
-	UnreadPermission UnreadClass = "permission"
-	// UnreadIO: reading failed with an I/O error.
-	UnreadIO UnreadClass = "io"
-	// UnreadOtherDevice: a directory on another device than the source's
-	// root. The directory is listed as a KindDir; its subtree is not
-	// entered.
-	UnreadOtherDevice UnreadClass = "other_device"
-	// UnreadSymlinkAncestor: a directory on the way to Key was a symbolic
-	// link when the walk opened it, and the walk follows no symlink.
-	UnreadSymlinkAncestor UnreadClass = "symlink_ancestor"
-	// UnreadNameTooLong: the operating system refused a name on the way
-	// to Key as too long (ENAMETOOLONG).
-	UnreadNameTooLong UnreadClass = "name_too_long"
-	// UnreadUnstable: the directory changed while it was read in a way the
-	// walk could not reconcile.
-	UnreadUnstable UnreadClass = "unstable"
-	// UnreadBudget: a bound of the request ended the reading of the
-	// extent: the call stopped, and Evidence.Stop names the bound.
-	UnreadBudget UnreadClass = "budget"
-)
-
-// Unread is an extent a call did not read: an entry or directory, or a
-// key interval. Everything in the call's scope that lies in no Unread
-// extent was read. An entry at or under an UnreadSubtree key, or inside an
-// UnreadInterval, may be missing from the answer; under an UnreadListing
-// key, only the children the call did not return, and what lies under
-// them, may be. Not following a symbolic link is policy, never an Unread.
-// An inventory reports none of its listing's gaps as an Unread: they are
-// unlocated (Evidence.Unlocated), and it never reports a root extent to
-// stand for them. Its Unread extents are its query's: the key intervals a
-// bound of the request kept the call from reading, of class UnreadBudget.
+// Unread is a place a live walk could not read and went on past: a local
+// directory it could not open or finish reading, or an entry it could not
+// stat. What lies at or under Key may be missing from the walk; everything
+// else in its scope that it finished was read. Not following a symbolic
+// link is policy, never an Unread. An object store's walk has none: a
+// listing error ends it. An inventory's has none either: its listing's
+// gaps are unlocated (Evidence.Unlocated).
 type Unread struct {
-	// Key is the entry or directory not read, or an interval's exclusive
-	// low bound.
+	// Key is the directory's or entry's key.
 	Key []byte
-	// Hi is an UnreadInterval's inclusive high bound; nil for any other
-	// scope.
-	Hi []byte
-	// Scope says how much at Key was not read.
-	Scope UnreadScope
-	// Class says why.
-	Class UnreadClass
+	// Reason says why, an error matching one of the error classes:
+	// ErrAuth for a refused access (EACCES, EPERM), ErrOtherDevice for a
+	// directory on another device than the source's root, which is listed
+	// as a KindDir and not entered, ErrNotDirectory for a symbolic link
+	// found where a directory was opened, ErrUnsupported for a name the
+	// system refuses as too long or a directory too large to read, and
+	// ErrUnavailable for an I/O error or a directory that changed while
+	// it was read.
+	Reason error
 }

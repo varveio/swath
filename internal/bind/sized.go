@@ -76,14 +76,6 @@ func (s sized[P]) Planner() source.Planner[any] {
 	return nil
 }
 
-// Dropped forwards the provider's (source.Dropper).
-func (s sized[P]) Dropped(r any) (listing.Unread, bool) {
-	if d, ok := s.p.(source.Dropper[any]); ok {
-		return d.Dropped(r)
-	}
-	return listing.Unread{}, false
-}
-
 type sizedDisposer[P any] struct {
 	sized[P]
 	d source.Disposer[any]

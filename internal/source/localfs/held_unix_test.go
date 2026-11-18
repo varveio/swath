@@ -43,17 +43,36 @@ func holdDir(t *testing.T, dir string) *os.File {
 	return f
 }
 
-// unreads collects what a listing reports it did not read (unread),
-// each "scope class key".
+// unreads collects what a listing reports it could not read (unread),
+// each "class key".
 type unreads struct {
 	mu  sync.Mutex
 	got []string
 }
 
-func (u *unreads) add(key string, scope listing.UnreadScope, class listing.UnreadClass) {
+func (u *unreads) add(key string, reason error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.got = append(u.got, fmt.Sprintf("%s %s %s", scope, class, key))
+	u.got = append(u.got, classOf(reason)+" "+key)
+}
+
+// classOf names the listing class reason matches.
+func classOf(reason error) string {
+	for _, c := range []struct {
+		name  string
+		class error
+	}{
+		{"auth", listing.ErrAuth},
+		{"other_device", listing.ErrOtherDevice},
+		{"not_directory", listing.ErrNotDirectory},
+		{"unsupported", listing.ErrUnsupported},
+		{"unavailable", listing.ErrUnavailable},
+	} {
+		if errors.Is(reason, c.class) {
+			return c.name
+		}
+	}
+	return "none"
 }
 
 // to has o's listing report to u.
@@ -158,7 +177,7 @@ func TestHeldRootNotResolvedByPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := countKeys(t, u.to(o), 4); len(got) != 0 || !slices.Equal(u.sorted(), []string{"subtree symlink_ancestor lnk/sub/"}) {
+			if got := countKeys(t, u.to(o), 4); len(got) != 0 || !slices.Equal(u.sorted(), []string{"not_directory lnk/sub/"}) {
 				t.Fatalf("prefix through a link: keys %q, unread %q", got, u.sorted())
 			}
 			if st := o.p.Stats(); st.Unsafe != 1 || len(st.Samples) != 1 || !strings.Contains(st.Samples[0], "level 1 below the root") {
@@ -242,46 +261,6 @@ func mustOpenDir(t *testing.T, f *os.File, opt Options) *Opened {
 	return o
 }
 
-// TestStoppedWalkReportsUnread: a count stopped at any point reports every
-// place it did not read: each key of the tree it did not list lies at or
-// under an UnreadSubtree key, or below a child an UnreadListing directory
-// did not list. Large directories make chunks and continuations to stop
-// in.
-func TestStoppedWalkReportsUnread(t *testing.T) {
-	root := t.TempDir()
-	for i := range 4 {
-		for j := range 4 {
-			mk(t, root, fmt.Sprintf("d%d/e%d/f", i, j), false)
-		}
-	}
-	for i := range slabbed {
-		mk(t, root, fmt.Sprintf("d1/big/f%05d", i), false)
-	}
-	for i := range chunked {
-		mk(t, root, fmt.Sprintf("d2/mid/f%05d", i), false)
-	}
-	all := oracle(t, root, true)
-	f := holdDir(t, root)
-	for _, portable := range []bool{false, true} {
-		for _, stop := range []int{1, 20, 3000, 9000, 15000} {
-			var u unreads
-			o := u.to(mustOpenDir(t, f, Options{Fields: Stat, Portable: portable}))
-			ctx, cancel := context.WithCancel(context.Background())
-			c := &cancelAfter{n: stop, cancel: cancel}
-			got := &collect{}
-			err := countOpened(ctx, o, 4, serial(c, got))
-			cancel()
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("portable=%v stop=%d: %v", portable, stop, err)
-			}
-			if missing := unaccounted(all, rowKeys(got.rows), u.sorted()); len(missing) > 0 {
-				t.Fatalf("portable=%v stop=%d: %d keys neither listed nor reported unread, first %q; unread %q",
-					portable, stop, len(missing), missing[0], u.sorted())
-			}
-		}
-	}
-}
-
 // serial hands each batch to every sink in turn, one batch at a time: a
 // count calls its sink concurrently, and cancelAfter and failAfter are
 // not safe for that.
@@ -303,47 +282,6 @@ func (s *serialSinks) Write(ctx context.Context, segs [][]Row) error {
 	return nil
 }
 
-// unaccounted is the keys of all neither listed nor in an unread place
-// (each "scope class key"): at or under an UnreadSubtree key, or at or
-// under a child of an UnreadListing directory that was not listed.
-func unaccounted(all, listed, unread []string) []string {
-	got := map[string]bool{}
-	for _, k := range listed {
-		got[k] = true
-	}
-	var missing []string
-	for _, k := range all {
-		if got[k] || covered(k, got, unread) {
-			continue
-		}
-		missing = append(missing, k)
-	}
-	return missing
-}
-
-func covered(k string, listed map[string]bool, unread []string) bool {
-	for _, u := range unread {
-		f := strings.SplitN(u, " ", 3)
-		scope, key := f[0], f[2]
-		if !strings.HasPrefix(k, key) {
-			continue
-		}
-		if scope == string(listing.UnreadSubtree) {
-			return true
-		}
-		// The child of key on the way to k: covered unless it was listed.
-		rest := k[len(key):]
-		child := key + rest
-		if i := strings.IndexByte(rest, '/'); i >= 0 {
-			child = key + rest[:i+1]
-		}
-		if rest != "" && !listed[child] {
-			return true
-		}
-	}
-	return false
-}
-
 // TestLookup: each answer a lookup from a held root gives, by what is at
 // the key and on the way to it.
 func TestLookup(t *testing.T) {
@@ -363,24 +301,24 @@ func TestLookup(t *testing.T) {
 		state listing.LookupState
 		kind  Kind   // present
 		row   string // present: the key it answers with
-		class listing.UnreadClass
+		class error  // unknown: the Reason's class
 	}{
-		{"f", listing.LookupPresent, KindFile, "f", ""},
-		{"d", listing.LookupPresent, KindDir, "d/", ""},
-		{"d/", listing.LookupPresent, KindDir, "d/", ""},
-		{"d/g", listing.LookupPresent, KindFile, "d/g", ""},
-		{"ln", listing.LookupPresent, KindSymlink, "ln", ""},
-		{"lnd", listing.LookupPresent, KindSymlink, "lnd", ""},
-		{"f/", listing.LookupAbsent, 0, "", ""},
-		{"ln/", listing.LookupAbsent, 0, "", ""},
-		{"nope", listing.LookupAbsent, 0, "", ""},
-		{"nope/x", listing.LookupAbsent, 0, "", ""},
-		{"d/nope/x", listing.LookupAbsent, 0, "", ""},
-		{"f/x", listing.LookupAbsent, 0, "", ""},
-		{"lnd/g", listing.LookupUnknown, 0, "", listing.UnreadSymlinkAncestor},
-		{"ln/x", listing.LookupUnknown, 0, "", listing.UnreadSymlinkAncestor},
-		{"d/" + long, listing.LookupUnknown, 0, "", listing.UnreadNameTooLong},
-		{long + "/x", listing.LookupUnknown, 0, "", listing.UnreadNameTooLong},
+		{"f", listing.LookupPresent, KindFile, "f", nil},
+		{"d", listing.LookupPresent, KindDir, "d/", nil},
+		{"d/", listing.LookupPresent, KindDir, "d/", nil},
+		{"d/g", listing.LookupPresent, KindFile, "d/g", nil},
+		{"ln", listing.LookupPresent, KindSymlink, "ln", nil},
+		{"lnd", listing.LookupPresent, KindSymlink, "lnd", nil},
+		{"f/", listing.LookupAbsent, 0, "", nil},
+		{"ln/", listing.LookupAbsent, 0, "", nil},
+		{"nope", listing.LookupAbsent, 0, "", nil},
+		{"nope/x", listing.LookupAbsent, 0, "", nil},
+		{"d/nope/x", listing.LookupAbsent, 0, "", nil},
+		{"f/x", listing.LookupAbsent, 0, "", nil},
+		{"lnd/g", listing.LookupUnknown, 0, "", listing.ErrNotDirectory},
+		{"ln/x", listing.LookupUnknown, 0, "", listing.ErrNotDirectory},
+		{"d/" + long, listing.LookupUnknown, 0, "", listing.ErrUnsupported},
+		{long + "/x", listing.LookupUnknown, 0, "", listing.ErrUnsupported},
 	}
 	if os.Getuid() != 0 {
 		if err := os.Chmod(filepath.Join(root, "locked"), 0); err != nil {
@@ -392,20 +330,20 @@ func TestLookup(t *testing.T) {
 			state listing.LookupState
 			kind  Kind
 			row   string
-			class listing.UnreadClass
-		}{"locked/x", listing.LookupUnknown, 0, "", listing.UnreadPermission})
+			class error
+		}{"locked/x", listing.LookupUnknown, 0, "", listing.ErrAuth})
 	}
 	for _, c := range cases {
 		got, err := o.Lookup(context.Background(), c.key)
 		if err != nil {
 			t.Fatalf("%q: %v", c.key, err)
 		}
-		ok := got.State == c.state && got.Class == c.class
+		ok := got.State == c.state && (c.class == nil) == (got.Err == nil) && (c.class == nil || errors.Is(got.Err, c.class))
 		if c.state == listing.LookupPresent {
 			ok = ok && got.Row.Data.Kind == c.kind && got.Row.Key == c.row && got.Row.Data.Has(HasStat)
 		}
-		if !ok || (c.state == listing.LookupUnknown) != (got.Err != nil) {
-			t.Errorf("%q: %v %q %q %v (kind %v), want %v %q %q", c.key, got.State, got.Class, got.Row.Key, got.Err, got.Row.Data.Kind, c.state, c.class, c.row)
+		if !ok {
+			t.Errorf("%q: %v %q %v (kind %v), want %v %q %v", c.key, got.State, got.Row.Key, got.Err, got.Row.Data.Kind, c.state, c.row, c.class)
 		}
 	}
 	if got, _ := o.Lookup(context.Background(), "ln"); got.Row.Data.LinkTarget != "f" {
@@ -440,7 +378,7 @@ func TestLookupFailures(t *testing.T) {
 	t.Cleanup(func() { lookupOpenat, lookupFstat, lookupStatAt = openat, fstat, stat })
 	before := countFDs(t)
 	for _, fail := range []unix.Errno{unix.EIO, unix.EPERM} {
-		class := map[unix.Errno]listing.UnreadClass{unix.EIO: listing.UnreadIO, unix.EPERM: listing.UnreadPermission}[fail]
+		class := map[unix.Errno]error{unix.EIO: listing.ErrUnavailable, unix.EPERM: listing.ErrAuth}[fail]
 		for _, at := range []string{"open b", "fstat b", "stat c"} {
 			lookupOpenat, lookupFstat, lookupStatAt = openat, fstat, stat
 			switch at {
@@ -468,8 +406,8 @@ func TestLookupFailures(t *testing.T) {
 				}
 			}
 			got, err := o.Lookup(context.Background(), "a/b/c")
-			if err != nil || got.State != listing.LookupUnknown || got.Class != class || !errors.Is(got.Err, fail) {
-				t.Errorf("%v at %s: %v %q %v (%v), want unknown %q", fail, at, got.State, got.Class, got.Err, err, class)
+			if err != nil || got.State != listing.LookupUnknown || !errors.Is(got.Err, class) || !errors.Is(got.Err, fail) {
+				t.Errorf("%v at %s: %v %v (%v), want unknown %v", fail, at, got.State, got.Err, err, class)
 			}
 			if n := countFDs(t); n != before {
 				t.Errorf("%v at %s: %d descriptors open, %d before", fail, at, n, before)
@@ -507,12 +445,12 @@ func TestHeldOtherDevice(t *testing.T) {
 	for _, prefix := range []string{mount + "/", mount + "/x/"} {
 		var u unreads
 		o := u.to(mustOpenDirAt(t, f, prefix, Options{Fields: Stat}))
-		if keys := countKeys(t, o, 2); len(keys) != 0 || !slices.Equal(u.sorted(), []string{"subtree other_device " + prefix}) {
+		if keys := countKeys(t, o, 2); len(keys) != 0 || !slices.Equal(u.sorted(), []string{"other_device " + prefix}) {
 			t.Fatalf("prefix %q: keys %q, unread %q", prefix, keys, u.sorted())
 		}
 	}
 	o := mustOpenDirAt(t, f, "", Options{Fields: Stat})
-	if got, err := o.Lookup(context.Background(), mount+"/x"); err != nil || got.State != listing.LookupUnknown || got.Class != listing.UnreadOtherDevice {
+	if got, err := o.Lookup(context.Background(), mount+"/x"); err != nil || got.State != listing.LookupUnknown || !errors.Is(got.Err, listing.ErrOtherDevice) {
 		t.Fatalf("lookup through %s: %+v %v", mount, got, err)
 	}
 	if got, err := o.Lookup(context.Background(), mount); err != nil || got.State != listing.LookupPresent || got.Row.Key != mount+"/" {

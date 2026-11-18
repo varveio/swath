@@ -27,7 +27,6 @@ var classes = []struct {
 	{"ErrUnsupported", ErrUnsupported, false},
 	{"ErrInvalidPage", ErrInvalidPage, false},
 	{"ErrOutOfScope", ErrOutOfScope, false},
-	{"ErrBudgetExceeded", ErrBudgetExceeded, false},
 	{"ErrThrottled", ErrThrottled, true},
 	{"ErrUnavailable", ErrUnavailable, true},
 }

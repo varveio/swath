@@ -44,7 +44,7 @@ var (
 func OpenLive(root *os.File) (live.Store, error) {
 	var s unix.Stat_t
 	if err := unix.Fstat(int(root.Fd()), &s); err != nil {
-		return nil, classed(unreadClass(err), fmt.Errorf("the root: %w", err))
+		return nil, unreadReason(fmt.Errorf("the root: %w", err))
 	}
 	if s.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return nil, fmt.Errorf("%w: the root is not a directory", listing.ErrNotDirectory)
@@ -172,7 +172,7 @@ func (p *Provider) openLevel(ctx context.Context, names []string) (int, unix.Sta
 
 	if err := lookupFstat(fd, &s); err != nil {
 		unix.Close(fd)
-		return -1, s, classed(unreadClass(err), levelError(len(names), err))
+		return -1, s, unreadReason(levelError(len(names), err))
 	}
 	if int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
 		unix.Close(fd)
@@ -188,7 +188,7 @@ func unreached(r LookupResult) error {
 	if r.State == listing.LookupAbsent {
 		return fmt.Errorf("%w: a directory on the way is not there", listing.ErrNotFound)
 	}
-	return classed(r.Class, r.Err)
+	return r.Err
 }
 
 // notOpened is the error of a level whose directory, name in dir at level
@@ -202,7 +202,7 @@ func notOpened(dir int, name string, level int, err error) error {
 	case errors.Is(err, unix.ENOENT):
 		return fmt.Errorf("%w: %w", listing.ErrNotFound, levelError(level, err))
 	case !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ELOOP):
-		return classed(unreadClass(err), levelError(level, err))
+		return unreadReason(levelError(level, err))
 	}
 
 	var s unix.Stat_t
@@ -211,11 +211,11 @@ func notOpened(dir int, name string, level int, err error) error {
 	case errors.Is(serr, unix.ENOENT):
 		return fmt.Errorf("%w: %w", listing.ErrNotFound, levelError(level, serr))
 	case serr != nil:
-		return classed(unreadClass(serr), levelError(level, serr))
+		return unreadReason(levelError(level, serr))
 	case s.Mode&unix.S_IFMT == unix.S_IFLNK:
 		return fmt.Errorf("%w: %w", listing.ErrNotDirectory, levelError(level, errSymlink))
 	case s.Mode&unix.S_IFMT == unix.S_IFDIR: // a directory again since the open
-		return classed(listing.UnreadUnstable, levelError(level, err))
+		return unreadReason(levelError(level, err))
 	}
 	return fmt.Errorf("%w: %w", listing.ErrNotDirectory, levelError(level, err))
 }
@@ -287,7 +287,7 @@ func readError(err error) error {
 	if errors.As(err, &errno) {
 		err = errno
 	}
-	return classed(unreadClass(err), fmt.Errorf("reading the directory: %w", err))
+	return unreadReason(fmt.Errorf("reading the directory: %w", err))
 }
 
 // levelEntries adds kids, children of the directory fd at prefix, to
@@ -322,7 +322,8 @@ func levelEntries(ctx context.Context, fd int, prefix string, kids []child, lvl 
 
 // Lookup says what is at exactly key below the held directory, as
 // Opened.Lookup finds it (live.Store): a present entry with what lstat
-// gives of it, absent, or unknown with the reason in its class (classed).
+// gives of it, absent, or unknown with the reason in its class
+// (unreadReason).
 // A key of the wrong form is listing.ErrInvalidRequest. One lookup is
 // reported to ctx's objfile.Observer as one metadata request.
 func (l *Live) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
@@ -352,30 +353,7 @@ func (l *Live) lookup(ctx context.Context, key string) (listing.LookupResult, er
 	case listing.LookupAbsent:
 		return listing.LookupResult{State: listing.LookupAbsent}, nil
 	}
-	return listing.LookupResult{State: listing.LookupUnknown, Reason: classed(r.Class, r.Err)}, nil
-}
-
-// classed is err in the contract's class of the failure class names: a
-// refusal (EACCES, EPERM) is listing.ErrAuth; another device than the
-// root's listing.ErrOtherDevice; a symbolic link on the way, which is
-// never followed, listing.ErrNotDirectory: what lies past it is not
-// reached, never absent; a name the system refuses as too long
-// listing.ErrUnsupported, which asking again does not change; an I/O
-// error, and a tree that changed while it was resolved,
-// listing.ErrUnavailable.
-func classed(class listing.UnreadClass, err error) error {
-	c := listing.ErrUnavailable
-	switch class {
-	case listing.UnreadPermission:
-		c = listing.ErrAuth
-	case listing.UnreadOtherDevice:
-		c = listing.ErrOtherDevice
-	case listing.UnreadSymlinkAncestor:
-		c = listing.ErrNotDirectory
-	case listing.UnreadNameTooLong:
-		c = listing.ErrUnsupported
-	}
-	return fmt.Errorf("%w: %w", c, err)
+	return listing.LookupResult{State: listing.LookupUnknown, Reason: r.Err}, nil
 }
 
 // entryOf is the contract's entry of a row's data at key: its kind (a

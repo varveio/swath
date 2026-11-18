@@ -17,14 +17,12 @@ type Target struct {
 	Subtree bool
 }
 
-// SummaryOptions say what to count and how much work to spend.
+// SummaryOptions say what to count.
 type SummaryOptions struct {
 	// Kinds are the kinds counted. Empty counts files and objects
 	// (KindFile and KindObject); name the kinds to count others, such as
 	// KindDir for directories' own sizes. KindPrefix is never counted.
 	Kinds []Kind
-	// Budget bounds the call.
-	Budget Budget
 }
 
 // Totals measure the counted entries of a set. Counts are one per
@@ -46,29 +44,26 @@ type Totals struct {
 
 // TargetSummary is one target's answer. It says what the target's key
 // itself is, so that zero counted entries tells an empty directory from a
-// symbolic link, an absent key and an unread one.
+// symbolic link, an absent key and an unread one, and whether its totals
+// cover everything at or under it.
 type TargetSummary struct {
 	// State is what is at exactly the target's Key, as Lookup answers it.
 	State LookupState
 	// Self is the entry at exactly Key when State is LookupPresent.
 	Self *Entry
-	// Reason says why State is LookupUnknown, as LookupResult.Reason does:
-	// ErrBudgetExceeded when a bound of the request kept the call from
-	// reading the target's own entry.
+	// Reason says why State is LookupUnknown, as LookupResult.Reason does.
 	Reason error
 	// Totals count the target's entries of SummaryOptions.Kinds. An entry
 	// counts toward every target that holds it, so overlapping targets are
-	// each counted in full. Where the target has an Unread, or the
-	// evidence an unlocated gap, the totals cover only what was read.
+	// each counted in full. Where the target is not Complete, the totals
+	// cover only what was read.
 	Totals
-	// Unread are the extents inside the target that were not read.
-	Unread []Unread
-	// Stop says whether the call finished this target (StopCompleted) or
-	// which bound of the request stopped it. The target is complete when
-	// Stop is StopCompleted, it has no Unread, and the Evidence's
-	// Unlocated is 0. Stop is empty when the call did not read the target
-	// and no bound is why, such as a lookup refused access or a target
-	// outside an inventory's scope: State is LookupUnknown and Reason says
-	// why.
-	Stop StopReason
+	// Complete says every entry at or under the target was read: its own
+	// entry's state is known (the root's, which is no entry, excepted), no
+	// place under it went unread, and the source has no unlocated gap.
+	Complete bool
+	// Unread counts the places under the target that the call could not
+	// read and went on past, as a Walk of it hands them on. Walk names
+	// them.
+	Unread int64
 }

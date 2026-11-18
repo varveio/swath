@@ -136,13 +136,10 @@ type SubtreeSink[P any] interface {
 	SubtreeEnd(prefix string)
 }
 
-// UnreadSink is a count's sink also told of what the listing did not read:
-// each extent a provider reports through its emitter (source.Unreader) as
-// it meets it, and, at a stop, what its ranges did not finish: the rest of
-// a range whose Expand returned early, as the provider reports it, and
-// the extent of each range the count drops unexpanded (source.Dropper),
-// before the count returns. It is called concurrently, and keeps the
-// extent's keys.
+// UnreadSink is a count's sink also told of each place a provider could
+// not read and went on past, as the provider reports it through its
+// emitter (source.Unreader). It is called concurrently, from the worker
+// that met the place, and keeps the Unread's key.
 type UnreadSink interface {
 	Unread(u listing.Unread)
 }
@@ -282,17 +279,9 @@ func (c *counter[R, P]) settle(node *subtree) []string {
 	return ended
 }
 
-// dispose releases the ranges queued and never expanded (a stopped run),
-// first telling an UnreadSink each one's extent; called after the workers
-// have returned.
+// dispose releases the ranges queued and never expanded (a stopped run);
+// called after the workers have returned.
 func (c *counter[R, P]) dispose() {
-	if d, ok := c.p.(source.Dropper[R]); ok && c.unreads != nil {
-		for _, r := range c.stack {
-			if u, ok := d.Dropped(r); ok {
-				c.unreads.Unread(u)
-			}
-		}
-	}
 	if d, ok := c.p.(source.Disposer[R]); ok {
 		for _, r := range c.stack {
 			d.Dispose(r)
@@ -391,7 +380,7 @@ func (e *countEmitter[R, P]) Child(r R) error {
 	return nil
 }
 
-// Unread hands an extent the range did not read to an UnreadSink
+// Unread hands a place the range could not read to an UnreadSink
 // (source.Unreader), and drops it for any other sink.
 func (e *countEmitter[R, P]) Unread(u listing.Unread) {
 	if e.c.unreads != nil {

@@ -4,7 +4,6 @@
 package view
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -235,44 +234,6 @@ func sizes(c seekparquet.ColumnView, name string) error {
 	return nil
 }
 
-// rowBudget admits sets of row spans, in order, while the rows of the
-// union of those admitted fit max, so a row several spans hold counts
-// once; a zero max admits every set.
-type rowBudget struct {
-	max int64
-	// held is the union admitted: disjoint [lo, hi) ordinals, sorted.
-	held [][2]int64
-}
-
-// admit reports whether every span of spans fits, and then holds them
-// all; a set that does not fit holds none. A span whose rows are not
-// established is errUnknownSpan.
-func (b *rowBudget) admit(spans []seekparquet.RowSpan) (bool, error) {
-	if b.max == 0 {
-		return true, nil
-	}
-	held := slices.Clone(b.held)
-	for _, span := range spans {
-		lo, okLo := span.Start.Ordinal()
-		hi, okHi := span.End.Ordinal()
-		if !okLo || !okHi {
-			return false, errUnknownSpan
-		}
-		held = append(held, [2]int64{lo, hi})
-	}
-	held = merge(held)
-
-	var rows int64
-	for _, h := range held {
-		rows += h[1] - h[0]
-	}
-	if rows > b.max {
-		return false, nil
-	}
-	b.held = held
-	return true, nil
-}
-
 // established reports whether both of span's boundaries are known.
 func established(span seekparquet.RowSpan) bool {
 	_, start := span.Start.Ordinal()
@@ -282,17 +243,3 @@ func established(span seekparquet.RowSpan) bool {
 
 // errUnknownSpan reports a span SeekParquet did not establish.
 var errUnknownSpan = wrap(listing.ErrUnsupported, "a selection's rows are not established")
-
-// merge sorts intervals and joins those that overlap or touch.
-func merge(intervals [][2]int64) [][2]int64 {
-	slices.SortFunc(intervals, func(a, b [2]int64) int { return cmp.Compare(a[0], b[0]) })
-	out := intervals[:0]
-	for _, iv := range intervals {
-		if n := len(out); n > 0 && iv[0] <= out[n-1][1] {
-			out[n-1][1] = max(out[n-1][1], iv[1])
-			continue
-		}
-		out = append(out, iv)
-	}
-	return out
-}

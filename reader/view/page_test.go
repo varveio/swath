@@ -171,7 +171,7 @@ func TestPageTokenOptions(t *testing.T) {
 	}
 	for name, req := range map[string]listing.PageRequest{
 		"the same kinds spelt twice": {Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile, listing.KindFile}}},
-		"another limit and budget":   {Limit: 3, MaxDuration: time.Hour, ChildTotals: &listing.SummaryOptions{Kinds: files.Kinds, Budget: listing.Budget{MaxEntries: 1}}},
+		"another limit and duration": {Limit: 3, MaxDuration: time.Hour, ChildTotals: &listing.SummaryOptions{Kinds: files.Kinds}},
 	} {
 		req.Token = first.Next
 		if _, err := inv.Page(ctx, req); err != nil {
@@ -190,8 +190,7 @@ func TestPageTokenOptions(t *testing.T) {
 }
 
 // TestPageChildTotals: each child prefix or directory gets the totals of
-// its subtree, counted as Summarize counts them, and no other entry any;
-// totals the budget does not reach are nil, and the page stays complete.
+// its subtree, counted as Summarize counts them, and no other entry any.
 func TestPageChildTotals(t *testing.T) {
 	for _, c := range []struct {
 		id    reader.SchemaID
@@ -223,19 +222,6 @@ func TestPageChildTotals(t *testing.T) {
 					t.Errorf("%s %v %q: totals of %q = %v, want %s", c.id, c.kinds, prefix, e.Key, totals[i], showTotals(want))
 				}
 			}
-		}
-	}
-
-	ctx := context.Background()
-	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
-	p, err := inv.Page(ctx, listing.PageRequest{Limit: 100, ChildTotals: &listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 3}}})
-	if err != nil || p.Evidence.Stop != listing.StopCompleted || len(p.Entries) != 7 {
-		t.Fatalf("page %+v, %v", p, err)
-	}
-	for i, e := range p.Entries {
-		small := string(e.Key) == "ab/" || string(e.Key) == "deep/" || string(e.Key) == "nulls/"
-		if p.Totals[i] != nil && !small {
-			t.Errorf("%q has totals %s past the budget", e.Key, showTotals(*p.Totals[i]))
 		}
 	}
 }

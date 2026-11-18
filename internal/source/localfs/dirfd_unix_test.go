@@ -115,7 +115,7 @@ func TestSwappedDirectoryNotFollowed(t *testing.T) {
 					}
 					return
 				}
-				if !slices.Equal(u.sorted(), []string{"subtree symlink_ancestor a/b/c/"}) {
+				if !slices.Equal(u.sorted(), []string{"not_directory a/b/c/"}) {
 					t.Fatalf("unread %q", u.sorted())
 				}
 				want := "a symbolic link, not followed"

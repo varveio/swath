@@ -25,9 +25,8 @@ var _ live.Walker = (*Live)(nil)
 // listing.ErrUnsupported before any listing request. The provider's
 // adapter serves each range in byte order, so each range's keys are
 // checked strictly ascending and apart from every other range's
-// (live.Count). One worker lists one continuation chain (Sequential). A
-// range a stop cuts short is reported unread by its key interval
-// (keyrange). Its errors are classed as the source's other calls' are.
+// (live.Count). One worker lists one continuation chain (Sequential). Its
+// errors are classed as the source's other calls' are.
 func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	workers := w.Workers
 	if workers == 0 {

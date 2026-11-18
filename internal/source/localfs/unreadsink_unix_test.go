@@ -7,8 +7,9 @@ package localfs
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -18,8 +19,8 @@ import (
 )
 
 // unreadSink is a count's sink that also keeps what the count tells it
-// was not read (order.UnreadSink), each "scope class key" as unreads
-// keeps them.
+// could not be read (order.UnreadSink), each "class key" as unreads keeps
+// them.
 type unreadSink struct {
 	order.Sink[Entry]
 	mu  sync.Mutex
@@ -29,7 +30,7 @@ type unreadSink struct {
 func (s *unreadSink) Unread(u listing.Unread) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.got = append(s.got, fmt.Sprintf("%s %s %s", u.Scope, u.Class, u.Key))
+	s.got = append(s.got, classOf(u.Reason)+" "+string(u.Key))
 }
 
 func (s *unreadSink) sorted() []string {
@@ -38,32 +39,35 @@ func (s *unreadSink) sorted() []string {
 	return slices.Sorted(slices.Values(s.got))
 }
 
-// TestUnreadReachesTheSink: every place the walk reports it did not read
-// (Provider.unread) reaches a count's order.UnreadSink through the
-// emitter, with either engine: when it stops, the ranges it did not
-// finish, those the count drops unexpanded (Dropped) included.
+// TestUnreadReachesTheSink: every place the walk reports it could not
+// read (Provider.unread), here directories it may not open, reaches a
+// count's order.UnreadSink through the emitter, with either engine.
 func TestUnreadReachesTheSink(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads a directory of mode 0")
+	}
 	root := t.TempDir()
+	var want []string
 	for i := range 4 {
-		for j := range 4 {
-			mk(t, root, fmt.Sprintf("d%d/e%d/f", i, j), false)
+		mk(t, root, fmt.Sprintf("d%d/f", i), false)
+		mk(t, root, fmt.Sprintf("d%d/locked/g", i), false)
+		want = append(want, fmt.Sprintf("auth d%d/locked/", i))
+		locked := filepath.Join(root, fmt.Sprintf("d%d/locked", i))
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
 		}
+		t.Cleanup(func() { os.Chmod(locked, 0o755) })
 	}
 	f := holdDir(t, root)
 	for _, portable := range []bool{false, true} {
-		for _, stop := range []int{1, 20} { // rows after which the walk is cancelled
-			var u unreads
-			o := u.to(mustOpenDir(t, f, Options{Fields: Stat, Portable: portable}))
-			ctx, cancel := context.WithCancel(context.Background())
-			sink := &unreadSink{Sink: serial(&cancelAfter{n: stop, cancel: cancel}, &collect{})}
-			err := countOpened(ctx, o, 4, sink)
-			cancel()
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("portable=%v stop=%d: %v", portable, stop, err)
-			}
-			if got, want := sink.sorted(), u.sorted(); len(want) == 0 || !slices.Equal(got, want) {
-				t.Errorf("portable=%v stop=%d: the sink was told %q, the walk reported %q", portable, stop, got, want)
-			}
+		var u unreads
+		o := u.to(mustOpenDir(t, f, Options{Fields: Stat, Portable: portable}))
+		sink := &unreadSink{Sink: &collect{}}
+		if err := countOpened(context.Background(), o, 4, sink); err != nil {
+			t.Fatalf("portable=%v: %v", portable, err)
+		}
+		if got := sink.sorted(); !slices.Equal(got, want) || !slices.Equal(u.sorted(), want) {
+			t.Errorf("portable=%v: the sink was told %q, the walk reported %q, want %q", portable, got, u.sorted(), want)
 		}
 	}
 }

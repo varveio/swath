@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,8 +77,8 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 				if target.Subtree {
 					keep = func(r rec) bool { return strings.HasPrefix(r.key, key) }
 				}
-				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || len(s.Unread) != 0 || s.Stop != listing.StopCompleted {
-					t.Fatalf("%s %v: %q subtree %t = %s, unread %v; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, showTotals(want))
+				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || s.Unread != 0 || !s.Complete {
+					t.Fatalf("%s %v: %q subtree %t = %s, unread %d, complete %t; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, s.Complete, showTotals(want))
 				}
 			}
 		}
@@ -153,7 +152,8 @@ func TestSummarizeNullsAndOverflow(t *testing.T) {
 
 // TestSummarizeScopeAndCoverage: a target outside the scope is unknown
 // and counts nothing; a key absent from a listing that may lack entries
-// is unknown, while what it holds is still counted.
+// is unknown, while what it holds is still counted, and no target of such
+// a listing is complete.
 func TestSummarizeScopeAndCoverage(t *testing.T) {
 	ctx := context.Background()
 	ext := extension(reader.S3ObjectsV1)
@@ -165,79 +165,18 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 		t.Fatalf("%+v, %v", e, err)
 	}
 	for i := range 3 {
-		if s := sums[i]; s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrOutOfScope) || s.Entries != 0 || s.Stop != "" {
+		if s := sums[i]; s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrOutOfScope) || s.Entries != 0 || s.Complete {
 			t.Errorf("target %d outside the scope: %+v", i, s)
 		}
 	}
-	if s := sums[3]; s.State != listing.LookupPresent || s.Entries != 4 || *s.Bytes != 115 {
+	if s := sums[3]; s.State != listing.LookupPresent || s.Entries != 4 || *s.Bytes != 115 || !s.Complete {
 		t.Errorf("the scope: %+v %s", s, showTotals(s.Totals))
 	}
 
 	partial := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects(), ext: coverage(extension(reader.S3ObjectsV1), map[string]any{"complete": false, "unreadable": 5})}))
 	sums, e, err = partial.Summarize(ctx, []listing.Target{{Key: []byte("missing")}, {Key: []byte("a/"), Subtree: true}}, listing.SummaryOptions{})
-	if err != nil || *e.Unlocated != 5 || sums[0].State != listing.LookupUnknown || sums[0].Reason != nil || sums[0].Stop != "" || sums[1].Entries != 4 {
+	if err != nil || *e.Unlocated != 5 || sums[0].State != listing.LookupUnknown || sums[0].Reason != nil || sums[0].Complete || sums[1].Complete || sums[1].Entries != 4 {
 		t.Fatalf("partial: %+v, %+v, %v", sums, e, err)
-	}
-}
-
-// TestSummarizeBudgets: a target whose own entry a bound keeps the call
-// from reading is unknown and counts nothing, a subtree whose rows it
-// keeps from counting counts nothing, each is unread as a whole, and
-// Evidence.Stop names the bound. The entries at exact targets' keys are
-// within the budget like the subtrees' rows.
-func TestSummarizeBudgets(t *testing.T) {
-	ctx := context.Background()
-	rs := objects()
-	dir := write(t, fixture{id: reader.S3ObjectsV1, rows: rs})
-	inv := open(t, dir)
-	targets := []listing.Target{{Subtree: true}, {Key: []byte("a/"), Subtree: true}, {Key: []byte("a/c/"), Subtree: true}, {Key: []byte("z")}}
-	unread := func(s listing.TargetSummary) bool {
-		return len(s.Unread) == 1 && s.Unread[0].Key == nil && s.Unread[0].Hi == nil && s.Unread[0].Scope == listing.UnreadInterval &&
-			s.Unread[0].Class == listing.UnreadBudget && s.Entries == 0 && s.Stop != listing.StopCompleted
-	}
-	unreached := func(s listing.TargetSummary) bool {
-		return unread(s) && s.State == listing.LookupUnknown && s.Self == nil && errors.Is(s.Reason, listing.ErrBudgetExceeded) &&
-			!listing.Retryable(s.Reason)
-	}
-
-	// The entry budget admits the entries at the keys first, a/ and z,
-	// then the subtrees in order while the union fits: not the root, then
-	// a/'s three more rows, and a/c/ inside it adds nothing.
-	sums, e, err := inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 5}})
-	if err != nil || e.Stop != listing.StopEntryBudget || !unread(sums[0]) || sums[1].Entries != 4 || sums[2].Entries != 1 || sums[3].Entries != 1 || len(sums[1].Unread) != 0 {
-		t.Fatalf("entries: %+v, %+v, %v", sums, e, err)
-	}
-	if sums[0].State != listing.LookupUnknown || sums[1].State != listing.LookupPresent || sums[3].State != listing.LookupPresent {
-		t.Fatalf("entries: states %v, %v, %v", sums[0].State, sums[1].State, sums[3].State)
-	}
-
-	// Many exact targets: the budget reads one entry; an absent key reads
-	// none, and stays provably absent.
-	var exact []listing.Target
-	for _, r := range rs {
-		exact = append(exact, listing.Target{Key: []byte(r.key)})
-	}
-	exact = append(exact, listing.Target{Key: []byte("missing")})
-	sums, e, err = inv.Summarize(ctx, exact, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: 1}})
-	if err != nil || e.Stop != listing.StopEntryBudget || sums[0].State != listing.LookupPresent || sums[0].Entries != 1 || sums[len(sums)-1].State != listing.LookupAbsent {
-		t.Fatalf("exact entries: %+v, %v", e, err)
-	}
-	for i, s := range sums[1 : len(sums)-1] {
-		if !unreached(s) {
-			t.Fatalf("exact target %d past the entry budget: %+v", i+1, s)
-		}
-	}
-
-	// A budget both phases fit counts everything.
-	sums, e, err = inv.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxEntries: int64(len(rs))}})
-	if err != nil || e.Stop != listing.StopCompleted || sums[0].Entries != int64(len(rs)) || sums[1].Entries != 4 || sums[3].State != listing.LookupPresent {
-		t.Fatalf("enough: %+v, %+v, %v", sums, e, err)
-	}
-
-	slow := openWith(t, dir, newSlowSource(t, dir, 50*time.Millisecond))
-	sums, e, err = slow.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: 5 * time.Millisecond}})
-	if err != nil || e.Stop != listing.StopTimeBudget || !unread(sums[0]) || !unreached(sums[3]) {
-		t.Fatalf("time: %+v, %+v, %v", sums, e, err)
 	}
 }
 
@@ -251,12 +190,5 @@ func TestSummarizeCancelled(t *testing.T) {
 	}
 	if sums, e, err := inv.Summarize(context.Background(), nil, listing.SummaryOptions{}); err != nil || len(sums) != 0 || e.Stop != listing.StopCompleted {
 		t.Fatalf("no targets: %v, %+v, %v", sums, e, err)
-	}
-}
-
-// TestRowBudget: the rows of the union admitted count once.
-func TestRowBudget(t *testing.T) {
-	if got := merge([][2]int64{{5, 9}, {0, 2}, {2, 4}, {8, 12}}); !slices.Equal(got, [][2]int64{{0, 4}, {5, 12}}) {
-		t.Errorf("merge = %v", got)
 	}
 }
