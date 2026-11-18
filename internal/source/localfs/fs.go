@@ -21,10 +21,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/longpath"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // Fields selects how much metadata is read per entry.
@@ -80,10 +83,10 @@ type Stats struct {
 	Chunks           int64    `json:"chunks"`                      // large-directory chunks statted in parallel
 	ParallelSorts    int64    `json:"parallel_sorts"`              // large directories whose entries were sorted in parallel runs
 	ReaddirplusHints int64    `json:"readdirplus_hints,omitempty"` // full directory reads followed by a few stats, so an NFS client fetches attributes with the next (readNames)
-	Unsorted         int64    `json:"unsorted_dirs,omitempty"`     // directories a count read without sorting (opened.Run)
+	Unsorted         int64    `json:"unsorted_dirs,omitempty"`     // directories a count read without sorting (Opened.Begin)
 	Slabs            int64    `json:"count_slabs,omitempty"`       // directory slabs a count read before statting them (countSlab, Linux)
 	Presized         int64    `json:"presized"`                    // large directories whose buffers were sized from st_size
-	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (opened.Run)
+	CountProcs       int64    `json:"count_procs,omitempty"`       // GOMAXPROCS a count ran with, when raised (Opened.Begin)
 	Samples          []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
@@ -97,12 +100,80 @@ type Stats struct {
 	// maxKeyBytes (a directory with its subtree): unreadable.
 	KeyTooLong int64     `json:"key_too_long"`
 	LongPaths  LongPaths `json:"long_paths"`
+	DirOpens   DirOpens  `json:"dir_opens"`
+	// unreadTo is the Expand's emitter, told what it did not read (unread);
+	// nil when the emitter takes no reports.
+	unreadTo source.Unreader
 }
 
-// LongPaths account for the paths the kernel refused by their length
-// (ENAMETOOLONG: past PATH_MAX, 4,096 bytes on Linux, 1,024 on macOS),
-// opened again below the root one name at a time (openLong). A path that
-// fits is never counted.
+// DirOpens account for the directories below the root opened relative to
+// an open directory (Linux, macOS: openRange). Each is opened one name
+// down from its parent's descriptor, which the walk keeps for its queued
+// subdirectories; past the limit on kept descriptors, a directory's
+// subdirectories are opened from a kept ancestor's, several names down (a
+// redescent). Elsewhere a directory is opened by its path and nothing is
+// counted.
+type DirOpens struct {
+	Opened     int64 `json:"opened"`
+	Redescents int64 `json:"redescents"` // opens attempted from an ancestor, more than one name down
+	Refused    int64 `json:"refused"`    // directories the limit did not keep for their subdirectories
+	// Failed counts the opens that failed, by reason, as LongPaths.Failed.
+	Failed   map[string]int64 `json:"failed,omitempty"`
+	PeakKept int64            `json:"peak_kept"` // the most descriptors of kept directories at once
+	MaxKept  int64            `json:"max_kept"`  // the limit on them (keepLimit)
+}
+
+func (o *DirOpens) fail(reason string) {
+	if o.Failed == nil {
+		o.Failed = map[string]int64{}
+	}
+	o.Failed[reason]++
+}
+
+func (o *DirOpens) add(x *DirOpens) {
+	o.Opened += x.Opened
+	o.Redescents += x.Redescents
+	o.Refused += x.Refused
+	for k, v := range x.Failed {
+		if o.Failed == nil {
+			o.Failed = map[string]int64{}
+		}
+		o.Failed[k] += v
+	}
+}
+
+// keptFDs bound the directory descriptors a walk keeps open (dirFD): a
+// directory's, from its open until its chunks are read and its queued
+// subdirectories opened relative to it. Past limit a directory is still
+// read, whole by the worker that opened it, but not kept: its
+// subdirectories are opened from a kept ancestor. The root is always
+// kept.
+type keptFDs struct {
+	limit int64
+	open  atomic.Int64
+	peak  atomic.Int64
+}
+
+// take counts one more kept descriptor if the limit allows, or always.
+func (k *keptFDs) take(always bool) bool {
+	n := k.open.Add(1)
+	if n > k.limit && !always {
+		k.open.Add(-1)
+		return false
+	}
+	for peak := k.peak.Load(); n > peak; peak = k.peak.Load() {
+		if k.peak.CompareAndSwap(peak, n) {
+			break
+		}
+	}
+	return true
+}
+
+// LongPaths account for the paths past the kernel's length limit
+// (PATH_MAX: 4,096 bytes on Linux, 1,024 on macOS), which it refuses
+// whole (ENAMETOOLONG): a directory there, opened relative to its parent
+// as any below the root (openRange), and a file root, statted relative to
+// its directory (atParent). A path that fits is never counted.
 type LongPaths struct {
 	Attempts int64 `json:"attempts"`
 	Opened   int64 `json:"opened"`
@@ -193,6 +264,7 @@ func (s *Stats) add(o *Stats) {
 	s.FilteredStatErrors += o.FilteredStatErrors
 	s.KeyTooLong += o.KeyTooLong
 	s.LongPaths.add(&o.LongPaths)
+	s.DirOpens.add(&o.DirOpens)
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -202,9 +274,15 @@ func (s *Stats) add(o *Stats) {
 
 // Range is a directory, or a chunk of a large directory's sorted entries.
 type Range struct {
-	path   string // on-disk path
+	path   string // on-disk path: for messages, and opened by it where directories are not opened relative to a descriptor (dirfd_other.go)
 	prefix string // key prefix: "" for the root, "a/b/" below it
 	chunk  *chunk
+	// at is the open directory a directory below the root is opened from,
+	// below names down (openRange), a reference the range holds until it
+	// is expanded or disposed; nil for a root opened by its path, and where
+	// directories are opened by their path.
+	at    *dirFD
+	below int
 }
 
 // Provider lists one root. It implements source.Provider[Range, Entry].
@@ -212,21 +290,31 @@ type Provider struct {
 	root   string
 	opt    Options
 	native bool
-	dev    int64             // the root's device (OneFilesystem)
-	prune  func(string) bool // immutable directory predicate, set before workers start
-	keyOut func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
+	dev    int64 // the root's device (OneFilesystem)
+	// held is the directory the caller holds open (OpenDir), never
+	// closed here, and prefix the key of the directory listed below it;
+	// nil and "" for a root opened by its path (New). heldFile keeps the
+	// caller's file reachable, so that no finalizer closes it.
+	held     *dirFD
+	heldFile *os.File
+	prefix   string
+	prune    func(string) bool // immutable directory predicate, set before workers start
+	keyOut   func(string) bool // the filters' key-only exclusion (filter.Spec.KeyExcluded), set before workers start
 	// unreadable is told the key prefix of a directory that could not be
-	// opened (registry.Env.Unreadable; nil: nobody asks), set before
+	// opened (Opened.Begin's unreadable; nil: nobody asks), set before
 	// workers start.
 	unreadable func(string)
+	// unreadTo is told each place the listing could not read (unread),
+	// concurrently; set before workers start, by tests only.
+	unreadTo func(key string, reason error)
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
 	file     bool // the root is not a directory (expandFile)
 	mu       sync.Mutex
 	stats    Stats
-	// warn tells the user of a directory left out (registry.Request.Warn);
-	// nil outside a run. warnMu serialises the workers' calls.
+	// warn tells the user of a directory left out (Open's warn); nil
+	// outside a run. warnMu serialises the workers' calls.
 	warn   func(code, msg string)
 	warnMu sync.Mutex
 	// space is the root's filesystem space, measured once (spaceOnce):
@@ -235,6 +323,8 @@ type Provider struct {
 	spaceOnce sync.Once
 	space     *source.FilesystemSpace
 	rootInfo  fs.FileInfo
+	// keep bounds the directory descriptors the walk keeps (dirFD).
+	keep keptFDs
 }
 
 // warnf passes a warning to the user, if the run takes them.
@@ -270,6 +360,7 @@ func New(root string, opt Options) (*Provider, error) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
 	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi}
+	p.keep.limit = keepLimit()
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
 			return nil, err
@@ -278,8 +369,25 @@ func New(root string, opt Options) (*Provider, error) {
 	return p, nil
 }
 
-// Root is the root directory range.
-func (p *Provider) Root() Range { return Range{path: p.root} }
+// Root is the root directory range: for a held root (OpenDir), the
+// directory at prefix, opened from it by its names, "." for itself
+// (descend: path.Base of "" is ".").
+func (p *Provider) Root() Range {
+	if p.held == nil {
+		return Range{path: p.root}
+	}
+	names, _ := keyNames(p.prefix, true) // checked by OpenDir
+	return Range{path: p.rootPath(), prefix: p.prefix, at: p.held, below: max(1, len(names))}
+}
+
+// rootPath names a held root's listed directory in messages: its key
+// below the held directory, "." for that directory itself.
+func (p *Provider) rootPath() string {
+	if p.prefix == "" {
+		return "."
+	}
+	return strings.TrimSuffix(p.prefix, "/")
+}
 
 // Stats returns the counters so far.
 func (p *Provider) Stats() Stats {
@@ -288,26 +396,39 @@ func (p *Provider) Stats() Stats {
 	s := p.stats
 	s.Samples = slices.Clone(s.Samples)
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
+	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
+	s.DirOpens.PeakKept, s.DirOpens.MaxKept = p.keep.peak.Load(), p.keep.limit
 	return s
 }
 
-// Expand lists one range.
-// Dispose releases a range that will never be expanded (a chunk's share of
-// its directory descriptor). It implements source.Disposer.
-func (p *Provider) Dispose(r Range) { disposeChunk(r) }
+// Dispose releases what a range that will never be expanded holds (a
+// stopped listing's). It implements source.Disposer.
+func (p *Provider) Dispose(r Range) {
+	p.release(r)
+}
 
+// release releases what a range holds once expanded or disposed: a chunk's
+// share of its directory's descriptor, a directory's reference on the one
+// it is opened from.
+func (p *Provider) release(r Range) {
+	disposeChunk(r)
+	r.at.release()
+}
+
+// Expand lists one range.
 func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, Entry]) error {
-	// A chunk's share of its descriptor is released however Expand ends,
-	// a cancellation before any work included: a range a worker has taken
-	// is no longer queued, so the order stage will not dispose it.
-	defer disposeChunk(r)
-	if ctx.Err() != nil {
+	// What the range holds is released however Expand ends, a cancellation
+	// before any work included: a range a worker has taken is no longer
+	// queued, so the order stage will not dispose it.
+	defer p.release(r)
+	var st Stats
+	st.unreadTo, _ = e.(source.Unreader)
+	if ctx.Err() != nil { // as if disposed
 		return ctx.Err()
 	}
 	if t, ok := e.(source.Subtreer); ok && r.chunk == nil && !p.file {
 		t.Subtree(r.prefix) // a directory's subtree is its subdirectories' ranges, its chunks and their continuations
 	}
-	var st Stats
 	var err error
 	if p.file {
 		err = p.expandFile(e, &st)
@@ -322,11 +443,80 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	return err
 }
 
+// unread reports a place the listing could not read and went on past, as
+// a worker meets it: the key of a directory or entry, and why, in the
+// listing contract's class (unreadReason). It reaches the Expand's
+// emitter (st.unreadTo: an order.UnreadSink's count passes it on), and
+// p.unreadTo, nil outside tests.
+func (p *Provider) unread(st *Stats, key string, reason error) {
+	if st.unreadTo != nil {
+		st.unreadTo.Unread(listing.Unread{Key: []byte(key), Reason: reason})
+	}
+	if p.unreadTo != nil {
+		p.unreadTo(key, reason)
+	}
+}
+
+// unreadReason is err, why an open, read or stat failed, beside its class
+// in the listing contract: a refusal (EACCES, EPERM) listing.ErrAuth;
+// another device than the root's listing.ErrOtherDevice; a symbolic link
+// where a directory was, which is never followed, listing.ErrNotDirectory:
+// what lies past it is not reached, never absent; a name the system
+// refuses as too long listing.ErrUnsupported, which asking again does not
+// change; an I/O error, and the tree changing under the listing (the entry
+// gone, or no longer a directory), listing.ErrUnavailable.
+func unreadReason(err error) error {
+	class := listing.ErrUnavailable
+	switch {
+	case errors.Is(err, errSymlink):
+		class = listing.ErrNotDirectory
+	case errors.Is(err, errOtherDevice):
+		class = listing.ErrOtherDevice
+	case errors.Is(err, fs.ErrPermission):
+		class = listing.ErrAuth
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		class = listing.ErrUnsupported
+	}
+	return fmt.Errorf("%w: %w", class, err)
+}
+
+// errOtherDevice: a directory opened below the root is on another device
+// than the root's (OneFilesystem).
+var errOtherDevice = errors.New("on another device than the root")
+
+// errSymlink: a name opened as a directory is a symbolic link, which the
+// walk never follows.
+var errSymlink = errors.New("a symbolic link, not followed")
+
+// errKeyTooLong is the Reason of an entry left out because its key passes
+// maxKeyBytes, a directory with its subtree.
+var errKeyTooLong = fmt.Errorf("%w: its key passes the limit of %d bytes", listing.ErrUnsupported, maxKeyBytes)
+
+// readFailed counts a directory read that failed: its enumeration ended
+// there.
+func (p *Provider) readFailed(r Range, st *Stats, err error) {
+	st.note(&st.ReadErrors, r.path, err)
+	p.unread(st, r.prefix, unreadReason(err))
+}
+
+// statFailed counts an entry left out because its stat failed (path names
+// it), unless it vanished: an entry gone is no longer part of the tree.
+func (p *Provider) statFailed(key, path string, st *Stats, err error) {
+	if errors.Is(err, fs.ErrNotExist) {
+		st.note(&st.Vanished, path, err)
+		return
+	}
+	st.note(&st.StatErrors, path, err)
+	p.unread(st, key, unreadReason(err))
+}
+
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
-// as a child range right after its DIR row. The run's own output (Skip) and
-// an entry whose key passes maxKeyBytes are dropped, a directory with its
-// subtree.
-func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
+// as a child range right after its DIR row, opened from d, the directory
+// read (dirFD.child). The run's own output (Skip) and an entry whose key
+// passes maxKeyBytes are dropped, a directory with its subtree. A
+// directory on another device (OneFilesystem) or pruned by the filters is
+// listed and not walked.
+func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
 	start := 0
 	for i := range rows {
 		row := &rows[i]
@@ -335,6 +525,7 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 			if long {
 				name := strings.TrimSuffix(row.Key[len(r.prefix):], "/")
 				st.note(&st.KeyTooLong, r.path+string(os.PathSeparator)+name, fmt.Errorf("its key of %d bytes passes the limit of %d", len(row.Key), maxKeyBytes))
+				p.unread(st, row.Key, errKeyTooLong)
 			} else {
 				st.Skipped++
 			}
@@ -351,9 +542,11 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		}
 		st.Dirs++
 		stop := p.otherDevice(row)
-		if stop {
+		switch {
+		case stop:
 			st.OtherDevice++
-		} else if p.prune != nil && p.prune(row.Key) {
+			p.unread(st, row.Key, unreadReason(errOtherDevice))
+		case p.prune != nil && p.prune(row.Key):
 			st.PrunedDirs++
 			stop = true
 		}
@@ -375,13 +568,15 @@ func (p *Provider) emit(r Range, rows []Row, e source.Emitter[Range, Entry], st 
 		// the emitter owns them then, and a filter may clear the DIR row.
 		// The key is a view of the directory's key arena: the child's
 		// prefix is a copy, so a queued subdirectory does not keep its
-		// parent's names alive.
+		// parent's names alive. Its reference on d is taken as it is handed
+		// on: Child owns it then, even when it fails.
 		key := row.Key
 		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}
 		if err := e.Rows(rows[start:end]); err != nil {
 			return err
 		}
 		start = i + 1
+		child.at, child.below = d.child()
 		if err := e.Child(child); err != nil {
 			return err
 		}
@@ -439,20 +634,35 @@ func sortRows(rows []Row) {
 // expandPortable lists a directory with os.File.ReadDir and a stat per
 // entry (statEntry).
 func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
-	f, ok, err := p.openChecked(ctx, r, st)
+	d, ok, err := p.openPortable(ctx, r, st)
 	if !ok {
 		return err
 	}
 	st.DirsRead++
-	defer f.Close() // statEntry and readlinkIn read relative to it (Linux, macOS)
-	ents, err := f.ReadDir(-1)
+	defer d.release() // statEntry and readlinkIn read relative to it (Linux, macOS); subdirectories take their own references
+	ents, err := d.f.ReadDir(-1)
 	if err != nil {
-		st.note(&st.ReadErrors, r.path, err)
+		p.readFailed(r, st, err)
 	}
+	rows, err := p.portableRows(ctx, r, d.f, ents, st)
+	if err != nil {
+		return err
+	}
+	if p.unsorted {
+		st.Unsorted++
+	} else {
+		sortRows(rows)
+	}
+	return p.emit(r, d, rows, e, st)
+}
+
+// portableRows stats ents, read from the directory f (statEntry), into
+// rows, leaving out an entry whose stat failed.
+func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents []fs.DirEntry, st *Stats) ([]Row, error) {
 	rows := make([]Row, 0, len(ents))
 	for i, d := range ents {
 		if i%1024 == 1023 && ctx.Err() != nil { // stat-heavy loop: stay cancellable
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		name := d.Name()
 		row := Row{Key: r.prefix + name}
@@ -465,11 +675,11 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 					st.FilteredStatErrors++
 					continue
 				}
-				if errors.Is(err, fs.ErrNotExist) {
-					st.note(&st.Vanished, path, err)
-				} else {
-					st.note(&st.StatErrors, path, err)
+				key := row.Key
+				if d.IsDir() {
+					key += "/"
 				}
+				p.statFailed(key, path, st, err)
 				continue
 			}
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
@@ -485,12 +695,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 		}
 		rows = append(rows, row)
 	}
-	if p.unsorted {
-		st.Unsorted++
-	} else {
-		sortRows(rows)
-	}
-	return p.emit(r, rows, e, st)
+	return rows, nil
 }
 
 // leftOut says the filters leave out the entry at key (its name below the
@@ -514,48 +719,12 @@ func (p *Provider) leftOut(key string, dir, known bool) bool {
 	return asFile
 }
 
-// unreadableDir tells the run (registry.Env.Unreadable) of a directory
+// unreadableDir tells the run (Opened.Begin's unreadable) of a directory
 // below the root that could not be opened.
 func (p *Provider) unreadableDir(r Range) {
 	if p.unreadable != nil && r.prefix != "" {
 		p.unreadable(r.prefix)
 	}
-}
-
-// openChecked opens a directory by path. Below the root it then checks that
-// the path is still a real directory (Lstat: not a symlink) and the same
-// object as the opened file (fstat): best-effort protection against a
-// directory swapped for a symlink between listing and open. A path the
-// kernel refuses by its length is opened below the root instead
-// (openLong), which follows no symlink at all. A directory it does not
-// open is accounted for, and err is the context's error when the run
-// stopped.
-func (p *Provider) openChecked(ctx context.Context, r Range, st *Stats) (f *os.File, ok bool, err error) {
-	f, err = os.Open(r.path)
-	if tooLong(err) {
-		var fd int
-		if fd, ok, err = p.openLong(ctx, r, st); !ok {
-			return nil, false, err
-		}
-		return os.NewFile(uintptr(fd), r.path), true, nil
-	}
-	if err != nil {
-		st.note(&st.OpenErrors, r.path, err)
-		p.unreadableDir(r)
-		return nil, false, nil
-	}
-	if r.prefix == "" {
-		return f, true, nil
-	}
-	ffi, err1 := f.Stat()
-	lfi, err2 := os.Lstat(r.path)
-	if err1 != nil || err2 != nil || !ffi.IsDir() || !lfi.IsDir() || lfi.Mode()&fs.ModeSymlink != 0 || !os.SameFile(ffi, lfi) {
-		f.Close()
-		st.note(&st.Unsafe, r.path, errors.New("directory changed before open"))
-		p.unreadableDir(r)
-		return nil, false, nil
-	}
-	return f, true, nil
 }
 
 // kindOf maps Go file mode type bits to a kind.

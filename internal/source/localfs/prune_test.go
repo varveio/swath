@@ -22,6 +22,7 @@ import (
 	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/order"
+	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 )
 
@@ -321,7 +322,7 @@ func TestPruneDoesNotSubmitChild(t *testing.T) {
 		rows := []Row{{Key: "drop/", Data: Entry{Kind: KindDir}}, {Key: "drop0/", Data: Entry{Kind: KindDir}}, {Key: "tail", Data: Entry{Kind: KindFile}}}
 		em := &pruneEmitter{}
 		var stats Stats
-		if err := p.emit(p.Root(), rows, em, &stats); err != nil {
+		if err := emitRoot(t, p, rows, em, &stats); err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Equal(em.children, []string{"drop0/"}) {
@@ -345,7 +346,25 @@ func (e *pruneEmitter) Rows(rows []Row) error {
 	}
 	return nil
 }
-func (e *pruneEmitter) Child(r Range) error { e.children = append(e.children, r.prefix); return nil }
+
+// Child records r and releases what it holds: nothing expands it.
+func (e *pruneEmitter) Child(r Range) error {
+	e.children = append(e.children, r.prefix)
+	r.at.release()
+	return nil
+}
+
+// emitRoot hands rows to e as the listing of p's root (emit), opened as a
+// walk opens it.
+func emitRoot(t *testing.T, p *Provider, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
+	t.Helper()
+	d, ok, err := p.openPortable(context.Background(), p.Root(), st)
+	if !ok {
+		t.Fatalf("the root: %v, %+v", err, st)
+	}
+	defer d.release()
+	return p.emit(p.Root(), d, rows, e, st)
+}
 
 func TestPruneWideDirectory(t *testing.T) {
 	root := t.TempDir()
@@ -561,7 +580,7 @@ func TestPruneOtherDevicePrecedence(t *testing.T) {
 		}
 		em := &pruneEmitter{}
 		var stats Stats
-		if err := p.emit(p.Root(), rows, em, &stats); err != nil {
+		if err := emitRoot(t, p, rows, em, &stats); err != nil {
 			t.Fatal(err)
 		}
 		want := []string{"mount/", "tail"}

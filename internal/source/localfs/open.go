@@ -174,8 +174,12 @@ func (o *Opened) Listed() int64 {
 // a text file's scratch) is located by identity, where the run writes into
 // it, and left out with its subtree; any other path (a text file, its
 // temporary) is left out by its name in its directory, which a commit
-// renames over, existing yet or not.
+// renames over, existing yet or not. A held root (OpenDir), which has no
+// path, refuses it.
 func (o *Opened) Exclude(path string) error {
+	if o.p.held != nil {
+		return errors.New("localfs: a held root has no path to locate an output in")
+	}
 	key, err := o.locate(path)
 	if err != nil {
 		return fmt.Errorf("locate output: %w", err)
