@@ -27,6 +27,9 @@
 // location that changes meanwhile. A call that fails returns an error of
 // one of package listing's classes, read from the failure as the swath
 // command reads it for its outcome, or ctx's own error once ctx has ended.
+// A walk has two exceptions: an error returned by the caller's own emit,
+// which Walk returns unchanged, and a panic recovered inside the walk,
+// which Walk returns as an error of no class.
 // Error messages pass through swath's redaction (objfile.RedactError) and
 // carry no credential. Every request a call sends, retries included, is
 // reported to the objfile.Observer on ctx (objfile.WithObserver): a page,

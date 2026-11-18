@@ -8,8 +8,10 @@ import "errors"
 // The error classes. A call that fails returns an error that matches its
 // class with errors.Is, and may wrap a cause beside it. An answer's
 // unknown key is a LookupUnknown with its class as the Reason, and a place
-// a walk could not read an Unread with its class as the Reason. The errors
-// of an ended ctx are returned as they are, matching no class.
+// a walk could not read an Unread with its class as the Reason. These
+// errors match no class: an ended ctx's errors and an error returned by
+// the caller's own emit, which Walk returns as they are, and a panic a live
+// walk recovered inside its workers, which Walk returns as an error.
 var (
 	// ErrInvalidRequest is a request that breaks this contract: a key or
 	// prefix of the wrong form, a NUL in a key, a Limit that is not

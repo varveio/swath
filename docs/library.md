@@ -164,7 +164,9 @@ as swath's command reads it for its outcome: `ErrAuth` for credentials that do n
 `ErrNotFound` for a bucket that is not there, `ErrInvalidRequest` for a request the contract refuses and for a
 bucket that is there but in another region than the source's (the message names the bucket's region),
 `ErrUnavailable` once the client's retries are spent (throttling included), `ErrInvalidPage`, `ErrInvalidToken` and
-`ErrUnsupported`. A call whose context ends returns the context's error. Error messages pass through swath's redaction and carry no credential.
+`ErrUnsupported`. A call whose context ends returns the context's error. A walk has two exceptions: an error your
+function returns, which `Walk` returns unchanged, and a panic inside the walk, which `Walk` recovers and returns as
+an error of no class. Error messages pass through swath's redaction and carry no credential.
 
 To count or trace the requests a call sends, put an `objfile.Observer` on its context (`objfile.WithObserver`), as
 for dataset reads: every attempt, retries included, is reported to it, a page's and each of a walk's as a list
