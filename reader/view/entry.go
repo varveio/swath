@@ -175,12 +175,32 @@ func (d *decoder) size(r row, slot int) (*int64, error) {
 	return d.slab.int64(v.Int64()), nil
 }
 
+// time reads a timestamp, which is of a year RFC 3339 can carry.
 func (d *decoder) time(r row, slot int) (*time.Time, error) {
 	v, ok, err := d.value(r, slot, seekparquet.KindInt64, false)
 	if !ok {
 		return nil, err
 	}
+	if !dated(v.Int64()) {
+		return nil, d.fault(r, reader.KindRow, slot, undated)
+	}
 	return d.slab.time(time.UnixMicro(v.Int64()).UTC()), nil
+}
+
+// The microseconds since the Unix epoch of the first instant of year 1
+// and of year 10000, in UTC.
+var (
+	firstMicro = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+	pastMicro  = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+)
+
+// undated is why a timestamp outside the years 1 to 9999 is refused.
+const undated = "a time outside the years 1 to 9999, which RFC 3339 carries"
+
+// dated reports whether micros, a timestamp in microseconds since the
+// Unix epoch, falls in the years 1 to 9999 (UTC).
+func dated(micros int64) bool {
+	return firstMicro <= micros && micros < pastMicro
 }
 
 func (d *decoder) class(r row) (*string, error) {
@@ -267,7 +287,7 @@ func room[T any](s []T, n int) []T {
 
 func (s *slab) int64(v int64) *int64 {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.ints = append(s.ints, v)
 	return &s.ints[len(s.ints)-1]
@@ -275,7 +295,7 @@ func (s *slab) int64(v int64) *int64 {
 
 func (s *slab) uint64(v uint64) *uint64 {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.words = append(s.words, v)
 	return &s.words[len(s.words)-1]
@@ -283,7 +303,7 @@ func (s *slab) uint64(v uint64) *uint64 {
 
 func (s *slab) uint32(v uint32) *uint32 {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.links = append(s.links, v)
 	return &s.links[len(s.links)-1]
@@ -291,7 +311,7 @@ func (s *slab) uint32(v uint32) *uint32 {
 
 func (s *slab) time(v time.Time) *time.Time {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.times = append(s.times, v)
 	return &s.times[len(s.times)-1]
