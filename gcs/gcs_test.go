@@ -132,8 +132,8 @@ func TestPageOrderAtLimitOne(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%q, limit %d: %v", prefix, limit, err)
 				}
-				if len(page.Entries) > limit || page.Order != listing.OrderBytes || page.Evidence.Stop != listing.StopCompleted {
-					t.Fatalf("%q, limit %d: %d entries, order %q, stop %q", prefix, limit, len(page.Entries), page.Order, page.Evidence.Stop)
+				if len(page.Entries) > limit || page.Evidence.Stop != listing.StopCompleted {
+					t.Fatalf("%q, limit %d: %d entries, stop %q", prefix, limit, len(page.Entries), page.Evidence.Stop)
 				}
 				if page.Self != nil {
 					if self != "" || page.Self.Kind != listing.KindObject || page.Self.Size == nil || *page.Self.Size != int64(len(page.Self.Key)) {

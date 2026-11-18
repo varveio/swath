@@ -144,8 +144,8 @@ func page(t *testing.T, src *swath.Source, prefix string, limit int) (self strin
 		if err != nil {
 			return self, children, err
 		}
-		if len(p.Entries) > limit || p.Order != listing.OrderBytes || p.Evidence.Stop != listing.StopCompleted {
-			t.Fatalf("%q, limit %d: %d entries, order %q, stop %q", prefix, limit, len(p.Entries), p.Order, p.Evidence.Stop)
+		if len(p.Entries) > limit || p.Evidence.Stop != listing.StopCompleted {
+			t.Fatalf("%q, limit %d: %d entries, stop %q", prefix, limit, len(p.Entries), p.Evidence.Stop)
 		}
 		if p.Self != nil {
 			if self != "" || p.Self.Kind != listing.KindObject {

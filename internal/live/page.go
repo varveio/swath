@@ -19,7 +19,7 @@ import (
 )
 
 // Page returns the next children of req.Prefix, one level by "/", in byte
-// order (OrderBytes), as package listing states: one delimiter listing,
+// order, as package listing states: one delimiter listing,
 // the store's retries included, and no request per child. Page checks
 // every page before returning it as the contract states, and a truncated
 // answer whose continuation token is missing is ErrInvalidPage too. A
@@ -42,7 +42,7 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 	finished := time.Now()
 	if err != nil {
 		if timeUp(ctx, op) {
-			return listing.Page{Order: listing.OrderBytes, Next: req.Token, Evidence: evidence(started, finished, listing.StopTimeBudget)}, nil
+			return listing.Page{Next: req.Token, Evidence: evidence(started, finished, listing.StopTimeBudget)}, nil
 		}
 		return listing.Page{}, failure(ctx, err)
 	}
@@ -84,7 +84,7 @@ func (s *Source) checkPage(req listing.PageRequest) error {
 // order, and the entry at exactly prefix as Self, which a store may add
 // beyond them. It returns the page and the level's last key after it.
 func (s *Source) level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, error) {
-	page := listing.Page{Order: listing.OrderBytes}
+	page := listing.Page{}
 	objects, prefixes := lvl.Objects, lvl.Prefixes
 	page.Entries = make([]listing.Entry, 0, len(objects)+len(prefixes))
 	for len(objects) > 0 || len(prefixes) > 0 {
