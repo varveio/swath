@@ -6,6 +6,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/varveio/swath/internal/live"
@@ -65,7 +66,8 @@ var addressable = map[string]struct {
 // gs://BUCKET or az://ACCOUNT/CONTAINER, with at most one trailing slash.
 // An address names a bucket or container only: a key prefix goes in each
 // request, and an address with one is listing.ErrInvalidRequest, as is an
-// address of a scheme swath does not know.
+// address of a scheme swath does not know, with an empty name, or with a
+// query or fragment.
 //
 // Open opens the providers compiled into the program: a program links
 // one by importing its package, such as
@@ -80,7 +82,8 @@ func Open(ctx context.Context, address string, opts Options) (*Source, error) {
 	scheme, location, ok := strings.Cut(address, "://")
 	p, known := addressable[scheme]
 	location = strings.TrimSuffix(location, "/")
-	if !ok || !known || strings.Count(location, "/") != p.segments-1 {
+	parts := strings.Split(location, "/")
+	if !ok || !known || len(parts) != p.segments || slices.Contains(parts, "") || strings.ContainsAny(location, "?#") {
 		return nil, objfile.RedactError(fmt.Errorf("%w: address %q: not s3://BUCKET, gs://BUCKET or az://ACCOUNT/CONTAINER (a key prefix goes in each request)", listing.ErrInvalidRequest, address))
 	}
 

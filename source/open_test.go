@@ -51,10 +51,24 @@ func TestOpenUnlinked(t *testing.T) {
 	}
 }
 
-// TestOpenInvalid: an address of an unknown scheme, with a key prefix, or
-// of the wrong shape is ErrInvalidRequest.
+// TestOpenInvalid: an address of an unknown scheme, with a key prefix, an
+// empty name, a query or fragment, or of the wrong shape is
+// ErrInvalidRequest, whether or not its provider is linked.
 func TestOpenInvalid(t *testing.T) {
-	for _, address := range []string{"ftp://bkt", "bkt", "s3://bkt/logs/", "gs://bkt/a", "az://account", "az://account/container/logs"} {
+	for _, address := range []string{
+		"ftp://bkt",
+		"bkt",
+		"s3://bkt/logs/",
+		"gs://bkt/a",
+		"az://account",
+		"az://account/container/logs",
+		"gs://",
+		"s3:///",
+		"az:///container",
+		"az://account/",
+		"gs://bkt?userProject=p",
+		"s3://bkt#frag",
+	} {
 		if _, err := source.Open(context.Background(), address, source.Options{}); !errors.Is(err, listing.ErrInvalidRequest) {
 			t.Errorf("%s: err %v, want ErrInvalidRequest", address, err)
 		}
