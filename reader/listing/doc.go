@@ -1,8 +1,8 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package listing is the contract of the four questions swath answers about
-// a listed location, from a live source or from an opened inventory: their
+// Package listing is the contract of the questions swath answers about a
+// listed location, from a live source or from an opened inventory: their
 // requests, results, entries, evidence and error classes. It holds types
 // only and imports nothing beyond the standard library, so a program can
 // name the contract without linking a lister, a cloud SDK or a Parquet
@@ -10,10 +10,11 @@
 //
 // The API is experimental: it may change in any release.
 //
-// # The four questions
+// # The questions
 //
-// Both backends have this method set. The package declares no interface for
-// it: a consumer declares the one it needs.
+// Both backends have the first three methods; only an inventory has
+// Summarize. The package declares no interface for them: a consumer
+// declares the one it needs.
 //
 //	Page(ctx context.Context, req PageRequest) (Page, error)
 //	Lookup(ctx context.Context, key []byte) (LookupResult, error)
@@ -37,11 +38,10 @@
 // WalkSummary of what it handed on. A live walk spills nothing to disk and
 // retains no key, nor any Unread, after it hands it on.
 //
-// Summarize counts the entries at or under each of several targets and sums
-// their sizes, space on disk and newest change, one TargetSummary per target,
-// in the order of targets, each saying whether it is complete and how many
-// places under it were not read. A live source looks up each target and
-// walks each subtree on its own; an inventory aggregates key ranges.
+// Summarize counts an inventory's entries at or under each of several
+// targets and sums their sizes, space on disk and newest change, one
+// TargetSummary per target, in the order of targets, each saying whether
+// it is complete. It aggregates key ranges.
 //
 // # Keys
 //

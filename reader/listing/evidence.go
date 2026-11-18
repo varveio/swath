@@ -40,8 +40,8 @@ type Evidence struct {
 	// keys it did not record; nil when that count is not known. While it is
 	// not 0, no key is proven absent and no walk is complete. A live answer
 	// that completed has 0: a walk hands on every place it could not read
-	// as an Unread, and Summarize counts them; one that did not complete,
-	// an unknown Lookup included, has nil. An
+	// as an Unread; one that did not complete, an unknown Lookup included,
+	// has nil. An
 	// inventory's is a count only when its manifest proves the listing
 	// reached the end of its scope and records no filter and no exclusion:
 	// then it is the manifest's count of unreadable entries. Anything else

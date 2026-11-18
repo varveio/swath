@@ -19,10 +19,10 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Inventory answers the four questions from one opened dataset. It is
-// immutable and safe for concurrent use. An inventory OpenDir returns owns
-// its dataset, which Close closes; one Open returns does not, and the
-// caller closes the reader.Dataset after its last call.
+// Inventory answers the questions of package listing from one opened
+// dataset. It is immutable and safe for concurrent use. An inventory
+// OpenDir returns owns its dataset, which Close closes; one Open returns
+// does not, and the caller closes the reader.Dataset after its last call.
 type Inventory struct {
 	sp *seekparquet.Dataset
 	// dataset is the dataset OpenDir opened; nil for Open's.

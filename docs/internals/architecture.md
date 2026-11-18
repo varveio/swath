@@ -75,7 +75,7 @@ The list clients are built on the vendors' SDK service clients; what is the SDK'
 [clients.md](clients.md).
 
 **The library** (experimental, [library.md](../library.md)). The root package `github.com/varveio/swath` holds
-`Source`, an opened live location that answers the listing contract's Page, Lookup, Walk and Summarize (`reader/listing`) with the
+`Source`, an opened live location that answers the listing contract's Page, Lookup and Walk (`reader/listing`) with the
 checks and page tokens every object store's pages share; it links no provider and no cloud SDK. A provider's
 public package opens one with typed options and no flags: `github.com/varveio/swath/s3` (`s3.Open`) over
 `internal/source/s3.OpenLive`, whose one-level call is one delimiter ListObjectsV2 and whose lookup is HeadObject,
@@ -99,8 +99,7 @@ and runs the order stage's unordered count into the walk's sink (`live.Count`: `
 other run's before the sink sees it, so no key reaches it twice). The count's workers hand that sink batches of
 entries, which it checks and hands to the caller's function one at a time from the goroutine that called
 `Walk`, each worker waiting until its batch is taken; the extents not read reach it through the count's
-`order.UnreadSink`. `Source.Summarize` walks each subtree target and looks up each exact target, one at a time,
-each within the whole budget.
+`order.UnreadSink`.
 
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
@@ -118,7 +117,7 @@ inherit the lister's dependencies: `reader` (`github.com/varveio/swath/reader`: 
 columns, the manifest's `extensions.swath`, typed rows decoded from SeekParquet rows, and a `Dataset` that opens a
 dataset, hands on its metadata, checks its schema, and exposes the underlying SeekParquet dataset for reads; the SeekParquet module
 and the standard library only; [../../reader/README.md](../../reader/README.md)), with two experimental packages:
-`reader/listing`, the contract of the four questions (Page, Lookup, Walk, Summarize) as types over the standard
+`reader/listing`, the contract of the questions (Page, Lookup, Walk, and an inventory's Summarize) as types over the standard
 library only, and `reader/view`, which answers them from an opened dataset through SeekParquet and `objfile` (a dataset in an object
 store opened as files read by byte range, pinned across opens and process restarts, by URI with default
 credentials through `objfile/remote`, and its create-only write side; [../../objfile/README.md](../../objfile/README.md)). The root

@@ -34,11 +34,11 @@ Notable changes per release. The human summary of the current release is in the
 - The root module `github.com/varveio/swath` is importable: its `go.mod` requires `reader` and `objfile` by
   released version and carries no `replace`. `go.work` at the repository root joins the three modules, so a
   build in a checkout compiles the local `reader/` and `objfile/`.
-- `reader/listing` (experimental: it may change in any release) is the contract of the four questions swath
-  answers about a listed location: `Page`, `Lookup`, `Walk` and `Summarize`, their requests and results, the
+- `reader/listing` (experimental: it may change in any release) is the contract of the questions swath
+  answers about a listed location: `Page`, `Lookup` and `Walk`, and an inventory's `Summarize`, their requests and results, the
   common `Entry`, the `Evidence` every answer carries, the `Unread` places a walk could not read, and the error
   classes. It holds types only and imports nothing beyond the standard library.
-- `reader/view` (experimental) answers those four questions from an opened dataset, an inventory (`view.Open`):
+- `reader/view` (experimental) answers those questions from an opened dataset, an inventory (`view.Open`):
   pages with opaque tokens and optional child totals, lookups, walks and summaries, every answer's
   evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
   nothing in it was unreadable, and never at or under a local entry of unknown kind
@@ -52,22 +52,17 @@ Notable changes per release. The human summary of the current release is in the
 - A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them, and its
   `MaxDuration` bounds its time; a live page gives no child totals (`ErrUnsupported`). A lookup left unknown
   carries evidence that is not completed.
-- The root package's `Source` also walks and summarizes live on S3, GCS, Azure Blob Storage (a flat namespace
+- The root package's `Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
   only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
   parallel; it sets no limit, and a caller stops it by cancelling its context, when it returns the context's error
   and a summary that says it did not finish. Each place a local walk cannot read reaches the callback as an
-  `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them.
-  `Summarize` answers each target on its own, its state by a lookup and a subtree's totals by a walk, with its
-  objects, bytes and newest time, whether it is complete, and how many places under it were not read
+  `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them
   ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
 - `WalkSummary.Complete` says a walk read everything under its prefix: it finished, handed on no `Unread` and,
   over an inventory, the inventory's coverage is complete.
 - `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
   live source leaves it nil.
-- A live `Summarize` subtree target whose walk finds no directory to enter, because its key is, or lies behind, a
-  symbolic link or names another kind (`ErrNotDirectory`), is unknown with that reason and incomplete; the other
-  targets are answered.
 - An inventory page counts each child's totals on its own: when its `MaxDuration` ends while they are counted, the
   page keeps its entries, the totals counted stand, only those not yet counted are nil, and `Evidence.Stop` is
   `time_budget`.

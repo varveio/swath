@@ -90,35 +90,3 @@ func Example_walk() {
 		fmt.Printf("%d objects, %d bytes\n", objects, size)
 	}
 }
-
-// Summarize a prefix, a prefix nested in it and one key: the nested one is
-// counted in full by a walk of its own, and the key is a lookup.
-func Example_summarize() {
-	ctx := context.Background()
-	src, err := s3.Open(ctx, "example-bucket", s3.Options{Region: "eu-west-1"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer src.Close()
-
-	targets := []listing.Target{
-		{Key: []byte("logs/"), Subtree: true},
-		{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
-		{Key: []byte("README")},                    // exact: a lookup
-	}
-	sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{})
-	if err != nil {
-		log.Fatal(err)
-	}
-	for i, s := range sums {
-		fmt.Printf("%s: %s, %d objects", targets[i].Key, s.State, s.Entries)
-		if s.Bytes != nil {
-			fmt.Printf(", %d bytes", *s.Bytes)
-		}
-		if !s.Complete {
-			fmt.Print(", at least: not all of it was read")
-		}
-		fmt.Println()
-	}
-	fmt.Println("the call:", ev.Stop)
-}

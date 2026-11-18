@@ -5,11 +5,12 @@ package listing
 
 import "time"
 
-// Target is one thing to summarize: the entry at exactly Key, or, with
-// Subtree, every entry whose key begins with Key, Key's own included. An
-// object at exactly "a/" and everything under "a/" are different targets.
-// On an object store a subtree's Key is any key prefix; on a local source
-// it is empty, for the root, or a directory's key.
+// Target is one thing an inventory's Summarize counts: the entry at
+// exactly Key, or, with Subtree, every entry whose key begins with Key,
+// Key's own included. An object at exactly "a/" and everything under "a/"
+// are different targets. In an object store's inventory a subtree's Key is
+// any key prefix; in a local one it is empty, for the root, or a
+// directory's key.
 type Target struct {
 	// Key is the target's key.
 	Key []byte
@@ -44,7 +45,7 @@ type Totals struct {
 
 // TargetSummary is one target's answer. It says what the target's key
 // itself is, so that zero counted entries tells an empty directory from a
-// symbolic link, an absent key and an unread one, and whether its totals
+// symbolic link, an absent key and an unknown one, and whether its totals
 // cover everything at or under it.
 type TargetSummary struct {
 	// State is what is at exactly the target's Key, as Lookup answers it.
@@ -59,11 +60,7 @@ type TargetSummary struct {
 	// cover only what was read.
 	Totals
 	// Complete says every entry at or under the target was read: its own
-	// entry's state is known (the root's, which is no entry, excepted), no
-	// place under it went unread, and the source has no unlocated gap.
+	// entry's state is known (the root's, which is no entry, excepted) and
+	// the inventory has no unlocated gap.
 	Complete bool
-	// Unread counts the places under the target that the call could not
-	// read and went on past, as a Walk of it hands them on. Walk names
-	// them.
-	Unread int64
 }

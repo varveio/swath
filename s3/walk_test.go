@@ -244,69 +244,8 @@ func TestWalkRefuses(t *testing.T) {
 			t.Errorf("%s: %v, want %v", name, err, c.want)
 		}
 	}
-	if _, _, err := src.Summarize(context.Background(), []listing.Target{{Key: nil}}, listing.SummaryOptions{}); !errors.Is(err, listing.ErrInvalidRequest) {
-		t.Errorf("summarize an empty exact key: %v", err)
-	}
 	if n := srv.requests.Load(); n != 0 {
 		t.Errorf("%d requests", n)
-	}
-}
-
-// truth is what the targets of keys hold: each subtree's or exact key's
-// count and bytes, the size of each object its key's length.
-func truth(keys []string, t listing.Target) (n, size int64) {
-	for _, k := range keys {
-		if k == string(t.Key) || t.Subtree && strings.HasPrefix(k, string(t.Key)) {
-			n++
-			size += int64(len(k))
-		}
-	}
-	return n, size
-}
-
-// TestSummarize: nested, repeated and disjoint subtree targets are each
-// counted in full, each by a walk of its own; each says what is at its own
-// key; an exact target is its own entry (gofakes3's HEAD answer names no
-// time), or absent.
-func TestSummarize(t *testing.T) {
-	s3test.NoCredentials(t)
-	keys := walkKeys()
-	endpoint, srv := serveKeys(t, keys, 0)
-	src := open(t, endpoint, s3test.Name)
-
-	targets := []listing.Target{
-		{Key: []byte("p03/"), Subtree: true},
-		{Key: []byte("p0"), Subtree: true},
-		{Key: []byte("p03/obj-0000"), Subtree: true},
-		{Key: []byte("p11/"), Subtree: true},
-		{Key: []byte("p03/"), Subtree: true},
-		{Key: []byte("p03/"), Subtree: false},
-		{Key: []byte("p03/missing"), Subtree: false},
-		{Key: []byte("zz/"), Subtree: true},
-	}
-	states := []listing.LookupState{listing.LookupPresent, listing.LookupAbsent, listing.LookupAbsent, listing.LookupAbsent,
-		listing.LookupPresent, listing.LookupPresent, listing.LookupAbsent, listing.LookupAbsent}
-	out, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
-	if err != nil || ev.Stop != listing.StopCompleted || len(out) != len(targets) {
-		t.Fatalf("%v, %+v, %d answers", err, ev, len(out))
-	}
-	for i, ts := range out {
-		n, size := truth(keys, targets[i])
-		if ts.State != states[i] || ts.Entries != n || ts.Bytes == nil || *ts.Bytes != size || ts.Unread != 0 || !ts.Complete {
-			t.Errorf("%q subtree=%v: %v %v, %d entries, bytes %v, unread %d, complete %t; want %v, %d, %d",
-				targets[i].Key, targets[i].Subtree, ts.State, ts.Reason, ts.Entries, ts.Bytes, ts.Unread, ts.Complete, states[i], n, size)
-		}
-		if targets[i].Subtree && (n > 0) != (ts.Newest != nil) || ts.State == listing.LookupPresent && (ts.Self == nil || string(ts.Self.Key) != "p03/") {
-			t.Errorf("%q: newest %v, self %+v", targets[i].Key, ts.Newest, ts.Self)
-		}
-	}
-	if srv.starts.Load() == 0 && srv.requests.Load() > 30 {
-		t.Errorf("%d requests", srv.requests.Load())
-	}
-
-	root, _, err := src.Summarize(context.Background(), []listing.Target{{Subtree: true}}, listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile}})
-	if err != nil || root[0].State != listing.LookupUnknown || root[0].Reason == nil || root[0].Entries != 0 || *root[0].Bytes != 0 {
-		t.Errorf("the root, counting files: %+v, %v", root, err)
 	}
 }
 
@@ -331,7 +270,7 @@ func TestWrongRegion(t *testing.T) {
 }
 
 // TestWalkRefusesObjectWithoutSize: an object listed without a size is
-// ErrInvalidPage to a walk and a Summarize, never a size of zero.
+// ErrInvalidPage to a walk, never a size of zero.
 func TestWalkRefusesObjectWithoutSize(t *testing.T) {
 	s3test.NoCredentials(t)
 	endpoint := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -343,9 +282,5 @@ func TestWalkRefusesObjectWithoutSize(t *testing.T) {
 	emit := func(listing.WalkBatch) error { return nil }
 	if _, err := src.Walk(context.Background(), listing.WalkRequest{Prefix: []byte("a/")}, emit); !errors.Is(err, listing.ErrInvalidPage) {
 		t.Errorf("walk: %v", err)
-	}
-	_, _, err := src.Summarize(context.Background(), []listing.Target{{Key: []byte("a/"), Subtree: true}}, listing.SummaryOptions{})
-	if !errors.Is(err, listing.ErrInvalidPage) {
-		t.Errorf("summarize: %v", err)
 	}
 }

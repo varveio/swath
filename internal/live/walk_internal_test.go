@@ -54,8 +54,7 @@ func (f failing) Walk(_ context.Context, w Walk, sink Sink) error {
 // TestWalkStreamsUnread: a walk hands emit every place it could not read,
 // as it meets each, keeps none of them, and counts them; the heap a walk
 // of 20,000 such places holds at its end is no larger, within noise, than
-// a walk of 200's. A Summarize over it counts them, and its target is not
-// complete.
+// a walk of 200's.
 func TestWalkStreamsUnread(t *testing.T) {
 	held := func(n int) uint64 {
 		least := ^uint64(0)
@@ -82,12 +81,6 @@ func TestWalkStreamsUnread(t *testing.T) {
 	few, many := held(200), held(20_000)
 	if many > few && many-few > 256<<10 {
 		t.Errorf("the heap at the end of the walk grew by %d bytes from 200 places to 20,000", many-few)
-	}
-
-	src := &Source{store: failing{n: 3}}
-	out, ev, err := src.Summarize(context.Background(), []listing.Target{{Key: []byte("b/"), Subtree: true}}, listing.SummaryOptions{})
-	if err != nil || ev.Stop != listing.StopCompleted || out[0].Unread != 3 || out[0].Complete || out[0].State != listing.LookupAbsent {
-		t.Fatalf("summary %+v, evidence %+v, %v", out[0], ev, err)
 	}
 }
 

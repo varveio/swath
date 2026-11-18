@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package view answers the four questions of package listing (Page, Lookup,
+// Package view answers the questions of package listing (Page, Lookup,
 // Walk and Summarize) from one opened swath dataset: an inventory. It plans
 // and checks the questions, and SeekParquet executes them (Dataset.Page,
 // Plan, Scan and AggregateRows); it reads a row's columns into the

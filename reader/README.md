@@ -140,10 +140,10 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
 
 ## The listing contract
 
-The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the four questions
-swath answers about a listed location, from a live source or from an opened inventory: Page (the next children
-of a prefix), Lookup (what is at exactly one key), Walk (every entry under a prefix) and Summarize (count, bytes,
-space on disk and newest change under each of several targets). It defines their requests and results, the
+The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the questions swath
+answers about a listed location, from a live source or from an opened inventory: Page (the next children of a
+prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
+(count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
 common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope, unlocated gaps and
 whether the call completed), the `Unread` places a live walk could not read, and the error classes.
 It holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
@@ -151,7 +151,7 @@ any release.
 
 ## The inventory view
 
-The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those four questions from an opened
+The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those questions from an opened
 dataset. `view.OpenDir(ctx, dir)` opens a local dataset directory, checks its parts' schemas and returns the
 inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller opened and owns, and reads nothing. Both
 refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with

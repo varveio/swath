@@ -77,8 +77,8 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 				if target.Subtree {
 					keep = func(r rec) bool { return strings.HasPrefix(r.key, key) }
 				}
-				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || s.Unread != 0 || !s.Complete {
-					t.Fatalf("%s %v: %q subtree %t = %s, unread %d, complete %t; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, s.Complete, showTotals(want))
+				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || !s.Complete {
+					t.Fatalf("%s %v: %q subtree %t = %s, complete %t; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Complete, showTotals(want))
 				}
 			}
 		}

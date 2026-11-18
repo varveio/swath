@@ -633,10 +633,11 @@ func tree(t *testing.T) (root string, locked bool) {
 	return root, true
 }
 
-// walkDir is what filepath.WalkDir finds below root: every key, a
-// directory's ending in "/", and the files' count and bytes.
-func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
+// walkDir is every key filepath.WalkDir finds below root, a directory's
+// ending in "/".
+func walkDir(t *testing.T, root string) []string {
 	t.Helper()
+	var keys []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil || p == root {
 			return nil // a directory it cannot read is reported again, after its own entry
@@ -646,21 +647,13 @@ func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
 			key += "/"
 		}
 		keys = append(keys, key)
-		if d.Type().IsRegular() {
-			info, err := d.Info()
-			if err != nil {
-				t.Fatal(err)
-			}
-			files++
-			bytes += info.Size()
-		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	slices.Sort(keys)
-	return keys, files, bytes
+	return keys
 }
 
 // TestWalk: a walk of the root, and of a directory below it, hands on
@@ -671,7 +664,7 @@ func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
 func TestWalk(t *testing.T) {
 	root, locked := tree(t)
 	src := open(t, hold(t, root))
-	want, _, _ := walkDir(t, root)
+	want := walkDir(t, root)
 	procs := runtime.GOMAXPROCS(0)
 	defer func() {
 		if now := runtime.GOMAXPROCS(0); now != procs {
@@ -734,72 +727,5 @@ func TestWalkCancelled(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Complete || sum.Entries == 0 {
 		t.Fatalf("%+v, %v", sum, err)
-	}
-}
-
-// TestSummarize: a target's totals are what filepath.WalkDir counts
-// under it; one with a directory it may not read under it is not
-// complete and counts it, one without is complete; a subtree's state is a
-// lookup of its directory.
-func TestSummarize(t *testing.T) {
-	root, locked := tree(t)
-	src := open(t, hold(t, root))
-	_, files, bytes := walkDir(t, root)
-	targets := []listing.Target{{Subtree: true}, {Key: []byte("d/"), Subtree: true}, {Key: []byte("empty/"), Subtree: true}, {Key: []byte("nope/"), Subtree: true}, {Key: []byte("a.txt")}}
-	sums, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
-	if err != nil || ev.Stop != listing.StopCompleted {
-		t.Fatalf("%+v, %v", ev, err)
-	}
-
-	if s := sums[0]; s.Entries != files || s.Bytes == nil || *s.Bytes != bytes || s.Complete == locked || s.Unread != map[bool]int64{true: 1}[locked] {
-		t.Errorf("the root: %d files, bytes %v, complete %t, unread %d; want %d, %d", s.Entries, s.Bytes, s.Complete, s.Unread, files, bytes)
-	}
-	for i, want := range []struct {
-		state   listing.LookupState
-		entries int64
-	}{{}, {listing.LookupPresent, 2}, {listing.LookupPresent, 0}, {listing.LookupAbsent, 0}, {listing.LookupPresent, 1}} {
-		if s := sums[i]; i > 0 && (s.State != want.state || s.Entries != want.entries || !s.Complete || s.Unread != 0) {
-			t.Errorf("%q: %v, %d entries, complete %t, unread %d; want %v, %d", targets[i].Key, s.State, s.Entries, s.Complete, s.Unread, want.state, want.entries)
-		}
-	}
-	if s := sums[1]; s.Self == nil || string(s.Self.Key) != "d/" || s.Self.Kind != listing.KindDir {
-		t.Errorf("d/: self %+v", s.Self)
-	}
-
-	if locked {
-		got, _, err := src.Summarize(context.Background(), []listing.Target{{Key: []byte("d/"), Subtree: true}, {Key: []byte("locked/"), Subtree: true}}, listing.SummaryOptions{})
-		if err != nil || !got[0].Complete || got[0].Entries != 2 || got[1].State != listing.LookupPresent || got[1].Complete || got[1].Unread != 1 {
-			t.Errorf("d/ and locked/: %+v, %v", got, err)
-		}
-	}
-
-	dirs, _, err := src.Summarize(context.Background(), targets[1:2], listing.SummaryOptions{Kinds: []listing.Kind{listing.KindDir}})
-	if err != nil || dirs[0].Entries != 2 { // d/ itself and d/e/
-		t.Errorf("d/, counting directories: %+v, %v", dirs, err)
-	}
-}
-
-// TestSummarizeThroughLink: a subtree target that is, or lies behind, a
-// symbolic link is unknown with ErrNotDirectory and incomplete, and the
-// other targets are answered.
-func TestSummarizeThroughLink(t *testing.T) {
-	root, locked := tree(t)
-	src := open(t, hold(t, root))
-	targets := []listing.Target{{Key: []byte("d/"), Subtree: true}, {Key: []byte("link/"), Subtree: true}, {Key: []byte("link/x/"), Subtree: true}, {Key: []byte("locked/"), Subtree: true}}
-	sums, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
-	if err != nil || ev.Stop != listing.StopCompleted {
-		t.Fatalf("%+v, %v", ev, err)
-	}
-
-	if s := sums[0]; s.State != listing.LookupPresent || !s.Complete || s.Entries != 2 {
-		t.Errorf("d/: %+v", s)
-	}
-	for _, s := range sums[1:3] {
-		if s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrNotDirectory) || s.Complete || s.Entries != 0 || s.Unread != 0 {
-			t.Errorf("through the link: %+v", s)
-		}
-	}
-	if s := sums[3]; s.State != listing.LookupPresent || s.Complete == locked || s.Unread != map[bool]int64{true: 1}[locked] {
-		t.Errorf("locked/: %+v", s)
 	}
 }

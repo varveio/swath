@@ -64,10 +64,10 @@ type Options struct {
 // lists in no byte order, are listing.ErrUnsupported. The caller closes the
 // source.
 //
-// Page, Walk and Summarize need s3:ListBucket on the bucket. Lookup, and
-// Summarize's exact targets, need s3:GetObject on the key, and
-// s3:ListBucket on the bucket to tell an absent key: without it S3
-// answers a missing key with 403, which leaves the key unknown.
+// Page and Walk need s3:ListBucket on the bucket. Lookup needs
+// s3:GetObject on the key, and s3:ListBucket on the bucket to tell an
+// absent key: without it S3 answers a missing key with 403, which leaves
+// the key unknown.
 func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, error) {
 	switch {
 	case bucket == "" || strings.ContainsAny(bucket, "/\x00"):

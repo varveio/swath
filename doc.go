@@ -14,7 +14,7 @@
 // Source owns the provider's client, credentials and request limiter for
 // as long as the caller keeps it, and is safe for concurrent use: every
 // call on it shares them, and builds its own state for its own work. Its
-// methods answer the four questions, with the request, result, evidence
+// methods Page, Lookup and Walk answer with the request, result, evidence
 // and error types of package listing.
 //
 // Every answer's Evidence has the call's own start and finish: a live
@@ -28,8 +28,7 @@
 // and each of an object store walk's, as an objfile.ListRequest, a
 // lookup's (S3's HeadObject and HeadBucket, say) as
 // objfile.MetadataRequest; a local walk's directory reads are not
-// reported. Walk and Summarize set no limit: a caller stops them by
-// cancelling ctx.
+// reported. Walk sets no limit: a caller stops it by cancelling ctx.
 //
 // This package links no cloud SDK; a provider package links its own.
 // Neither links swath's command, its flags or its Parquet writer.

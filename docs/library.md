@@ -2,15 +2,14 @@
 
 swath's listing code is also a Go library: a program can open an S3 or GCS bucket, an Azure container or a local
 directory and ask it, during its own run, for the next children of a prefix (a **page**), for what is at exactly
-one key (a **lookup**), for everything under a prefix (a **walk**) or for the totals under several prefixes (a
-**summary**), with no swath process and no output files. A `Source` links neither swath's command, its flags nor its Parquet writer. A program can also run
+one key (a **lookup**) or for everything under a prefix (a **walk**), with no swath process and no output files. A `Source` links neither swath's command, its flags nor its Parquet writer. A program can also run
 the whole command line ([Run the command line](#run-the-command-line)).
 
 The library is **experimental**: it is implemented and tested, but its API may change in any release.
 
 | Package | What it holds |
 |---|---|
-| `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk`, `Summarize` and `Close` |
+| `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
 | `github.com/varveio/swath/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
 | `github.com/varveio/swath/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
 | `github.com/varveio/swath/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
@@ -18,8 +17,9 @@ The library is **experimental**: it is implemented and tested, but its API may c
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
 | `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 
-Pages, lookups, walks and summaries answer from the location as it is during the call. To ask the same questions of a saved inventory
-instead, open it with the `reader/view` package ([the inventory view](../reader/README.md#the-inventory-view)).
+Pages, lookups and walks answer from the location as it is during the call. To ask the same questions of a saved inventory
+instead, or for the totals under several prefixes (a summary), open it with the `reader/view` package
+([the inventory view](../reader/README.md#the-inventory-view)).
 
 ## Open, page, look up, close
 
@@ -151,49 +151,8 @@ default:
 }
 ```
 
-## Summaries
-
-A summary answers, for each of several targets, how many objects lie at or under it, their bytes and their newest
-last-modified time, what is at exactly its key, and whether that count is complete. A target is a subtree
-(`Subtree`: every key that begins with `Key`, which the contract also calls a prefix) or one exact key. Each target
-is answered on its own: what is at its key by a lookup (the root, the empty key, is no entry: unknown), and a
-subtree's entries by one walk of its key, so nested and repeated targets are each walked and counted in full.
-Without `Kinds` a summary counts objects and regular files, never folders or links.
-
-A target is `Complete` when its key's state is known (the root's excepted) and its walk handed on no `Unread`;
-`Unread` counts what its walk could not read, and its totals then cover what was read. A summary lists no names: a
-program that wants them walks the target. A subtree whose lookup was left unknown is still walked; if that walk
-fails the target counts what it read and stays incomplete. A subtree whose walk is refused (`ErrAuth`) or reaches
-another device (`ErrOtherDevice`) counts one `Unread`, as a walk above it would. A subtree whose walk finds no
-directory to enter (`ErrNotDirectory`: another kind, or a symbolic link at or on the way to its key) is unknown, with
-that error as its `Reason`, and incomplete. The other targets are answered either way. Any other failure is the
-call's error, and so is its context ending.
-
-```go
-targets := []listing.Target{
-	{Key: []byte("logs/"), Subtree: true},
-	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
-	{Key: []byte("README")},                    // exact: a lookup
-}
-sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{})
-if err != nil {
-	log.Fatal(err)
-}
-for i, s := range sums {
-	fmt.Printf("%s: %s, %d objects", targets[i].Key, s.State, s.Entries)
-	if s.Bytes != nil {
-		fmt.Printf(", %d bytes", *s.Bytes)
-	}
-	if !s.Complete {
-		fmt.Print(", at least: not all of it was read")
-	}
-	fmt.Println()
-}
-fmt.Println("the call:", ev.Stop)
-```
-
-Both programs are the s3 package's examples ([`Example_walk`, `Example_summarize`](../s3/example_test.go)). A walk
-and a summary need `s3:ListBucket` on the bucket; a summary's exact targets need what a lookup does.
+The program is the s3 package's [`Example_walk`](../s3/example_test.go). A walk needs `s3:ListBucket` on the
+bucket.
 
 ## Evidence and errors
 
@@ -223,7 +182,7 @@ if err != nil {
 defer src.Close()
 ```
 
-The rest is as on S3: the same `Page`, `Lookup`, `Walk`, `Summarize` and `Close`, checks, tokens, evidence and error classes. The
+The rest is as on S3: the same `Page`, `Lookup`, `Walk` and `Close`, checks, tokens, evidence and error classes. The
 package's [`Example`](../azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
 replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, say), unsigned access to a public container and the same two
 request limits; credentials otherwise come from the environment, as for the command: `AZURE_STORAGE_SAS_TOKEN`, else
@@ -258,7 +217,7 @@ What differs from S3:
 ## Google Cloud Storage
 
 `github.com/varveio/swath/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
-walks, summaries, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
+walks, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
 
 ```go
 src, err := gcs.Open(ctx, "example-bucket", gcs.Options{})
@@ -364,8 +323,6 @@ library guarantees:
   not entered) reach your function as an `Unread` as the walk meets them. It has no depth limit, but no key longer
   than 32 KiB: such an entry, a directory with its subtree, is an `Unread` of class `listing.ErrUnsupported`. A walk
   changes no process-wide setting.
-- **A summary's state is a lookup.** A subtree target's state is a lookup of its directory, so an empty directory
-  is present, with the directory as its `Self`, and the directory's own entry counts when `Kinds` names `dir`.
 
 To count or trace a call's work, an `objfile.Observer` on its context is told of each page as one list request
 and each lookup as one metadata request, named by the program's key.
