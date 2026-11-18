@@ -18,13 +18,7 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Page returns the next children of req.Prefix, one level by "/", in byte
-// order, as package listing states: one delimiter listing,
-// the store's retries included, and no request per child. Page checks
-// every page before returning it as the contract states, and a truncated
-// answer whose continuation token is missing is ErrInvalidPage too. A
-// token is bound to the source's location: the bucket and what decides
-// which bucket of that name it is.
+// Page answers swath.Source.Page.
 func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	if err := s.checkPage(req); err != nil {
 		return listing.Page{}, err

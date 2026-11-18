@@ -10,16 +10,12 @@
 // A provider package opens a Source: github.com/varveio/swath/s3 an S3
 // bucket, github.com/varveio/swath/gcs a Google Cloud Storage bucket,
 // github.com/varveio/swath/azblob an Azure Blob Storage container, and
-// github.com/varveio/swath/local a directory the caller opened. The Source owns the provider's client, credentials and
-// request limiter for as long as the caller keeps it, and is safe for
-// concurrent use: every call on it shares them, and builds its own state
-// for its own work. It answers the four questions, with the request,
-// result, evidence and error types of package listing:
-//
-//	Page(ctx context.Context, req listing.PageRequest) (listing.Page, error)
-//	Lookup(ctx context.Context, key []byte) (listing.LookupResult, error)
-//	Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error)
-//	Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error)
+// github.com/varveio/swath/local a directory the caller opened. The
+// Source owns the provider's client, credentials and request limiter for
+// as long as the caller keeps it, and is safe for concurrent use: every
+// call on it shares them, and builds its own state for its own work. Its
+// methods answer the four questions, with the request, result, evidence
+// and error types of package listing.
 //
 // Every answer's Evidence has OriginLive and the call's own start and
 // finish: a live answer is read during the call, and is not a

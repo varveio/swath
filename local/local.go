@@ -54,5 +54,5 @@ func Open(root *os.File) (*swath.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	return live.NewSource(st), nil
+	return (*swath.Source)(live.NewSource(st)), nil
 }

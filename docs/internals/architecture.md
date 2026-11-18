@@ -87,7 +87,7 @@ one-level call is one delimiter objects.list and whose lookup is objects.get, th
 `notFound`; and `github.com/varveio/swath/local` (`local.Open`) over `internal/source/localfs.OpenLive`, a directory
 the caller holds, whose one-level call reads one directory relative to it and whose lookup resolves a key one name
 at a time. `internal/live` joins the two: the `Store` a provider implements, and the `Source` over one
-(`live.NewSource`), which package `swath` exposes as the alias `swath.Source`. A provider's failures take the
+(`live.NewSource`), which package `swath` defines `swath.Source` on, with methods that call it. A provider's failures take the
 contract's classes through `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither
 package links the command, pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 

@@ -16,23 +16,7 @@ import (
 // directory it holds.
 var errRoot = errors.New("swath: the root has no entry")
 
-// Summarize counts the entries of opts.Kinds at or under each target, as
-// package listing states. Each target is answered on its own: its State,
-// Self and Reason by a Lookup of its key (the root's, the empty key's, is
-// unknown: no entry), and a subtree target's entries by one Walk of it.
-//
-// A subtree whose Lookup left it unknown is still walked, and when
-// that walk fails the target counts what it read, incomplete, rather than
-// failing the call; so is one shown absent whose walk finds no local
-// directory (ErrNotFound), which holds nothing. A walk refused its
-// subtree (ErrAuth) or stopped at another device (ErrOtherDevice) counts
-// one Unread, as a walk above the target hands it on, and the call goes
-// on. A walk that finds no directory to enter (ErrNotDirectory: the key
-// names another kind, or is or lies behind a symbolic link, which is
-// never followed) makes the target unknown, with that error as its
-// Reason, and incomplete, and the call goes on. Any other walk's failure,
-// and a lookup's, is Summarize's error;
-// when ctx ends, Summarize returns its error.
+// Summarize answers swath.Source.Summarize.
 func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	counted, err := s.checkSummary(targets, opts)
 	if err != nil {

@@ -20,15 +20,7 @@ import (
 // emitted.
 var errStopped = errors.New("swath: the walk has stopped")
 
-// Walk hands emit every entry at or under req.Prefix, and every place the
-// walk could not read and went on past (an Unread), as package listing
-// states; each Unread comes in a batch of its own. A zero req.Workers
-// selects the source's default, 64 for an object store.
-//
-// emit is called from the goroutine that called Walk, one batch at a time,
-// and nothing is emitted after Walk returns. When ctx ends, Walk returns
-// its error, even when emit has accepted every batch. A panic in the
-// walk's workers is returned as an error of no class.
+// Walk answers swath.Source.Walk.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err

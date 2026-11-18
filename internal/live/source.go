@@ -14,12 +14,8 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Source is an opened live location: an object store's bucket, opened by
-// a provider package such as github.com/varveio/swath/s3. It holds the
-// provider's client, credentials and request limiter, which every call
-// shares; a call keeps nothing after it returns. It is safe for
-// concurrent use. The zero Source is not usable. Package swath names it
-// swath.Source.
+// Source is an opened live location over a Store. Package swath defines
+// swath.Source on it and documents the methods there.
 type Source struct {
 	store Store
 	// utf8Keys: the store's keys are UTF-8, unless it is a ByteKeys.
@@ -33,12 +29,7 @@ func NewSource(s Store) *Source {
 	return &Source{store: s, utf8Keys: !raw}
 }
 
-// Lookup says what is at exactly key: present with its entry, absent, or
-// unknown with the reason, as package listing states. On S3 a key is
-// absent only when HeadObject finds no object and HeadBucket then shows
-// the bucket is there; a 403, a missing bucket and a failed probe leave it
-// unknown, with the class of the failure as Reason. Each provider package
-// says how its store shows a key absent.
+// Lookup answers swath.Source.Lookup.
 func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := s.checkKey(key); err != nil {
 		return listing.LookupResult{}, err
@@ -62,8 +53,7 @@ func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, 
 	return r, nil
 }
 
-// Close releases what the source holds open, such as its idle
-// connections. The source is not used after Close.
+// Close answers swath.Source.Close.
 func (s *Source) Close() error {
 	return s.store.Close()
 }
