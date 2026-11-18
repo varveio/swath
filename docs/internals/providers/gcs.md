@@ -89,7 +89,7 @@ is exclusive and set to `ExclusiveEnd(Through, …)` when that bound is at most 
 without CR or LF: `%`, control characters and non-ASCII names are sent as start bounds (query-escaped).
 Every request of a token chain repeats its `startOffset`, `endOffset`, prefix and delimiter with the
 `pageToken`, and empty continuing pages are followed by the engine. The engine's policy flags are the shared
-group (`keyrange.Flags`, registered once by the command); the GCS flags are prefixed `--gcs-` because one flag set serves every provider.
+group (`cli.EngineGroup`, registered once by the command); the GCS flags are prefixed `--gcs-` because one flag set serves every provider.
 
 **Schema** `swath/gcs-objects/v1`: the key (the object name), `size`, `last_modified` (`updated`, µs),
 `etag`, `generation`, `metageneration`, `storage_class`, `md5` and `crc32c` (base64, as listed),

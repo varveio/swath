@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/textout"
 )
 
@@ -111,17 +111,26 @@ func pruneTextDifference(got, want []byte) string {
 	return "no differing row"
 }
 
-func pruneOpen(t *testing.T, root string, opt Options) registry.Source {
+func pruneOpen(t *testing.T, root string, opt Options) *Opened {
 	t.Helper()
-	factory, err := registry.Lookup(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	src, err := factory.Open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: 4})
+	src, err := Open(root, opt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return src
+}
+
+// countedSink counts the rows written to it in n.
+type countedSink struct {
+	order.Sink[Entry]
+	n *atomic.Int64
+}
+
+func (c countedSink) Write(ctx context.Context, segs [][]Row) error {
+	for _, s := range segs {
+		c.n.Add(int64(len(s)))
+	}
+	return c.Sink.Write(ctx, segs)
 }
 
 func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bool, want []Row) Stats {
@@ -129,19 +138,25 @@ func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bo
 	src := pruneOpen(t, root, opt)
 	var filtered, ordered atomic.Int64
 	var dst bytes.Buffer
-	env := registry.Env{Filter: &spec, Filtered: &filtered, Ordered: &ordered,
-		Count: count, Order: order.Options{Workers: 4, Budget: 7 * 256}}
+	env := bind.Env{Filtered: &filtered, Ordered: &ordered, Order: order.Options{Workers: 4, Budget: 7 * 256}}
+	var text *textout.Out
+	var sink order.Sink[Entry]
 	if !count {
-		env.Text = pruneText(t, &dst)
+		text = pruneText(t, &dst)
+		s, err := textout.NewSink(text, &Schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink = countedSink{s, &ordered}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st, _, err := src.Run(ctx, env)
+	st, err := listOpened(ctx, src, &spec, count, env, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !count {
-		if err := env.Text.Commit(); err != nil {
+		if err := text.Commit(); err != nil {
 			t.Fatal(err)
 		}
 		if expected := pruneReferenceText(t, want); !bytes.Equal(dst.Bytes(), expected) {
@@ -154,7 +169,7 @@ func pruneRun(t *testing.T, root string, opt Options, spec filter.Spec, count bo
 	if src.Listed() != st.Rows+filtered.Load() {
 		t.Fatalf("listed=%d, emitted=%d filtered=%d", src.Listed(), st.Rows, filtered.Load())
 	}
-	report := src.(*opened).Report()
+	report := src.Report()
 	stats := *report.Stats.(*Stats)
 	if stats.Errors() != 0 || report.Coverage.Unreadable != 0 || !report.Coverage.Complete {
 		t.Fatalf("intentional pruning damaged coverage: %+v stats %+v", report.Coverage, stats)
@@ -404,7 +419,7 @@ func TestPruneAllChildrenAndCancellation(t *testing.T) {
 		src := pruneOpen(t, root, opt)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, _, err := src.Run(ctx, registry.Env{Filter: &spec, Count: true, Order: order.Options{Workers: 4}})
+		_, err := listOpened(ctx, src, &spec, true, bind.Env{Order: order.Options{Workers: 4}}, nil)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("portable=%v: canceled run: %v", portable, err)
 		}
@@ -423,21 +438,20 @@ func TestPruneOutputExclusion(t *testing.T) {
 	mk(t, root, "keep", false)
 	for _, portable := range []bool{false, true} {
 		src := pruneOpen(t, root, Options{Fields: Names, Portable: portable})
-		opened := src.(*opened)
-		if err := opened.Exclude(filepath.Join(root, "out")); err != nil {
+		if err := src.Exclude(filepath.Join(root, "out")); err != nil {
 			t.Fatal(err)
 		}
 		spec := filter.Spec{Exclude: []string{"drop/**", "out/**"}}
 		var filtered atomic.Int64
-		st, _, err := src.Run(context.Background(), registry.Env{Count: true, Filter: &spec, Filtered: &filtered, Order: order.Options{Workers: 4}})
+		st, err := listOpened(context.Background(), src, &spec, true, bind.Env{Filtered: &filtered, Order: order.Options{Workers: 4}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stats := opened.p.Stats()
+		stats := src.p.Stats()
 		if st.Rows != 2 || src.Listed() != 2 || filtered.Load() != 0 || stats.Skipped != 1 || stats.PrunedDirs != 1 || stats.DirsRead != 1 {
 			t.Fatalf("portable=%v rows=%d listed=%d filtered=%d stats=%+v", portable, st.Rows, src.Listed(), filtered.Load(), stats)
 		}
-		if exclusions := opened.Report().Coverage.Exclusions; !slices.Equal(exclusions, []string{"out/"}) {
+		if exclusions := src.Report().Coverage.Exclusions; !slices.Equal(exclusions, []string{"out/"}) {
 			t.Fatalf("output exclusions %q, want out/", exclusions)
 		}
 	}
@@ -502,10 +516,10 @@ func TestPruneUnreadableDescendant(t *testing.T) {
 		t.Run(fmt.Sprintf("portable=%v", portable), func(t *testing.T) {
 			opt := Options{Fields: Stat, Portable: portable}
 			control := pruneOpen(t, root, opt)
-			if _, _, err := control.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 4}}); err != nil {
+			if _, err := listOpened(context.Background(), control, nil, true, bind.Env{Order: order.Options{Workers: 4}}, nil); err != nil {
 				t.Fatal(err)
 			}
-			report := control.(*opened).Report()
+			report := control.Report()
 			stats := report.Stats.(*Stats)
 			// Complete means nothing is missing: an unreadable entry makes
 			// the coverage partial although the walk reached its end.

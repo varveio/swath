@@ -6,7 +6,7 @@ package source
 // The codes of the warnings the pipeline and the providers give (the warn
 // functions' code, the warning event's code member under --log-format
 // json: docs/reference/log-events.md). The command's own are in
-// cmd/swath.
+// package command.
 const (
 	WarnAnonymous            = "anonymous_credentials_ignored" // --anonymous ignores credentials the environment holds
 	WarnTLSUnverified        = "tls_unverified"                // --no-verify-ssl

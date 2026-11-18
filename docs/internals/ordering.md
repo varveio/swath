@@ -61,7 +61,7 @@ across a seam would be a part ending inside its group, and is refused. The one b
 segment 0's first row after the drainer's last (the open part's group, continued), which segment 0's row guard
 checks as `send` does: inside a segment equality is accepted only in group mode, across one group's consecutive
 rows in provider order, never against `Options.After`. Segments count their distinct keys into
-`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
+`Stats.DistinctKeys`, and the versions counts see the segments' rows as well (bind's `versionSegmenter`).
 `order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
 `TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `inventory`
 `TestVersionsTailSeamsAtKeyChanges` (the serial tail), `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
@@ -301,7 +301,7 @@ frontier: workers wait at the window holding no range, the tiles held stay withi
 released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
 `TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`, `TestWindowShrinksToTheSpillCap`; `keyrange` `TestPlanTilesAsTilePrior`,
 `TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `inventory` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
-too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `cmd/swath`
+too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `command`
 `TestSIGKILLAtEveryPoint` (`s3-planned`).
 
 ## The waits
@@ -373,7 +373,7 @@ between the children). The report says so: `features.order` false, `spill` absen
 
 `order.CountWithSink` hands each range's validated batch to an observer, concurrently from the workers, which
 must neither keep nor change the rows: the versions counts, and `swath du`'s per-prefix totals
-(`registry` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
+(`bind` `totalsSink` over `internal/totals`). The totals keep no row and no order: a batch sums its rows into
 one entry per run of equal prefix at each level (rows of a range ascend, so consecutive rows share them), then
 merges into the shared tally under one lock, copying a prefix only when it first enters. Addition and maximum
 commute, so the result is the same whatever the ranges' interleaving (`TestTallyMatchesBruteForce`, shuffled
@@ -388,7 +388,7 @@ children in key order, so in an ordered count a run is a contiguous stretch of t
 emits `(lo, c]` and only then the children that split `(c, hi]` (splits are owner-side, a range's children are
 claimable only once its `Expand` returns, [range engine](range-engine.md)); a local directory emits each
 subdirectory as a child right after its own row, which ends the run there. `swath du`'s adaptive view
-(`totals.ViewRun`, the `registry` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
+(`totals.ViewRun`, the `bind` `viewSink`) relies on it: a prefix a run enters after its first row and leaves
 before its last is complete, so it is kept only among the 100 largest complete ones of its depth and is
 otherwise dropped, its bytes already in its parent; the prefixes at a run's two ends are partial, summed by name
 across runs. A `RangeSink`'s run that is an `order.CoveredRun` is also told, in an ordered count whose provider
@@ -438,7 +438,7 @@ avoid.
 
 ### Drawing the view
 
-What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `cmd/swath`
+What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `command`
 `duview.go`, `textout.WriteView`); the user's account is [the view](../totals.md#the-view). The view takes the
 terminal's height less the lines printed after it (the line of totals, the unreadable and lowered-depth lines,
 the closing line, the `hint:` lines and the prompt, each counted as it wraps at the terminal's width:
@@ -843,7 +843,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   `spill-replay-frame` before each certified frame a segment reads, so the recovery points keep their meaning
   on either path. `TestSegmentsReplayCertificates` (a certificate straddling K, part and segment boundaries in
   certified frames, no certificate drained or retired while K moves at every part; the uninterrupted run's
-  parts), `TestSegmentsCertificateScanFails`, `cmd/swath` `TestSegmentsReplayDurableFiles` (resumes engaged
+  parts), `TestSegmentsCertificateScanFails`, `command` `TestSegmentsReplayDurableFiles` (resumes engaged
   and killed in their tail at `faults.SegmentPoints`, `spill-replay` and `spill-replay-frame`) and `inventory`
   `TestVersionsSegmentsReadDurableFiles` (a versions resume) cover it. The report counts the segments' share:
   `certificates_read`, `certified_rows` and `certificate_scan_ns`, beside the resume's `replayed_certificates`.
@@ -882,7 +882,7 @@ the code does (`order/durable*.go`, `listing/journal.go`, `keyrange` fences).
   declared only at a bound the provider accepts or at K, never below K; the seed and resume wrapper ranges
   and the sequential chain declare nothing. The adapters between provider and order stage (`source.Erase`,
   the filters, the object-size counter) forward both calls, `Fences` and `Replay`
-  (`registry` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
+  (`bind` `TestWrappersForwardDurableSpill`), and the provider says it fences (`source.Fencing`); durable
   spill engages only then. Fences are not items: the emitter keeps, for its unpublished list, the index of the
   first fence in it and the latest fence (O(1)), so a wholly filtered page costs nothing and fences never
   accumulate (`TestDurableZeroRowCertificate` allocates nothing per fence). A fence after a child certifies

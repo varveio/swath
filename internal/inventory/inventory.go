@@ -85,7 +85,7 @@ type Config struct {
 	// Commit, if set, runs step, the commit: the manifest's durable
 	// installation and, once it is installed, the committed report's
 	// Finalize, so the caller can order the commit against its other
-	// terminal accounts (cmd/swath's forced exit). An error returned
+	// terminal accounts (command's forced exit). An error returned
 	// without running step means not committed. nil runs step.
 	Commit func(step func() error) error
 	// ListingDone, if set, is called once when the provider has finished

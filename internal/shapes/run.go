@@ -25,6 +25,9 @@ import (
 	"github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/internal/source/scalefake"
 	"github.com/varveio/swath/internal/textout"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
 // Arm is one listing of a shape.

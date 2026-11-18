@@ -1,0 +1,745 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package command
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/inventory"
+	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/source/gcs/gcstest"
+	"github.com/varveio/swath/internal/source/s3/s3test"
+)
+
+// TestExitCodes: every outcome has its exit code and, for a run that did
+// not complete in an output this tool owns, an error.json with the class,
+// the cause and whether swath resume can continue it.
+func TestExitCodes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary")
+	}
+	bin := buildSwath(t)
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(3000, 11)))
+	var hang atomic.Bool // after the first request, hold every request (no progress)
+	var served atomic.Int64
+	var slow atomic.Bool // 300 ms per request: a run long enough to signal
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hang.Load() && served.Add(1) > 1 {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+		}
+		if slow.Load() {
+			time.Sleep(300 * time.Millisecond)
+		}
+		time.Sleep(20 * time.Millisecond)
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	s3args := func(bucket, out string, extra ...string) []string {
+		return append([]string{"list", "s3://" + bucket, "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous", "--workers", "4",
+			"--part-size", "4KiB", "-o", out}, extra...)
+	}
+	code := func(err error) int {
+		c, _ := exitStatus(t, err)
+		return c
+	}
+	outcome := func(dir string) outcome {
+		var o outcome
+		b, err := os.ReadFile(filepath.Join(dir, errorName))
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if err := json.Unmarshal(b, &o); err != nil {
+			t.Fatal(err)
+		}
+		return o
+	}
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "a"), nil, 0o644)
+
+	// 0: completed; no error.json.
+	ok := filepath.Join(t.TempDir(), "ok")
+	if c := code(exec.Command(bin, "list", src, "-o", ok).Run()); c != exitOK {
+		t.Fatalf("completed: exit %d", c)
+	}
+	if _, err := os.Stat(filepath.Join(ok, errorName)); !os.IsNotExist(err) {
+		t.Fatal("error.json after a completed run")
+	}
+	// 2: usage.
+	if c := code(exec.Command(bin, "list").Run()); c != exitUsage {
+		t.Fatalf("usage: exit %d", c)
+	}
+	// 1: fatal; a missing bucket is cause not_found, its status and code
+	// kept in the message.
+	fatal := filepath.Join(t.TempDir(), "fatal")
+	if c := code(exec.Command(bin, s3args("nobucket", fatal)...).Run()); c != exitFatal {
+		t.Fatalf("fatal: exit %d", c)
+	}
+	if o := outcome(fatal); o.Class != "fatal" || o.Resumable || o.Cause != "not_found" || !strings.Contains(o.Message, "404") || !strings.Contains(o.Message, "NoSuchBucket") {
+		t.Fatalf("fatal: %+v", o)
+	}
+	// 3: a committed dataset with partial coverage (a key limit) never exits 0.
+	part := filepath.Join(t.TempDir(), "partial")
+	pargs := append([]string{"diag"}, s3args("bkt", part, "--sequential", "--max-keys", "10")...)
+	if c := code(exec.Command(bin, pargs...).Run()); c != exitIncomplete {
+		t.Fatalf("partial: exit %d", c)
+	}
+	if _, err := os.Stat(filepath.Join(part, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("partial: error.json beside the committed dataset: %v", err)
+	}
+	// 124: the deadline, resumable.
+	dl := filepath.Join(t.TempDir(), "deadline")
+	if c := code(exec.Command(bin, s3args("bkt", dl, "--max-duration", "50ms")...).Run()); c != exitDeadline {
+		t.Fatalf("deadline: exit %d", c)
+	}
+	if o := outcome(dl); o.Class != "deadline" || !o.Resumable {
+		t.Fatalf("deadline: %+v", o)
+	}
+	if out, err := exec.Command(bin, "resume", dl, "--max-duration", "0").CombinedOutput(); err != nil {
+		t.Fatalf("resume after the deadline: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dl, errorName)); !os.IsNotExist(err) {
+		t.Fatal("error.json left after the resume completed")
+	}
+	// Windows delivers no signal to a process: the signal cases are Unix's.
+	if runtime.GOOS != "windows" {
+		// 143, 130 and 129: signals, graceful, resumable. The process dies by
+		// the signal once it has cleaned up (a shell sees 128+n), so a calling
+		// shell loop stops; before, it exited with the code, and a hangup (a
+		// dropped SSH session) killed it with no outcome. The interrupted run is
+		// traced: its trace parses and ends in run_end with the outcome.
+		slow.Store(true)
+		for sig, want := range map[syscall.Signal]int{syscall.SIGTERM: exitTerminated, syscall.SIGINT: exitInterrupted, syscall.SIGHUP: exitHangup} {
+			dir := filepath.Join(t.TempDir(), "sig")
+			args := s3args("bkt", dir)
+			trace := filepath.Join(t.TempDir(), "run.trace.jsonl")
+			if sig == syscall.SIGINT {
+				args = append(append([]string{"diag"}, args...), "--trace", trace)
+			}
+			cmd := exec.Command(bin, args...)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			// Signalled once it lists into its journaled output, and once its
+			// trace holds an event past run_start: before, a fixed 700 ms
+			// could end a slow start before the process owned its output (no
+			// error.json) or traced anything.
+			ready := func() bool {
+				if _, err := os.Stat(filepath.Join(dir, journal.Dir, journal.Name)); err != nil {
+					return false
+				}
+				b, _ := os.ReadFile(trace)
+				return sig != syscall.SIGINT || bytes.Count(b, []byte("\n")) >= 2
+			}
+			for deadline := time.Now().Add(30 * time.Second); !ready() && time.Now().Before(deadline); {
+				time.Sleep(5 * time.Millisecond)
+			}
+			cmd.Process.Signal(sig)
+			if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
+				t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
+			}
+			if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != inventory.ClassTerminated || o.StopSource != "sighup") {
+				t.Fatalf("%v: %+v", sig, o)
+			}
+			if sig != syscall.SIGINT {
+				continue
+			}
+			b, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
+			var end map[string]any
+			for i, l := range lines {
+				var e map[string]any
+				if err := json.Unmarshal(l, &e); err != nil {
+					t.Fatalf("trace line %d %q: %v", i, l, err)
+				}
+				end = e
+			}
+			if len(lines) < 3 || end["event"] != "run_end" || end["class"] != inventory.ClassInterrupted || end["status"] != inventory.StatusFailed {
+				t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
+			}
+		}
+		// Under nohup (SIGHUP ignored when swath starts) a hangup changes
+		// nothing: the run completes.
+		nohup := filepath.Join(t.TempDir(), "nohup")
+		cmd := exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, bin}, s3args("bkt", nohup)...)...)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(700 * time.Millisecond)
+		cmd.Process.Signal(syscall.SIGHUP)
+		if c, _ := exitStatus(t, cmd.Wait()); c != exitOK || !dataset.Committed(nohup) {
+			t.Fatalf("nohup: exit %d, committed %v", c, dataset.Committed(nohup))
+		}
+	}
+	// 75: stuck, when nothing progresses for the stall timeout.
+	slow.Store(false)
+	hang.Store(true)
+	stuck := filepath.Join(t.TempDir(), "stuck")
+	if c := code(exec.Command(bin, s3args("bkt", stuck, "--stall-timeout", "1s")...).Run()); c != exitStuck {
+		t.Fatalf("stuck: exit %d", c)
+	}
+	if o := outcome(stuck); o.Class != "stuck" || !o.Resumable {
+		t.Fatalf("stuck: %+v", o)
+	}
+	// The progress file's last snapshot says the run failed.
+	var p inventory.ProgressSnapshot
+	if b := readJSON(t, filepath.Join(stuck, progressName), &p); !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"max_mutex_hold_ns"`)) || p.State != inventory.StateFailed {
+		t.Fatalf("progress file: %s", b)
+	}
+}
+
+// exitStatus is a finished process's exit code, as a shell reports it: 128
+// plus the signal's number for a process that died by one (signaled).
+func exitStatus(t *testing.T, err error) (code int, signaled bool) {
+	t.Helper()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return 0, false
+	case !errors.As(err, &ee):
+		t.Fatal(err)
+	}
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal()), true
+	}
+	return ee.ExitCode(), false
+}
+
+// TestGCSOutageThenResume: a GCS bucket that starts answering 503 to
+// every request three quarters through a run stops the run as stuck (75,
+// resumable: retry exhaustion requeues, it never fails the run); once the
+// outage ends, swath resume completes it with the dataset of an
+// uninterrupted run byte for byte. The reference run and the resume must
+// complete: they run with a 10-minute stall timeout (the resume would
+// inherit the outage run's). The outage run's is 3 s: before the outage it
+// lists and publishes, which on a loaded Windows runner went over 1 s
+// without progress (a journal sync) and stopped the run as stuck_no_rows.
+func TestGCSOutageThenResume(t *testing.T) {
+	h := gcstest.Handler(gcstest.Keys(20000), 20*time.Millisecond)
+	var served, failed, after atomic.Int64 // after: the outage begins after this many requests (0: never)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n := served.Add(1); after.Load() > 0 && n > after.Load() {
+			failed.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(503)
+			fmt.Fprint(w, `{"error":{"code":503,"message":"Backend Error"}}`)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	args := func(out, stall string) []string {
+		return []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--stall-timeout", stall, "-o", out}
+	}
+	ctx := context.Background()
+	ref := filepath.Join(t.TempDir(), "ref")
+	if err := run(ctx, args(ref, "10m"), io.Discard, false); err != nil {
+		t.Fatalf("%v\n%s", err, stuckEvidence(ref))
+	}
+	total := served.Load()
+	// The outage begins three quarters through the requests a run makes.
+	served.Store(0)
+	after.Store(total * 3 / 4)
+	out := filepath.Join(t.TempDir(), "ds")
+	err := run(ctx, args(out, "3s"), io.Discard, false)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != exitStuck {
+		t.Fatalf("outage: %v, want exit %d", err, exitStuck)
+	}
+	var o outcome
+	b, _ := os.ReadFile(filepath.Join(out, errorName))
+	if json.Unmarshal(b, &o) != nil || o.Class != "stuck" || !o.Resumable {
+		t.Fatalf("outage outcome: %s", b)
+	}
+	if _, err := os.Stat(filepath.Join(out, "manifest.json")); err == nil {
+		t.Skip("the run finished before the outage")
+	}
+	if failed.Load() == 0 {
+		t.Fatal("no request met the outage")
+	}
+	retained, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
+	if len(retained) == 0 {
+		t.Fatal("no part was published before the outage")
+	}
+	after.Store(0)
+	if err := resume(ctx, []string{out, "--stall-timeout", "10m"}, io.Discard); err != nil {
+		t.Fatalf("resume after the outage: %v\n%s", err, stuckEvidence(out))
+	}
+	sameParts(t, "after the outage", ref, out)
+	if _, err := os.Stat(filepath.Join(out, errorName)); !os.IsNotExist(err) {
+		t.Fatal("error.json left after the resume completed")
+	}
+	t.Logf("a run makes %d requests; %d met the outage; %d parts retained", total, failed.Load(), len(retained))
+}
+
+// TestDiskFullExits74: a full disk on a part, a journal record or the
+// manifest exits 74 (class disk_full, cause no_space, resumable), in the
+// exit code, error.json and the report, so a runner can retry with a
+// larger workspace on the code alone; swath resume then completes the
+// dataset of an uninterrupted run (before: exit 1, class fatal).
+func TestDiskFullExits74(t *testing.T) {
+	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
+	t.Cleanup(srv.Close)
+	args := func(out string, extra ...string) []string {
+		return append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--part-interval", "0", "-o", out}, extra...)
+	}
+	ctx := context.Background()
+	ref := filepath.Join(t.TempDir(), "ref")
+	if err := run(ctx, args(ref), io.Discard, true); err != nil {
+		t.Fatal(err)
+	}
+	for target, match := range map[string]func(string) bool{
+		"part":     func(n string) bool { return strings.HasSuffix(n, ".parquet") },
+		"journal":  func(n string) bool { return filepath.Base(n) == "journal" },
+		"manifest": func(n string) bool { return dataset.TempOf(dataset.ManifestName, filepath.Base(n)) },
+	} {
+		out := filepath.Join(t.TempDir(), "ds")
+		report := filepath.Join(t.TempDir(), "report.json")
+		nth := map[string]int64{"part": 4, "journal": 3, "manifest": 1}[target]
+		var n atomic.Int64
+		restore := faults.SetIO(func(op, file string, b []byte) (int, error) {
+			if op == "write" && match(file) && n.Add(1) == nth {
+				return len(b) / 2, syscall.ENOSPC
+			}
+			return 0, nil
+		})
+		err := run(ctx, args(out, "--report", report), io.Discard, true)
+		restore()
+		if c := exitCode(t, err); c != exitDiskFull {
+			t.Fatalf("%s: exit %d (%v), want %d", target, c, err, exitDiskFull)
+		}
+		var o outcome
+		readJSON(t, filepath.Join(out, errorName), &o)
+		if o.Class != "disk_full" || o.ExitCode != exitDiskFull || o.Cause != "no_space" || !o.Resumable {
+			t.Fatalf("%s: error.json %+v", target, o)
+		}
+		var rep inventory.Report
+		readJSON(t, report, &rep)
+		if rep.Outcome.Class != "disk_full" || rep.Outcome.ExitCode != exitDiskFull || rep.Outcome.Cause != "no_space" || !rep.Outcome.Resumable {
+			t.Fatalf("%s: report outcome %+v", target, rep.Outcome)
+		}
+		if err := resume(ctx, []string{out}, io.Discard); err != nil {
+			t.Fatalf("%s: resume: %v", target, err)
+		}
+		sameParts(t, target, ref, out)
+	}
+}
+
+// TestResumeKeepsTheRunsReport: swath resume does not replay the run's
+// recorded --report. A plain resume leaves the first attempt's report as it
+// was and writes none; a resume given --report writes its own there. Before,
+// a plain resume replaced the first attempt's report with its own (C-C6).
+func TestResumeKeepsTheRunsReport(t *testing.T) {
+	captureStderr(t)
+	srv := httptest.NewServer(gcstest.Handler(gcstest.Keys(6000), 0))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	out := filepath.Join(t.TempDir(), "ds")
+	first := filepath.Join(t.TempDir(), "first.json")
+	var n atomic.Int64
+	restore := faults.SetIO(func(op, file string, b []byte) (int, error) {
+		if op == "write" && strings.HasSuffix(file, ".parquet") && n.Add(1) == 4 {
+			return len(b) / 2, syscall.ENOSPC
+		}
+		return 0, nil
+	})
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--part-size", "4KiB", "--part-interval", "0",
+		"--report", first, "-o", out}, io.Discard, true)
+	restore()
+	if c := exitCode(t, err); c != exitDiskFull {
+		t.Fatalf("exit %d (%v)", c, err)
+	}
+	was, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resume(ctx, []string{out}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if now, err := os.ReadFile(first); err != nil || !bytes.Equal(now, was) {
+		t.Fatalf("the first attempt's report changed: %v\n%s", err, now)
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(first)); len(ents) != 1 {
+		t.Fatalf("the resume wrote a report: %v", ents)
+	}
+	// A resume of the committed dataset given a report writes it.
+	second := filepath.Join(t.TempDir(), "second.json")
+	if err := resume(ctx, []string{out, "--report", second}, io.Discard); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	var rep inventory.Report
+	readJSON(t, second, &rep)
+	if !rep.Invocation.Resume || rep.Outcome.Class != inventory.ClassOK || !rep.Outcome.Complete {
+		t.Fatalf("second report: %+v", rep.Outcome)
+	}
+}
+
+// sameParts requires out's data/ to hold ref's parts byte for byte.
+func sameParts(t *testing.T, at, ref, out string) {
+	t.Helper()
+	parts, _ := filepath.Glob(filepath.Join(ref, "data", "*.parquet"))
+	got, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet"))
+	if len(parts) == 0 || len(got) != len(parts) {
+		t.Fatalf("%s: %d parts, want %d", at, len(got), len(parts))
+	}
+	for _, p := range parts {
+		a, _ := os.ReadFile(p)
+		g, _ := os.ReadFile(filepath.Join(out, "data", filepath.Base(p)))
+		if !bytes.Equal(a, g) {
+			t.Fatalf("%s: %s differs", at, filepath.Base(p))
+		}
+	}
+}
+
+// stuckEvidence is what a run stopped as stuck left in dir, for a failure
+// message: the progress at the stop and the stacks of the goroutines inside
+// the source. The dump goes with the test's temporary directory otherwise,
+// and a stall that fires once on a loaded runner leaves nothing to read.
+func stuckEvidence(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, dataset.Workspace, "stacks-stuck.txt"))
+	if err != nil {
+		return fmt.Sprintf("no goroutine dump: %v", err)
+	}
+	blocks := strings.Split(string(b), "\n\n")
+	kept := blocks[:1] // the header: the cause, the time and the progress snapshot
+	for _, g := range blocks[1:] {
+		if strings.Contains(g, "/internal/source/") {
+			kept = append(kept, g)
+		}
+	}
+	return strings.Join(kept, "\n\n")
+}
+
+// TestQueuedHealthyWorkIsNotStuck: requests the service answers keep the
+// stall clock alive although no row moves; requests that fail or never
+// return do not. With the limiter at one permit (one worker; the windowed
+// limiter no longer falls to one on three throttle answers) the root range's first pages come back empty
+// with a continuation for longer than twice the stall timeout before any
+// row (--no-seed: the seed would stop following them at its budgets,
+// TestSeedChargesEmptyPages): the run completes (before, it stopped as stuck with 75 while the
+// service answered every request). A source that hangs, or answers only
+// 503, still stops as stuck (durability review). The healthy run's stall
+// timeout is 3 s: its start and its publication show no progress, and on
+// a loaded Windows runner they went over 1 s (a journal sync) and stopped
+// it as stuck; its 150 empty pages, 50 ms apart, last over twice that.
+// The hanging and 503 sources keep 1 s: the source holds them from their
+// first request, so a slower start only stops them sooner.
+func TestQueuedHealthyWorkIsNotStuck(t *testing.T) {
+	const stall = 3 * time.Second
+	h := gcstest.Handler(gcstest.Keys(2000), 0)
+	var mode atomic.Value // "healthy", "hung" or "503"
+	var served atomic.Int64
+	var firstEmpty, lastEmpty atomic.Int64 // unix nanoseconds
+	const empties = 150
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served.Add(1)
+		m := mode.Load().(string)
+		if m == "hung" {
+			<-r.Context().Done()
+			return
+		}
+		if m == "503" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(503)
+			fmt.Fprint(w, `{"error":{"code":503,"message":"Backend Error"}}`)
+			return
+		}
+		q := r.URL.Query()
+		tok, k := q.Get("pageToken"), 0
+		if rest, ok := strings.CutPrefix(tok, "empty-"); ok {
+			k, _ = strconv.Atoi(rest)
+		} else if tok == "" && firstEmpty.Load() == 0 {
+			firstEmpty.Store(time.Now().UnixNano())
+		} else {
+			h.ServeHTTP(w, r)
+			return
+		}
+		if k > 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if k < empties {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"kind":"storage#objects","nextPageToken":"empty-%d"}`, k+1)
+			return
+		}
+		lastEmpty.Store(time.Now().UnixNano())
+		q.Del("pageToken") // the chain's real first page
+		r.URL.RawQuery = q.Encode()
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	for _, m := range []string{"healthy", "hung", "503"} {
+		mode.Store(m)
+		served.Store(0)
+		dir := filepath.Join(t.TempDir(), "ds")
+		var out bytes.Buffer
+		start, timeout := time.Now(), stall
+		if m != "healthy" {
+			timeout = time.Second
+		}
+		err := run(ctx, []string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--adaptive-limit", "--workers", "1", "--no-seed",
+			"--stall-timeout", timeout.String(), "--report", "-", "-o", dir}, &out, true)
+		if m == "healthy" {
+			if err != nil {
+				t.Fatalf("healthy work at one permit: %v (after %s, %d requests served)\n%s\n%s",
+					err, time.Since(start).Round(time.Millisecond), served.Load(), out.String(), stuckEvidence(dir))
+			}
+			if !strings.Contains(out.String(), `"limiter.limit": 1`) {
+				t.Fatalf("the limit was not one: %s", out.String())
+			}
+			if d := time.Duration(lastEmpty.Load() - firstEmpty.Load()); d < 2*stall {
+				t.Fatalf("the rowless stretch lasted %s, not over twice the stall timeout", d)
+			}
+			continue
+		}
+		var ee *exitError
+		if !errors.As(err, &ee) || ee.code != exitStuck {
+			t.Fatalf("%s source: %v, want exit %d", m, err, exitStuck)
+		}
+	}
+}
+
+// TestGCSCappedRunIsIncomplete: a GCS run capped by --max-keys commits a
+// dataset whose coverage says incomplete, exits 3 with class incomplete
+// (not resumable), writes no error.json, keeps no journal, and swath resume refuses it as
+// complete and leaves it as it is (S3: TestExitCodes, partial; durability P2-8).
+func TestGCSCappedRunIsIncomplete(t *testing.T) {
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	dir := filepath.Join(t.TempDir(), "ds")
+	ctx := context.Background()
+	err := run(ctx, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10",
+		"--part-size", "4KiB", "-o", dir}, io.Discard, true)
+	if c := exitCode(t, err); c != exitIncomplete {
+		t.Fatalf("capped run: exit %d (%v)", c, err)
+	}
+	// The manifest's coverage says what is missing: no error.json beside
+	// the committed dataset.
+	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
+		t.Fatalf("capped run: error.json %v", err)
+	}
+	var m dataset.Manifest
+	if b, err := os.ReadFile(filepath.Join(dir, dataset.ManifestName)); err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatalf("capped run: no manifest: %v", err)
+	}
+	var rows int64
+	for _, p := range m.Parts {
+		rows += p.Rows
+	}
+	if m.Coverage.Complete || rows != 10 {
+		t.Fatalf("capped run: coverage complete %v, %d rows", m.Coverage.Complete, rows)
+	}
+	if _, err := os.Stat(journal.Path(dir)); !os.IsNotExist(err) {
+		t.Fatalf("capped run kept a journal: %v", err)
+	}
+	want := dirTree(t, dir)
+	// Refused as a finalized partial sample, not as complete: still exit
+	// 3, class incomplete, not resumable.
+	report := filepath.Join(t.TempDir(), "report.json")
+	err = resume(ctx, []string{dir, "--report", report}, io.Discard)
+	if msg := dir + " is a finalized sample, partial: --max-keys reached: it cannot be resumed"; !errors.Is(err, inventory.ErrComplete) ||
+		exitCode(t, err) != exitIncomplete || err.Error() != msg {
+		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitIncomplete, msg)
+	}
+	var rep inventory.Report
+	readJSON(t, report, &rep)
+	if o := rep.Outcome; o.Class != "incomplete" || o.Resumable || o.Complete || o.Error != err.Error() || strings.Contains(o.Unrecorded, "complete") {
+		t.Fatalf("resume of a capped run: outcome %+v", o)
+	}
+	if got := dirTree(t, dir); !maps.Equal(want, got) {
+		t.Fatalf("resume changed the capped dataset:\nbefore %v\nafter  %v", want, got)
+	}
+}
+
+// TestCappedTextRunIsIncomplete: text rows capped by --max-keys exit 3
+// (class incomplete) with an error line that says the output is partial,
+// as a capped dataset does; a reader that closes the stream early is not
+// a partial listing (TestPipedToHeadExitsZero). Before, they exited 0.
+func TestCappedTextRunIsIncomplete(t *testing.T) {
+	stderr := captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10", "--format", "tsv", "--no-stats"}, &out, true)
+	if c := conclude(err); c != exitIncomplete || strings.Count(out.String(), "\n") != 11 ||
+		!strings.HasSuffix(stderr.String(), "swath: the output is partial: the listing stopped before the end of its scope (max_keys)\n") {
+		t.Fatalf("exit %d, %d lines, stderr %q", c, strings.Count(out.String(), "\n"), stderr.String())
+	}
+}
+
+// TestCappedCountPrintsCounts: swath diag count capped by --max-keys prints
+// its partial counts, then exits 3; it printed nothing.
+func TestCappedCountPrintsCounts(t *testing.T) {
+	captureStderr(t)
+	ep := gcstest.Bucket(t, gcstest.Keys(3000), 0)
+	var out bytes.Buffer
+	err := runCount(context.Background(), []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "--sequential", "--max-keys", "10", "--no-stats"}, &out)
+	if c := exitCode(t, err); c != exitIncomplete || !strings.Contains(out.String(), " rows=10 object_bytes=") {
+		t.Fatalf("exit %d (%v), stdout %q", c, err, out.String())
+	}
+}
+
+// TestProtocolViolationIsUnresumable: a GCS service that answers, three
+// quarters through a run, with pages whose first two keys are swapped (out
+// of order: the engine cannot recover) fails the run with exit 1, cause
+// protocol, not resumable, after parts were published; the journal holds
+// the terminal unresumable mark (Java's markRunUnresumable), and swath
+// resume refuses with the same cause, the parts and journal unchanged, as
+// does a resumed run and swath show names the mark. Before, nothing in the
+// journal marked the run and the resume continued.
+func TestProtocolViolationIsUnresumable(t *testing.T) {
+	captureStderr(t)
+	h := gcstest.Handler(gcstest.Keys(20000), 0)
+	var served, after, swapped atomic.Int64 // after: invalid pages come after this many requests (0: never)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n := served.Add(1); after.Load() == 0 || n <= after.Load() {
+			h.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		var page map[string]any
+		if json.Unmarshal(rec.Body.Bytes(), &page) == nil {
+			if items, _ := page["items"].([]any); len(items) >= 2 {
+				items[0], items[1] = items[1], items[0]
+				swapped.Add(1)
+			}
+		}
+		b, _ := json.Marshal(page)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	args := func(out string, extra ...string) []string {
+		return append([]string{"gs://bkt", "--endpoint-url", srv.URL + gcstest.Path, "--anonymous", "--workers", "4",
+			"--part-size", "4KiB", "--sort-buffer", "512KiB", "--part-interval", "0", "-o", out}, extra...)
+	}
+	ctx := context.Background()
+	// The number of requests a run makes, to place the invalid pages.
+	if err := run(ctx, args(filepath.Join(t.TempDir(), "count")), io.Discard, true); err != nil {
+		t.Fatal(err)
+	}
+	total := served.Load()
+	served.Store(0)
+	after.Store(total * 3 / 4)
+	out := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	err := run(ctx, args(out, "--report", report), io.Discard, true)
+	if swapped.Load() == 0 {
+		t.Fatal("no invalid page was served")
+	}
+	if c := exitCode(t, err); c != exitFatal {
+		t.Fatalf("invalid page: exit %d (%v)", c, err)
+	}
+	check := func(how string, class string, code int, cause string, resumable bool) {
+		t.Helper()
+		if class != "fatal" || code != exitFatal || cause != "protocol" || resumable {
+			t.Fatalf("%s: class %s exit %d cause %q resumable %v", how, class, code, cause, resumable)
+		}
+	}
+	var o outcome
+	readJSON(t, filepath.Join(out, errorName), &o)
+	check("error.json", o.Class, o.ExitCode, o.Cause, o.Resumable)
+	var rep inventory.Report
+	readJSON(t, report, &rep)
+	check("report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
+	if retained, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet")); len(retained) == 0 {
+		t.Fatal("no part was published before the invalid page")
+	}
+	st, err := journal.Read(out)
+	if err != nil || st.Unresumable == nil || st.Unresumable.Cause != "protocol" || !strings.Contains(st.Unresumable.Reason, "out of order") {
+		t.Fatalf("journal: %+v %v", st, err)
+	}
+	// The service is healthy again: the resume still refuses.
+	after.Store(0)
+	tree := func() map[string]string {
+		m := dirTree(t, out)
+		delete(m, errorName) // the refusal records its own outcome
+		return m
+	}
+	before := tree()
+	report = filepath.Join(t.TempDir(), "report.json")
+	err = resume(ctx, []string{"--report", report, out}, io.Discard)
+	var ue *journal.UnresumableError
+	if c := exitCode(t, err); c != exitFatal || !errors.As(err, &ue) {
+		t.Fatalf("resume: exit %d (%v)", c, err)
+	}
+	readJSON(t, filepath.Join(out, errorName), &o)
+	check("resume error.json", o.Class, o.ExitCode, o.Cause, o.Resumable)
+	rep = inventory.Report{}
+	readJSON(t, report, &rep)
+	check("resume report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
+	// A resumed run (the race the command's early check cannot close)
+	// refuses under the lock.
+	if err := runWith(ctx, command{diag: true}, args(out), io.Discard, nil, true, nil); !errors.As(err, &ue) {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if got := tree(); !maps.Equal(before, got) {
+		t.Fatalf("the refused resumes changed the output:\nbefore %v\nafter  %v", before, got)
+	}
+	var shown bytes.Buffer
+	if err := show([]string{out}, &shown); err != nil || !strings.Contains(shown.String(), "marked unresumable (protocol)") {
+		t.Fatalf("show: %v %q", err, shown.String())
+	}
+}
+
+// TestDirectoryBucketRefused: an S3 directory bucket (Express One Zone,
+// a name ending in --x-s3) is refused before any request, as Java: exit 2,
+// class refused, a message naming it, and the output left uncreated.
+// Before, the run went to the service and failed there.
+func TestDirectoryBucketRefused(t *testing.T) {
+	captureStderr(t)
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "", 500)
+	}))
+	t.Cleanup(srv.Close)
+	out := filepath.Join(t.TempDir(), "ds")
+	report := filepath.Join(t.TempDir(), "report.json")
+	err := run(context.Background(), []string{"s3://orders--use1-az4--x-s3/prefix", "--endpoint-url", srv.URL, "--s3-path-style", "--anonymous",
+		"-o", out, "--report", report}, io.Discard, false)
+	if c := exitCode(t, err); c != exitUsage || !strings.Contains(err.Error(), "directory bucket") {
+		t.Fatalf("exit %d: %v", c, err)
+	}
+	var rep inventory.Report
+	readJSON(t, report, &rep)
+	if rep.Outcome.Class != "refused" || rep.Outcome.ExitCode != exitUsage || rep.Outcome.Resumable {
+		t.Fatalf("report outcome %+v", rep.Outcome)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("%d requests to the service", n)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("the output exists: %v", err)
+	}
+}

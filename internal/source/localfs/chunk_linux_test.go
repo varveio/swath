@@ -12,8 +12,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 )
 
 // kids collects one Expand's child ranges.
@@ -60,9 +60,11 @@ func TestCancelledChunkReleasesItsFD(t *testing.T) {
 	}
 }
 
-// TestStatCountRaisesProcsAndRestores: a count runs with countProcsFactor
-// processors per CPU at a stat tier and namesCountProcsFactor at the names
-// tier (at most the workers), records it, and restores GOMAXPROCS.
+// TestStatCountRaisesProcsAndRestores: Begin starts a count with
+// countProcsFactor processors per CPU at a stat tier and
+// namesCountProcsFactor at the names tier (at most the workers) and records
+// it, and the end it returns restores GOMAXPROCS (the command's local
+// source ends it when its listing returns: cli TestLocalCountRestoresProcs).
 func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "f"), nil, 0o644); err != nil {
@@ -71,21 +73,36 @@ func TestStatCountRaisesProcsAndRestores(t *testing.T) {
 	prev := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(prev)
 	for _, fields := range []Fields{Stat, Names} {
-		src, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Fields: fields}, Workers: 64})
+		src, err := Open(root, Options{Fields: fields}, nil)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if _, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 64}}); err != nil {
-			t.Fatal(err)
-		}
-		if n := runtime.GOMAXPROCS(0); n != 2 {
-			t.Fatalf("%s: GOMAXPROCS %d after the run, want 2 restored", fields, n)
 		}
 		want := int64(2 * countProcsFactor)
 		if fields == Names {
 			want = 2 * namesCountProcsFactor
 		}
-		if got := src.(*opened).p.Stats().CountProcs; got != want {
+
+		env := bind.Env{Order: order.Options{Workers: 64}}
+		end, err := src.Begin(nil, nil, true, &env.Order)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := runtime.GOMAXPROCS(0); int64(n) != want {
+			t.Fatalf("%s: GOMAXPROCS %d during the count, want %d", fields, n, want)
+		}
+		l, err := src.Bound().Prepare(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.Count(context.Background(), nil); err != nil {
+			t.Fatal(err)
+		}
+		end()
+
+		if n := runtime.GOMAXPROCS(0); n != 2 {
+			t.Fatalf("%s: GOMAXPROCS %d after the end, want 2 restored", fields, n)
+		}
+		if got := src.p.Stats().CountProcs; got != want {
 			t.Fatalf("%s: count_procs %d, want %d", fields, got, want)
 		}
 	}
@@ -147,15 +164,15 @@ func TestCountSlabs(t *testing.T) {
 				opt := Options{Fields: fields, LinkTarget: true}
 				sorted, want := list(t, root, opt, workers, 7)
 				fds := openFDs(t)
-				src, err := open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: workers})
+				src, err := Open(root, opt, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				st, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: workers}})
+				st, err := listOpened(context.Background(), src, nil, true, bind.Env{Order: order.Options{Workers: workers}}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				got := src.(*opened).p.Stats()
+				got := src.p.Stats()
 				if st.Rows != int64(len(sorted)) || got.Files != want.Files || got.Dirs != want.Dirs || got.Bytes != want.Bytes {
 					t.Fatalf("count: rows %d files %d dirs %d bytes %d; listing: rows %d files %d dirs %d bytes %d",
 						st.Rows, got.Files, got.Dirs, got.Bytes, len(sorted), want.Files, want.Dirs, want.Bytes)
