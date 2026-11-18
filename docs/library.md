@@ -90,8 +90,7 @@ bound to the bucket, the endpoint and region it is read through, and the prefix;
 before any request. Every page is checked before it is returned: a key outside the prefix, below one of its
 children or out of order, and a continuation token from the store that repeats the one sent, are
 `listing.ErrInvalidPage`. A live page is a traversal, not a snapshot: a key added or removed while a level is paged
-may or may not be in it. Totals for each child folder (`ChildTotals`) come from an inventory only: a live page that
-asks for them is `listing.ErrUnsupported`, before any request.
+may or may not be in it.
 
 ## Lookups
 

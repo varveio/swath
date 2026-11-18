@@ -39,7 +39,7 @@ Notable changes per release. The human summary of the current release is in the
   common `Entry`, the `Evidence` every answer carries, the `Unread` places a walk could not read, and the error
   classes. It holds types only and imports nothing beyond the standard library.
 - `reader/view` (experimental) answers those questions from an opened dataset, an inventory (`view.Open`):
-  pages with opaque tokens and optional child totals, lookups, walks and summaries, every answer's
+  pages with opaque tokens, lookups, walks and summaries, every answer's
   evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
   nothing in it was unreadable, and never at or under a local entry of unknown kind
   ([reader guide](reader/README.md#the-inventory-view)).
@@ -50,7 +50,7 @@ Notable changes per release. The human summary of the current release is in the
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
 - A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them, and its
-  `MaxDuration` bounds its time; a live page gives no child totals (`ErrUnsupported`). A lookup left unknown
+  `MaxDuration` bounds its time. A lookup left unknown
   carries evidence that is not completed.
 - The root package's `Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
   only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
@@ -63,9 +63,6 @@ Notable changes per release. The human summary of the current release is in the
   over an inventory, the inventory's coverage is complete.
 - `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
   live source leaves it nil.
-- An inventory page counts each child's totals on its own: when its `MaxDuration` ends while they are counted, the
-  page keeps its entries, the totals counted stand, only those not yet counted are nil, and `Evidence.Stop` is
-  `time_budget`.
 - `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
   of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
   ([library guide](docs/library.md#google-cloud-storage)).

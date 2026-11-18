@@ -7,9 +7,6 @@ import (
 	"bytes"
 	"context"
 	"math"
-	"runtime"
-	"sync"
-	"sync/atomic"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
@@ -25,20 +22,14 @@ import (
 // directory the inventory has as another kind, or below a symbolic link,
 // is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
 // absence, and an empty page otherwise.
-//
-// With req.ChildTotals, each child prefix or directory gets the totals
-// Summarize gives a subtree target at its key, from the rows the listing
-// established, within the page's MaxDuration. They check the values they
-// read, not the order of the keys.
 func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
-	sel, err := inv.checkPage(req)
-	if err != nil {
+	if err := inv.checkPage(req); err != nil {
 		return listing.Page{}, err
 	}
 	if !inv.inScope(req.Prefix) {
 		return listing.Page{}, errOutOfScope
 	}
-	bind := inv.binding(req.Prefix, sel)
+	bind := inv.binding(req.Prefix)
 	cursor, err := decodeToken(req.Prefix, bind, req.Token)
 	if err != nil {
 		return listing.Page{}, err
@@ -84,15 +75,6 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 			return inv.stopped(ctx, op, req.Token, err)
 		}
 	}
-	if req.ChildTotals != nil {
-		var stopped bool
-		if page.Totals, stopped, err = inv.childTotals(ctx, op, entries, *sel); err != nil {
-			return listing.Page{}, err
-		}
-		if stopped {
-			page.Evidence.Stop = listing.StopTimeBudget
-		}
-	}
 	if next != nil {
 		if page.Next, err = encodeToken(bind, next); err != nil {
 			return listing.Page{}, failed(ctx, err)
@@ -127,25 +109,18 @@ func (inv *Inventory) self(prefix []byte, limit int, entries []seekparquet.PageE
 	return nil, entries, next, nil
 }
 
-// checkPage refuses a request this package does not serve, and returns
-// the kinds its child totals count: nil when it asks for none.
-func (inv *Inventory) checkPage(req listing.PageRequest) (*selection, error) {
+// checkPage refuses a request this package does not serve.
+func (inv *Inventory) checkPage(req listing.PageRequest) error {
 	if err := inv.checkPrefix(req.Prefix); err != nil {
-		return nil, err
+		return err
 	}
 	switch {
 	case req.Limit < 1 || req.Limit >= math.MaxInt-1:
-		return nil, invalid("a page's Limit is positive")
+		return invalid("a page's Limit is positive")
 	case req.MaxDuration < 0:
-		return nil, invalid("a negative bound")
-	case req.ChildTotals == nil:
-		return nil, nil
+		return invalid("a negative bound")
 	}
-	sel, err := selectionOf(req.ChildTotals.Kinds)
-	if err != nil {
-		return nil, err
-	}
-	return &sel, nil
+	return nil
 }
 
 // listedEntry is one entry of a delimited listing, the caller's to keep.
@@ -204,52 +179,3 @@ var (
 	errNotDirectory = wrap(listing.ErrNotDirectory, "the inventory lists the name as another kind")
 	errNotFound     = wrap(listing.ErrNotFound, "the inventory has no such directory")
 )
-
-// childTotals are the totals of each child prefix or directory of a
-// page, aligned with listed: nil for any other entry, and for one whose
-// rows the listing did not establish. Each child is aggregated on its
-// own, several at once, so that when op, bounded by the page's
-// MaxDuration, ends first, the totals already counted stand, the rest
-// are nil, and it reports true; ctx is the caller's. A child that fails
-// before the budget ends fails the page.
-func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.PageEntry, sel selection) ([]*listing.Totals, bool, error) {
-	var counted []int
-	for i, le := range listed {
-		if le.CommonPrefix != nil && established(le.Rows) {
-			counted = append(counted, i)
-		}
-	}
-
-	out := make([]*listing.Totals, len(listed))
-	errs := make([]error, len(listed))
-	var late atomic.Bool
-	next := make(chan int)
-	var wg sync.WaitGroup
-	for range min(len(counted), runtime.GOMAXPROCS(0)) {
-		wg.Go(func() {
-			for i := range next {
-				totals, err := inv.aggregate(op, []seekparquet.RowSpan{listed[i].Rows}, sel, false)
-				switch {
-				case err == nil:
-					out[i] = totals[0]
-				case timeUp(ctx, op):
-					late.Store(true) // not counted within the budget: nil
-				default:
-					errs[i] = err
-				}
-			}
-		})
-	}
-	for _, i := range counted {
-		next <- i
-	}
-	close(next)
-	wg.Wait()
-
-	for _, err := range errs {
-		if err != nil {
-			return nil, false, failed(ctx, err)
-		}
-	}
-	return out, late.Load(), nil
-}

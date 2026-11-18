@@ -424,9 +424,6 @@ func TestInvalidRequests(t *testing.T) {
 			t.Errorf("page, %s: %v", name, err)
 		}
 	}
-	if _, err := src.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}}); !errors.Is(err, listing.ErrUnsupported) {
-		t.Errorf("page with child totals: %v", err)
-	}
 	for _, key := range [][]byte{nil, []byte("a\x00"), {0xff}} {
 		if _, err := src.Lookup(ctx, key); !errors.Is(err, listing.ErrInvalidRequest) {
 			t.Errorf("lookup %q: %v", key, err)

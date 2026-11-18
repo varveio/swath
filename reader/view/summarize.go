@@ -20,7 +20,9 @@ var errRoot = errors.New("view: the root has no entry")
 // package listing states. A target's State and Self are what Lookup
 // answers for its key; the root's, a subtree target with an empty key, is
 // unknown. A target outside the inventory's scope is unknown with
-// ErrOutOfScope as its Reason, and counts nothing.
+// ErrOutOfScope as its Reason, and counts nothing. To size a page's child
+// folders, summarize its KindDir and KindPrefix entries as subtree
+// targets.
 func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	sel, err := inv.checkSummary(targets, opts)
 	if err != nil {
@@ -220,7 +222,7 @@ func (s *summary) count(ctx context.Context) error {
 		return nil
 	}
 
-	totals, err := s.inv.aggregate(ctx, spans, s.sel, true)
+	totals, err := s.inv.aggregate(ctx, spans, s.sel)
 	if err != nil {
 		return err
 	}

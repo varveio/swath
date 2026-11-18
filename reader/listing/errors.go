@@ -18,8 +18,7 @@ var (
 	// refused before any request.
 	ErrInvalidRequest = errors.New("listing: invalid request")
 	// ErrInvalidToken is a page token issued for another source,
-	// inventory, prefix or set of options, or of a version the backend
-	// does not read. It is refused before any request.
+	// inventory or prefix, or of a version the backend does not read. It is refused before any request.
 	ErrInvalidToken = errors.New("listing: invalid page token")
 	// ErrNotFound is a location the call needs that does not exist: the
 	// bucket or container (on S3, one the service says is in another

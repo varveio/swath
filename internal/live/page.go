@@ -55,8 +55,7 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 	return page, nil
 }
 
-// checkPage refuses a request of the wrong form, or one asking for child
-// totals, before any request.
+// checkPage refuses a request of the wrong form, before any request.
 func (s *Source) checkPage(req listing.PageRequest) error {
 	if err := s.checkName("prefix", req.Prefix); err != nil {
 		return err
@@ -66,8 +65,6 @@ func (s *Source) checkPage(req listing.PageRequest) error {
 		return invalid("a page's Limit is positive")
 	case req.MaxDuration < 0:
 		return invalid("a negative bound")
-	case req.ChildTotals != nil:
-		return fmt.Errorf("%w: a live source gives no child totals", listing.ErrUnsupported)
 	}
 	return nil
 }
