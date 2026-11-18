@@ -1,11 +1,29 @@
 # Install
 
-swath is one static binary with nothing else to install. Download a release and put `swath` on your `PATH`;
-[verifying the download](#verify-the-download) first is optional.
+swath is one static binary with nothing else to install. On macOS and Linux, [Homebrew](#homebrew) can install
+it; otherwise download a release and put `swath` on your `PATH`.
+[Verifying the download](#verify-the-download) first is optional.
 
 The newest published build is swath 0.4.0, on the [releases page](https://github.com/varveio/swath/releases).
 Coming from 0.3.2: the command line and the dataset format are new
 ([moving from 0.3.2](https://github.com/varveio/swath/releases/tag/v0.4.0)).
+
+## Homebrew
+
+On macOS and Linux:
+
+```bash
+brew install varveio/tap/swath
+swath --version
+```
+
+This installs `swath` and its completion files for bash, zsh and fish from the
+[varveio/tap](https://github.com/varveio/homebrew-tap) formula, which builds the release's source with its version
+and commit; `brew upgrade swath` installs a later release once the tap has it. Apple silicon (macOS 15 and later)
+and Linux get a prebuilt bottle; Intel Macs build from source. `swath-replay`, the replay server for testing, is in
+the release archives and its own [container image](#container-images), not in the formula. Installing by the full
+name trusts only that formula ([tap trust](https://docs.brew.sh/Tap-Trust)). This install does not need the
+Gatekeeper step under [macOS](#macos).
 
 ## Install a release
 
@@ -304,5 +322,8 @@ directories; on Windows swath checks this when the run starts and refuses one th
 ```bash
 source <(swath completion bash)    # in ~/.bashrc; zsh and fish: swath completion --help
 ```
+
+The [Homebrew](#homebrew) install puts the completion files in place; if your shell does not load them, see
+Homebrew's [shell completion](https://docs.brew.sh/Shell-Completion) page.
 
 Next: [Your first inventory](first-inventory.md).
