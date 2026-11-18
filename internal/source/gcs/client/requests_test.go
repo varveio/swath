@@ -26,8 +26,9 @@ import (
 	"github.com/varveio/swath/internal/source/objhttp"
 )
 
-// recorder serves an empty objects envelope and records each request and
-// its body's length.
+// recorder serves an empty objects envelope (to objects.list), an object
+// resource (to objects.get) or a bucket resource (to buckets.get), and
+// records each request and its body's length.
 type recorder struct {
 	*httptest.Server
 	mu     sync.Mutex
@@ -45,7 +46,14 @@ func newRecorder(t *testing.T) *recorder {
 		r.mu.Lock()
 		r.reqs, r.bodies = append(r.reqs, req), append(r.bodies, int(n))
 		r.mu.Unlock()
-		fmt.Fprint(w, `{"kind":"storage#objects"}`)
+		switch path := req.URL.EscapedPath(); {
+		case strings.HasSuffix(path, "/o"):
+			fmt.Fprint(w, `{"kind":"storage#objects"}`)
+		case strings.Contains(path, "/o/"):
+			fmt.Fprint(w, `{"kind":"storage#object"}`)
+		default:
+			fmt.Fprint(w, `{"kind":"storage#bucket"}`)
+		}
 	}))
 	t.Cleanup(r.Close)
 	return r

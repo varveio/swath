@@ -229,3 +229,8 @@ What a provider must state about itself (built: `source.Capable` with `Resume`, 
   returns an error). A range a worker has taken is the provider's: its `Expand` releases it however it ends,
   a return on an already-canceled context included. Filesystem chunks release their shared directory
   descriptor both ways (`TestCancelReleasesChunkFDs`, `TestCancelledChunkReleasesItsFD`).
+- **What could not be read:** a provider reports each place it could not read and went on past, in the
+  listing contract's terms (`listing.Unread`: a key and a `Reason` of the error classes), to an emitter that
+  is a `source.Unreader`, which every adapter forwards, as it meets one. Only the local provider has such
+  places; a stop is not reported. A count whose sink is an `order.UnreadSink` passes them on: that is how a
+  library walk hands them to its caller ([library](../library.md#walks)).

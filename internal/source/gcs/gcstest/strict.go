@@ -20,8 +20,9 @@ import (
 	"time"
 )
 
-// Strict serves objects.list over keys (sorted by bytes) as the JSON API
-// defines it: prefix, delimiter, startOffset (inclusive), endOffset
+// Strict serves objects.list over keys (sorted by bytes), and objects.get
+// of each key and buckets.get of any bucket, as the JSON API defines them.
+// objects.list takes prefix, delimiter, startOffset (inclusive), endOffset
 // (exclusive), pageToken, maxResults (default and cap 1,000), and a
 // partial-response fields selector. Page tokens are opaque (random), bound
 // on the server to the query that started their chain: a token sent with
@@ -31,8 +32,9 @@ import (
 // nonempty pages are cut short at varying lengths; cap lowers the page
 // size limit.
 // Every object carries the full metadata resource, sizes and generations
-// as strings, as on the wire, and every response carries the envelope's
-// kind (storage#objects) unless a fields selector leaves it out.
+// as strings, as on the wire, and every response carries its resource's
+// kind (storage#objects, storage#object, storage#bucket) unless a fields
+// selector leaves it out.
 type Strict struct {
 	keys  []string
 	Empty int64
@@ -148,8 +150,16 @@ func (f *Strict) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
-	bucket, ok := strings.CutPrefix(r.URL.Path, "/storage/v1/b/")
-	if !ok || !strings.HasSuffix(bucket, "/o") {
+	rest, ok := strings.CutPrefix(r.URL.EscapedPath(), "/storage/v1/b/")
+	route := strings.SplitN(rest, "/", 3)
+	switch {
+	case ok && len(route) == 1 && route[0] != "":
+		f.write(w, q, map[string]any{"kind": "storage#bucket", "name": route[0]})
+		return
+	case ok && len(route) == 3 && route[1] == "o":
+		f.serveObject(w, q, route[2])
+		return
+	case !ok || len(route) != 2 || route[1] != "o":
 		http.Error(w, `{"error":{"code":404,"message":"no route"}}`, 404)
 		return
 	}
@@ -227,6 +237,20 @@ func (f *Strict) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp["prefixes"] = prefixes
 	}
 	f.write(w, q, resp)
+}
+
+// serveObject answers objects.get of the escaped name: the object's
+// resource, or GCS's 404 notFound.
+func (f *Strict) serveObject(w http.ResponseWriter, q url.Values, escaped string) {
+	name, err := url.PathUnescape(escaped)
+	i := sort.SearchStrings(f.keys, name)
+	if err != nil || i == len(f.keys) || f.keys[i] != name {
+		http.Error(w, `{"error":{"code":404,"message":"No such object","errors":[{"reason":"notFound","message":"No such object"}]}}`, 404)
+		return
+	}
+	o := f.object(i, name)
+	o["kind"] = "storage#object"
+	f.write(w, q, o)
 }
 
 // write sends resp, reduced to the fields selector when the request has

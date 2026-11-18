@@ -41,7 +41,7 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `command` | the command line as a function another Go program can call: `Main` runs one command line and returns its exit code, `Exit` exits with it as the binary does, and `Main`'s host argument names the program a copy is built into, which `--version` then states. The commands (`list`, `du`, `resume`, `show`, `diag list`, `diag count`; `du --from-dataset` reads a committed dataset through `reader` and `registry.DatasetTotals` instead of running a listing); flags into `inventory.Config`'s three groups (`Source`, `Output`, `Limits`, validated once by `Run`: a `*inventory.ConfigError` for a bad value or combination), with each provider's own flag group; usage generated from the flag set. Terminal detection (`--format auto`, color, the live progress line) follows the stdout and stderr given to `Main`: a writer that is not an `*os.File` is not a terminal. Process-wide policy is set when `Main` is called, never when the package is imported, for a process dedicated to the call (the binary, or a host's child): the Azure SDK's own log turned off, SIGPIPE ignored, `signal.Notify` on a channel, the run canceled through `context.WithCancelCause` with the signal as cause (so SIGINT is class `interrupted`, 130, SIGTERM `terminated`, 143, and SIGHUP `terminated`, 129, unless ignored at start (`nohup`); on Unix `Exit` then kills the process by the signal it got), and a forced exit after the shutdown grace, the one path on which `Main` ends the process instead of returning | listing, registry, cli, journal, dataset; no provider (`cli` registers them) |
 | `internal/inventory` | `Run(ctx, Config) (Report, error)`: opens the source by its root's scheme, wires it to order, router, dataset; the run report | source and all below, no provider |
 | `internal/cli` | the command line's flag table (`Flag`, `Define`, `Described`, the flag values) and help groups; the flag groups the providers share, `StoreGroup` (filling `source.Store`) and `EngineGroup` (filling `keyrange.Common`); each provider's registration, one file each (`s3.go`, `gcs.go`, `azblob.go`, `localfs.go`): its factory, registered from `init`, its flags and their environment variables and conflicts turned into the provider's options, and the source a run takes (the provider's opened view joined with `registry.From`) | registry, source, keyrange, objhttp, parquetout, pflag, every provider |
-| `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; what was not read (`Unreader`, `Dropper[R]`); the optional interfaces (`Identified`, `Resumable`, `Capable`, `Reporter`, `Traced` among them: see [providers.md](providers.md#registry-and-optional-interfaces)) | schema, runtrace |
+| `internal/source` | the provider contract: `Provider[R, P]`, `Emitter[R, P]`, `Disposer[R]`, `Erase`; what was not read (`Unreader`); the optional interfaces (`Identified`, `Resumable`, `Capable`, `Reporter`, `Traced` among them: see [providers.md](providers.md#registry-and-optional-interfaces)) | schema, runtrace |
 | `internal/registry` | `Factory` by URL scheme, `Register`, `Lookup`; `Source`, an opened provider bound to the typed stages (`From`, `Bind[R, P]`, `Run`: a `bind.Bound` whose rows go where the run's `Env` sends them, the part router, a text stream or nowhere); `SchemaInfo`, the producers' schema declarations by id (`Factory.Schemas`), and `DatasetTotals`, the same totals and filters over a committed dataset's rows (`swath du --from-dataset`) | bind, source, schema, order, parquetout, textout, dataset, totals, reader, seekparquet |
 | `internal/bind` | a provider bound to its row schema (`Provider[R, P]`) and listed into a sink its caller supplies: unordered (`Count`, `order.CountWithSink`) or through the order stage (`Run`); the column bindings of the filters, the object bytes, the versions counts and the per-prefix totals between provider and sink. It chooses no sink | source, schema, order, filter, totals |
 | `internal/source/localfs` | filesystem provider: Linux `getdents64` engine, portable engine; its row payload `Entry` and schema `swath/local-entries/v1`; `Open`, its opened view, whose `Begin` readies a listing (pruning, a count's processors) | source, schema, bind, dataset, longpath |
@@ -51,11 +51,11 @@ that the remainder and both children are worth their requests. It then emits `(c
 | `internal/source/azblob` | Azure Blob provider on the range engine: flat-namespace admission (Get Account Information), the List Blobs page fetch through the byte-order adapter (one per `Expand`), its row payloads `Object` and `Version` and schemas `swath/azure-objects/v1` and `swath/azure-versions/v1` (grouped: `--all-versions`, `NewVersions`); `Open` and `OpenVersions`, its opened view; `OpenLive`, a container's client for the library's live source, with no admission and no range engine | source, schema, bind, keyrange, azblob/client, azblob/order, live |
 | `internal/source/azblob/order` | the byte-order adapter: serves the range engine's queries in byte order over List Blobs' UTF-16 order (spans cut at names at U+E000 and above, lazy splits, page-atomic chains with their own tokens, its `order_*` counters) | source, keyrange, counters, azblob/client, utf16order |
 | `internal/utf16order` | Azure's listing order (UTF-16 code units) on UTF-8 bytes: the comparator the Azure client, the byte-order adapter and the replay's Azure route share | – |
-| `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payloads `Object` and `Generation` and schemas `swath/gcs-objects/v1` and `swath/gcs-generations/v1` (grouped: `--all-versions`, `NewGenerations`); registers `gs://` | source, schema, registry, keyrange, gcs/client |
-| `internal/source/objhttp` | what all object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client `Meter`, token waits, Guard and capture, transport pool, `Activity` (a client's request activity, each part zero where a supplied client does not count it), route canonicalization; `objhttptest` holds the retry contract all three clients pass | source, counters, tokensource |
-| `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
+| `internal/source/gcs` | GCS provider on the range engine: the objects.list page fetch, its row payloads `Object` and `Generation` and schemas `swath/gcs-objects/v1` and `swath/gcs-generations/v1` (grouped: `--all-versions`, `NewGenerations`); `Open` and `OpenGenerations`, its opened view | source, schema, bind, keyrange, gcs/client |
+| `internal/source/objhttp` | what all object-store clients share: the retry loop (backoff, exhaustion), failure classes and transport classification, credential errors, client `Meter`, token waits, Guard and capture, transport pool, `Activity` (a client's request activity, each part zero where a supplied client does not count it), route canonicalization; a failure's class in the listing contract (`ListingClass`); `objhttptest` holds the retry contract all three clients pass | source, counters, tokensource, reader/listing |
+| `internal/source/s3/client` | ListObjectsV2 and ListObjectVersions, and HeadObject and HeadBucket for the live source's lookups: SigV4, credentials, S3's answers and their classes, the page parser | objhttp |
 | `internal/source/gcs/client` | objects.list: OAuth2 credentials, a transport pool of one HTTP/2 transport per 16 workers, the JSON API's answers and their classes, SDK decode checks | objhttp |
-| `internal/source/azblob/client` | List Blobs and account/namespace checks: credential and SAS handling, API-version and start bound policy, Azure status/code precedence, SDK decode checks | objhttp, utf16order |
+| `internal/source/azblob/client` | List Blobs and account/namespace checks, and Get Blob Properties for the live source's lookups: credential and SAS handling, API-version and start bound policy, Azure status/code precedence, SDK decode checks | objhttp, utf16order |
 | `internal/source/tokensource` | shared OAuth token cache and one refresh in flight, cancellable waits, the shell-command bearer token source | oauth2, singleflight |
 | `internal/order` | bounded reorder of a range tree into one ascending stream, with the stream-wide order guard (`Run`): spill and durable spill, the frontier window that admits a planned run's tiles, the segment tail after listing; the unordered count of a dry run (`Count`) | source, schema, dataset |
 | `internal/schema` | provider-neutral: `Row[P]` (a key and a typed payload), `Schema[P]` (columns as accessors of P, logical and heap size, spill `Codec[P]` and the optional contextual `DeltaCodec[P]`, `Container`: a row that is no object, a local directory, derived from `Info.Containers`), `Info` (with the [version roles](parquet-output.md#version-roles)); `Bind` takes a schema id's key settings, version roles and its columns' names, types and nullability from the reader module's spec; `BindVersions` derives the version roles' accessors | reader (the nested module) |
@@ -74,10 +74,43 @@ that the remainder and both children are worth their requests. It then emits `(c
 The list clients are built on the vendors' SDK service clients; what is the SDK's, what swath keeps and why:
 [clients.md](clients.md).
 
+**The library** (experimental, [library.md](../library.md)). The root package `github.com/varveio/swath` holds
+`Source`, an opened live location that answers the listing contract's Page, Lookup and Walk (`reader/listing`) with the
+checks and page tokens every object store's pages share; it links no provider and no cloud SDK. A provider's
+public package opens one with typed options and no flags: `github.com/varveio/swath/s3` (`s3.Open`) over
+`internal/source/s3.OpenLive`, whose one-level call is one delimiter ListObjectsV2 and whose lookup is HeadObject,
+then HeadBucket after a 404; `github.com/varveio/swath/azblob` (`azblob.Open`) over
+`internal/source/azblob.OpenLive`, whose one-level call is one delimiter List Blobs served in byte order
+([its live source](providers/azblob.md#the-live-source)) and whose lookup is Get Blob Properties, then a one-entry
+List Blobs after a 404; `github.com/varveio/swath/gcs` (`gcs.Open`) over `internal/source/gcs.OpenLive`, whose
+one-level call is one delimiter objects.list and whose lookup is objects.get, then buckets.get after a 404 with reason
+`notFound`; and `github.com/varveio/swath/local` (`local.Open`) over `internal/source/localfs.OpenLive`, a directory
+the caller holds, whose one-level call reads one directory relative to it and whose lookup resolves a key one name
+at a time. `internal/live` joins the two: the `Store` a provider implements, and the `Source` over one
+(`live.NewSource`), which package `swath` defines `swath.Source` on, with methods that call it. A provider's failures take the
+contract's classes through `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither
+package links the command, pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
+
+`Source.Walk` lists a prefix flat. A store (`live.Store`) builds a provider of its own for each call,
+over its shared client (S3's, GCS's and Azure's `Live.Walk`: the range engine with no seed and no probes, Azure's
+after the namespace admission of `New`), binds it to its schema
+and runs the order stage's unordered count into the walk's sink (`live.Count`: `bind`,
+`order.CountWithSink`, each range's keys checked ascending, and each run of a range's keys checked apart from every
+other run's before the sink sees it, so no key reaches it twice). The count's workers hand that sink batches of
+entries, which it checks and hands to the caller's function one at a time from the goroutine that called
+`Walk`, each worker waiting until its batch is taken; the extents not read reach it through the count's
+`order.UnreadSink`.
+
 `order` and `parquetout` know nothing about sources; providers know nothing about Parquet. The pipeline packages
 (listing, order, parquetout, dataset, schema, journal, registry) import nothing under `internal/source/`, and
 `internal/source` and `internal/registry` import no provider: `internal/source` `TestImportBoundary` checks it,
-transitively.
+transitively. The other way round, what providers are built from (`internal/source`, `keyrange`, `objhttp`,
+`tokensource`) imports none of the command's composition (pflag, `registry`, `parquetout`, `textout`, `cli`),
+transitively, nor does any provider, which `cli` registers; their parquet-go arrives only through
+SeekParquet's reader (`schema` → `reader`): `cli` `TestProviderImportBoundary`.
+`internal/order` and `internal/dataset` reach no cloud SDK module either (`internal/order` `TestNoCloudSDK`): a store's
+failure is classed by its `HTTPStatusCode`, which `objfile`'s GCS and Azure writers attach to the errors they report
+(`objfile.WithHTTPStatus`) and the AWS SDK's response errors carry, so `dataset.FailureClass` names no SDK error type.
 
 **Nested modules.** Two packages are modules of their own, so a program that reads swath datasets does not
 inherit the lister's dependencies: `reader` (`github.com/varveio/swath/reader`: the schema ids and their

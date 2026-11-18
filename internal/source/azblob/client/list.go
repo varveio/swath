@@ -49,9 +49,10 @@ package client
 //     TestArrowColumnTypes). Other columns may have any type: swath does
 //     not read them, so a change there does not fail a listing.
 //   - refusal: the SAS kept out of what the SDK's decoder errors quote
-//     (TestRedactedRefusal). The SDK's own log, which quotes failed
-//     requests' URLs, is not swath's: the command turns it off at startup
-//     (cmd/swath), whatever AZURE_SDK_GO_LOGGING says.
+//     (TestRedactedRefusal), and an error answer's body kept from the SDK,
+//     whose own log would quote it (withheld, TestSDKLogWithheld). The
+//     command also turns that log off at startup (package command),
+//     whatever AZURE_SDK_GO_LOGGING says.
 //   - merge: the SDK returns a hierarchy page's blobs and prefixes as two
 //     arrays; the provider's byte-order adapter needs them as one sequence
 //     in wire (UTF-16 code-unit) order. Both arrays are in that order and
@@ -93,7 +94,6 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/service"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -103,6 +103,7 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/utf16order"
+	"github.com/varveio/swath/objfile"
 )
 
 // services builds one SDK service client per pooled transport, each over
@@ -127,7 +128,7 @@ func (c *Client) services(bodyCap int64) error {
 		opt := &service.ClientOptions{ClientOptions: azcore.ClientOptions{
 			Transport:       &h,
 			Retry:           policy.RetryOptions{MaxRetries: -1}, // objhttp.Do retries
-			PerCallPolicies: []policy.Policy{pin{}},
+			PerCallPolicies: []policy.Policy{pin{}, withheld{}},
 			Telemetry:       policy.TelemetryOptions{ApplicationID: buildinfo.UserAgent()}, // swath's token, then the SDK's
 		}}
 		var svc *service.Client
@@ -147,27 +148,31 @@ func (c *Client) services(bodyCap int64) error {
 
 // List sends one List Blobs request, retrying retryable failures
 // (objhttp.Do), and validates the page (objhttp.ErrInvalidPage). A page past the
-// body cap is ErrBodyCap, not retried.
+// body cap is ErrBodyCap, not retried. Each attempt is reported to ctx's
+// objfile.Observer, when it carries one, as a list request of the prefix.
 func (c *Client) List(ctx context.Context, in *ListInput) (*ListOutput, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*ListOutput, error) { return c.list(ctx, in) })
+	op := &observed{request: objfile.Request{Kind: objfile.ListRequest, Name: in.Prefix}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (*ListOutput, error) { return c.list(ctx, in, op) })
 }
 
 // list is one List Blobs attempt: a fresh pager seeded with the marker,
 // one NextPage.
-func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
+func (c *Client) list(ctx context.Context, in *ListInput, op *observed) (out *ListOutput, err error) {
 	s := &sent{}
 	actx, cancel, err := c.begin(ctx, s)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
+	end := op.begin(ctx)
+	defer func() { end(int64(len(s.Body)), err) }()
+
 	cc := c.svc[c.pick()].NewContainerClient(in.Container)
 	var size *int32
 	if in.MaxResults > 0 {
 		m := int32(min(in.MaxResults, math.MaxInt32))
 		size = &m
 	}
-	var out *ListOutput
 	done := c.Tally.Attempt()
 	if in.Delimiter == "" {
 		var r container.ListBlobsFlatResponse
@@ -195,11 +200,82 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 	if err := faults.At("response-read"); err != nil {
 		return nil, err
 	}
-	if err := out.Validate(in.Marker, in.Include.Grouped()); err != nil {
-		return nil, err
+	var check error
+	if in.AnyOrder {
+		check = out.continues(in.Marker)
+	} else {
+		check = out.Validate(in.Marker, in.Include.Grouped())
+	}
+	if check != nil {
+		return nil, check
 	}
 	c.formats.count(arrowAnswer(s.Header), len(out.Items))
 	return out, nil
+}
+
+// Properties sends Get Blob Properties of the blob name in container,
+// retrying retryable failures (objhttp.Do), with the listing's
+// credentials, timeout and classification: a missing blob and a missing
+// container are both an *Error of status 404, their codes BlobNotFound and
+// ContainerNotFound. Each attempt is reported to ctx's objfile.Observer,
+// when it carries one, as a metadata request of the name.
+func (c *Client) Properties(ctx context.Context, container, name string) (*Head, error) {
+	op := &observed{request: objfile.Request{Kind: objfile.MetadataRequest, Name: name}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (h *Head, err error) {
+		s := &sent{}
+		actx, cancel, err := c.begin(ctx, s)
+		if err != nil {
+			return nil, err
+		}
+		defer cancel()
+		end := op.begin(ctx)
+		defer func() { end(0, err) }()
+
+		done := c.Tally.Attempt()
+		r, err := c.svc[c.pick()].NewContainerClient(container).NewBlobClient(name).GetProperties(actx, nil)
+		done()
+		switch {
+		case err != nil && s.refused(err):
+			return nil, c.refusal(err)
+		case err != nil:
+			return nil, c.failure(actx, ctx, s, err, container)
+		}
+		h = &Head{LastModified: micros(r.LastModified), AccessTier: deref(r.AccessTier), Directory: Directory(r.Metadata)}
+		if r.ContentLength != nil {
+			h.Size = *r.ContentLength
+		}
+		return h, nil
+	})
+}
+
+// Head is what Get Blob Properties says of a blob.
+type Head struct {
+	Size         int64
+	LastModified int64  // Unix microseconds; 0 when absent
+	AccessTier   string // as answered; "" when absent
+	// Directory: the blob is a hierarchical namespace's directory
+	// (Directory).
+	Directory bool
+}
+
+// Directory reports metadata that marks a blob as a directory of a
+// hierarchical namespace: hdi_isfolder=true, which Azure sets on the blob
+// that stands for each directory (names and values in any case).
+func Directory(metadata map[string]*string) bool {
+	for k, v := range metadata {
+		if strings.EqualFold(k, "hdi_isfolder") && v != nil && strings.EqualFold(*v, "true") {
+			return true
+		}
+	}
+	return false
+}
+
+// CloseIdleConnections closes the idle connections of every transport of
+// the pool. The client stays usable: a later request opens a new one.
+func (c *Client) CloseIdleConnections() {
+	for _, h := range c.http {
+		h.CloseIdleConnections()
+	}
 }
 
 // AccountInfo sends Get Account Information on the container's path
@@ -207,15 +283,21 @@ func (c *Client) list(ctx context.Context, in *ListInput) (*ListOutput, error) {
 // may call) and reports whether the account has a hierarchical namespace,
 // from the 200's x-ms-is-hns-enabled as sent (hns: exactly "true" or
 // "false"; anything else is ErrHNSUnknown, never flat). A refused call is
-// an error the caller takes for "unknown", never for flat.
+// an error the caller takes for "unknown", never for flat. Each attempt is
+// reported to ctx's objfile.Observer, when it carries one, as a metadata
+// request of no name.
 func (c *Client) AccountInfo(ctx context.Context, container string) (bool, error) {
-	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (bool, error) {
+	op := &observed{request: objfile.Request{Kind: objfile.MetadataRequest}}
+	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (_ bool, err error) {
 		s := &sent{}
 		actx, cancel, err := c.begin(ctx, s)
 		if err != nil {
 			return false, err
 		}
 		defer cancel()
+		end := op.begin(ctx)
+		defer func() { end(0, err) }()
+
 		done := c.Tally.Attempt()
 		_, err = c.svc[c.pick()].NewContainerClient(container).GetAccountInfo(actx, nil)
 		done()
@@ -242,7 +324,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 		}
 		actx = policy.WithHTTPHeader(actx, http.Header{headerAuthorization: {"Bearer " + tok.AccessToken}})
 	}
-	return objhttp.WithCapture(actx, &s.Capture), cancel, nil
+	return context.WithValue(objhttp.WithCapture(actx, &s.Capture), sentKey{}, s), cancel, nil
 }
 
 // failure is the error of an attempt that got no page: the service's answer
@@ -253,8 +335,7 @@ func (c *Client) begin(ctx context.Context, s *sent) (context.Context, context.C
 func (c *Client) failure(actx, ctx context.Context, s *sent, err error, container string) error {
 	u := s.safeURL(c, container)
 	if re, ok := errors.AsType[*azcore.ResponseError](err); ok && re.RawResponse != nil {
-		body, _ := runtime.Payload(re.RawResponse)
-		return c.responseError(re.RawResponse, re.ErrorCode, body, u)
+		return c.responseError(re.RawResponse, s.answer, u)
 	}
 	if tl, ok := errors.AsType[*objhttp.TooLargeError](err); ok {
 		return fmt.Errorf("%w: a listing page past %d bytes", ErrBodyCap, tl.Limit)
@@ -534,7 +615,10 @@ func xmlEnvelope(body []byte) error {
 // whether a 200 passed the Guard to the SDK.
 type sent struct {
 	objhttp.Capture
+	answer []byte // an error answer's body, kept by withheld
 }
+
+type sentKey struct{}
 
 // refused reports err as the SDK's refusal of a 200 the Guard passed (its
 // decoder's or a header's), not a failure to get one: a 200 reached it and
@@ -571,4 +655,26 @@ type pin struct{}
 func (pin) Do(req *policy.Request) (*http.Response, error) {
 	req.Raw().Header["x-ms-version"] = []string{Version}
 	return req.Next()
+}
+
+// withheld is the per-call policy that keeps the body of an answer the
+// SDK makes an error of (any but a 200) from the SDK: azcore quotes that
+// body, however it encodes the SAS, in the log AZURE_SDK_GO_LOGGING turns
+// on. The body goes to the attempt's sent, for responseError, which reads
+// the code the SDK would have and scrubs it. The Guard below has the body
+// in memory, bounded.
+type withheld struct{}
+
+func (withheld) Do(req *policy.Request) (*http.Response, error) {
+	resp, err := req.Next()
+	if err != nil || resp.StatusCode == http.StatusOK {
+		return resp, err
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if s, ok := req.Raw().Context().Value(sentKey{}).(*sent); ok {
+		s.answer = body
+	}
+	resp.Body = http.NoBody
+	return resp, err
 }

@@ -64,6 +64,9 @@ func loadAuth(ctx context.Context, cfg Config) (*auth, error) {
 	if cfg.Profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(cfg.Profile))
 	}
+	if cfg.CredentialsFile != "" {
+		opts = append(opts, config.WithSharedCredentialsFiles([]string{cfg.CredentialsFile}))
+	}
 	// The trust the listing has (--ca-bundle over AWS_CA_BUNDLE,
 	// --no-verify-ssl) is the credential chain's too: STS, SSO, web
 	// identity.
@@ -220,10 +223,10 @@ func partialEnvCredentials() string {
 
 // discovers reports that the default chain searches for credentials on its
 // own (objhttp.CredentialError.Discovered): no bearer token command, no
-// profile (--s3-profile, AWS_PROFILE, AWS_DEFAULT_PROFILE) and no keys in
-// the environment.
+// profile (--s3-profile, AWS_PROFILE, AWS_DEFAULT_PROFILE), no credentials
+// file given and no keys in the environment.
 func discovers(cfg Config) bool {
-	if cfg.Bearer != nil || cfg.Profile != "" {
+	if cfg.Bearer != nil || cfg.Profile != "" || cfg.CredentialsFile != "" {
 		return false
 	}
 	for _, v := range []string{"AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY",
