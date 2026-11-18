@@ -75,7 +75,9 @@ type WriteOptions struct {
 	// ended normally: a retry azcore declines (a Retry-After over
 	// MaxRetryDelay) is not counted, nor is one whose attempt is cancelled
 	// after it was sent or ends in an error azcore does not retry, so a run
-	// cancelled mid-retry can under-report by one. It must return quickly.
+	// cancelled mid-retry can under-report by one. A service answer's status
+	// is reachable through the error's HTTPStatusCode
+	// (objfile.WithHTTPStatus). It must return quickly.
 	Retried func(op string, err error)
 }
 
@@ -139,7 +141,7 @@ func (w *writer) call(ctx context.Context, op string, uncertain *atomic.Bool) co
 		MaxRetries: int32(max(w.o.MaxAttempts-1, -1)), RetryDelay: w.o.RetryDelay, MaxRetryDelay: w.o.MaxRetryDelay,
 		ShouldRetry: func(resp *http.Response, err error) bool {
 			if pending != nil && w.o.Retried != nil {
-				w.o.Retried(op, pending)
+				w.o.Retried(op, objfile.WithHTTPStatus(pending, status(pending)))
 			}
 			pending = nil
 			if err == nil && !slices.Contains(retryStatus, resp.StatusCode) {

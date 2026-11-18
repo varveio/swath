@@ -20,9 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	seekparquet "github.com/varveio/seekparquet/go"
-	"google.golang.org/api/googleapi"
 
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/objfile"
@@ -136,18 +134,14 @@ func (s *UploadStats) Classes() map[string]int64 {
 }
 
 // FailureClass names a store failure for a report: http_STATUS for a
-// service answer (GCS's, an AWS SDK response error, or an azcore one),
-// timeout, connection, or other.
+// service answer, timeout, connection, or other. The answer's status is
+// read from the error's HTTPStatusCode, which the store adapters provide
+// (an AWS SDK response error has it; objfile's GCS and Azure writers attach
+// it, objfile.WithHTTPStatus), so no cloud SDK's error type is named here.
 func FailureClass(err error) string {
-	var ge *googleapi.Error
-	var ae *azcore.ResponseError
 	var re interface{ HTTPStatusCode() int }
 	var ne net.Error
 	switch {
-	case errors.As(err, &ge):
-		return "http_" + strconv.Itoa(ge.Code)
-	case errors.As(err, &ae):
-		return "http_" + strconv.Itoa(ae.StatusCode)
 	case errors.As(err, &re) && re.HTTPStatusCode() > 0:
 		return "http_" + strconv.Itoa(re.HTTPStatusCode())
 	case errors.Is(err, context.DeadlineExceeded):

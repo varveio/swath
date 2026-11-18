@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // Count expands every range of p and counts its rows without ordering them:
@@ -49,6 +51,10 @@ func CountWithSink[R, P any](ctx context.Context, p source.Provider[R, P], count
 	defer cancel(nil)
 	c := &counter[R, P]{ctx: ctx, cancel: cancel, p: p, opt: opt, counted: counted, g: opt.Gauges, sink: sink}
 	c.runs, _ = sink.(RangeSink[P])
+	c.unreads, _ = sink.(UnreadSink)
+	if r, ok := sink.(Recovering); ok {
+		c.recovers = r.Recovers()
+	}
 	if c.trees, _ = sink.(SubtreeSink[P]); c.trees != nil {
 		c.subs = []*subtree{{pending: 1}}
 	}
@@ -130,6 +136,22 @@ type SubtreeSink[P any] interface {
 	SubtreeEnd(prefix string)
 }
 
+// UnreadSink is a count's sink also told of each place a provider could
+// not read and went on past, as the provider reports it through its
+// emitter (source.Unreader). It is called concurrently, from the worker
+// that met the place, and keeps the Unread's key.
+type UnreadSink interface {
+	Unread(u listing.Unread)
+}
+
+// Recovering is a count's sink that takes a panic in a provider's Expand
+// as the count's error when Recovers says so: a library walk's, which
+// runs in its host's process. Any other count lets the panic end the
+// process.
+type Recovering interface {
+	Recovers() bool
+}
+
 // subtree is a range in the tree a count expands, for a SubtreeSink.
 type subtree struct {
 	parent  *subtree
@@ -145,6 +167,7 @@ type counter[R, P any] struct {
 	sink    Sink[P]
 	runs    RangeSink[P]   // the sink, if it takes runs
 	trees   SubtreeSink[P] // the sink, if it is told of subtrees ending; subs then parallels stack
+	unreads UnreadSink     // the sink, if it is told what was not read
 	subs    []*subtree
 	opt     Options
 	counted *atomic.Int64
@@ -155,6 +178,9 @@ type counter[R, P any] struct {
 	// cancel) or the caller's stop: emitters poll it without a lock (ctx.Err
 	// takes the context's mutex).
 	done <-chan struct{}
+
+	// recovers: a panic in Expand is the count's error (Recovering).
+	recovers bool
 
 	mu      sync.Mutex
 	cond    *sync.Cond // a range pushed, the last range finished, or a stop
@@ -187,7 +213,7 @@ func (c *counter[R, P]) worker() {
 		c.busy++
 		c.mu.Unlock()
 		e := &countEmitter[R, P]{c: c, node: node}
-		err := c.p.Expand(c.ctx, r, e)
+		err := c.expand(r, e)
 		e.end(true)
 		c.mu.Lock()
 		c.busy--
@@ -220,6 +246,22 @@ func (c *counter[R, P]) worker() {
 		}
 		c.cond.Broadcast()
 	}
+}
+
+// expand expands r. For a Recovering sink, a panic in the provider's
+// Expand is returned as the count's error: a library count runs in its
+// host's process, which one listing's panic must not end. What the
+// provider holds stays as the panic left it.
+func (c *counter[R, P]) expand(r R, e *countEmitter[R, P]) (err error) {
+	if !c.recovers {
+		return c.p.Expand(c.ctx, r, e)
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("order: a range's listing panicked: %v\n%s", v, debug.Stack())
+		}
+	}()
+	return c.p.Expand(c.ctx, r, e)
 }
 
 // settle counts node's Expand done and returns the prefixes of the
@@ -336,6 +378,14 @@ func (e *countEmitter[R, P]) Child(r R) error {
 		return context.Cause(e.c.ctx)
 	}
 	return nil
+}
+
+// Unread hands a place the range could not read to an UnreadSink
+// (source.Unreader), and drops it for any other sink.
+func (e *countEmitter[R, P]) Unread(u listing.Unread) {
+	if e.c.unreads != nil {
+		e.c.unreads.Unread(u)
+	}
 }
 
 // Subtree takes the prefix the range owns (source.Subtreer).

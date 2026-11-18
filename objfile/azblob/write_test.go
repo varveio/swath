@@ -37,8 +37,9 @@ type fixture struct {
 	w       objfile.Writer
 	o       objfile.Opener
 	retries *atomic.Int64
-	ops     *sync.Map // retries by operation
-	ids     *sync.Map // block ids staged, by request
+	ops     *sync.Map     // retries by operation
+	status  *atomic.Int64 // the HTTP status the last retried error carried
+	ids     *sync.Map     // block ids staged, by request
 }
 
 func newFixture(t *testing.T, wrap func(http.Handler) http.Handler, o azblob.WriteOptions) fixture {
@@ -57,12 +58,17 @@ func newFixture(t *testing.T, wrap func(http.Handler) http.Handler, o azblob.Wri
 	})
 	var retries atomic.Int64
 	var ops sync.Map
+	var status atomic.Int64
 	if o.BlockSize == 0 {
 		o.BlockSize = block
 	}
 	o.RetryDelay, o.MaxRetryDelay = time.Millisecond, time.Millisecond
-	o.Retried = func(op string, _ error) {
+	o.Retried = func(op string, err error) {
 		retries.Add(1)
+		var s interface{ HTTPStatusCode() int }
+		if errors.As(err, &s) {
+			status.Store(int64(s.HTTPStatusCode()))
+		}
 		n, _ := ops.LoadOrStore(op, new(atomic.Int64))
 		n.(*atomic.Int64).Add(1)
 	}
@@ -70,7 +76,7 @@ func newFixture(t *testing.T, wrap func(http.Handler) http.Handler, o azblob.Wri
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fixture{f: f, w: w, o: azblob.New(c, containerName), retries: &retries, ops: &ops, ids: &ids}
+	return fixture{f: f, w: w, o: azblob.New(c, containerName), retries: &retries, ops: &ops, status: &status, ids: &ids}
 }
 
 func (x fixture) retried(op string) int64 {
@@ -365,6 +371,11 @@ func TestTransient(t *testing.T) {
 				}
 				if want := int64(iff(k.Load() > 0, 1)); x.retries.Load() != want {
 					t.Fatalf("%d retries counted, want %d", x.retries.Load(), want)
+				}
+				// The error a retry is told to Retried carries the failed
+				// answer's HTTP status, which the listing's failure classes read.
+				if x.retries.Load() > 0 && x.status.Load() != http.StatusServiceUnavailable {
+					t.Fatalf("the retried error carries status %d, want %d", x.status.Load(), http.StatusServiceUnavailable)
 				}
 			})
 		}
