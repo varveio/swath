@@ -175,12 +175,32 @@ func (d *decoder) size(r row, slot int) (*int64, error) {
 	return d.slab.int64(v.Int64()), nil
 }
 
+// time reads a timestamp, which is of a year RFC 3339 can carry.
 func (d *decoder) time(r row, slot int) (*time.Time, error) {
 	v, ok, err := d.value(r, slot, seekparquet.KindInt64, false)
 	if !ok {
 		return nil, err
 	}
+	if !dated(v.Int64()) {
+		return nil, d.fault(r, reader.KindRow, slot, undated)
+	}
 	return d.slab.time(time.UnixMicro(v.Int64()).UTC()), nil
+}
+
+// The microseconds since the Unix epoch of the first instant of year 1
+// and of year 10000, in UTC.
+var (
+	firstMicro = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+	pastMicro  = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+)
+
+// undated is why a timestamp outside the years 1 to 9999 is refused.
+const undated = "a time outside the years 1 to 9999, which RFC 3339 carries"
+
+// dated reports whether micros, a timestamp in microseconds since the
+// Unix epoch, falls in the years 1 to 9999 (UTC).
+func dated(micros int64) bool {
+	return firstMicro <= micros && micros < pastMicro
 }
 
 func (d *decoder) class(r row) (*string, error) {
