@@ -52,6 +52,19 @@ type Metadata struct {
 	// the listing did not measure it (a platform without a measurement, a
 	// failed call, a filesystem that reports no size).
 	Filesystem *FilesystemSpace
+	// WrittenBy is extensions.swath.written_by: the swath build that wrote
+	// the manifest. Nil for a manifest written before builds recorded it.
+	WrittenBy *WrittenBy
+}
+
+// WrittenBy is the build that wrote a manifest: the tool (swath), its
+// version (a release's X.Y.Z or X.Y.Z-rc.N; for a build from source,
+// devel or a Go pseudo-version) and the VCS revision it was built from
+// ("-dirty" when modified; nil when the build did not know it).
+type WrittenBy struct {
+	Tool     *string `json:"tool"`
+	Version  *string `json:"version"`
+	Revision *string `json:"revision"`
 }
 
 // FilesystemSpace is a filesystem's space as its operating system reported
@@ -166,11 +179,12 @@ func ParseMetadata(m seekparquet.Metadata) (Metadata, error) {
 		Collected            *Collected       `json:"collected"`
 		CommittedObjectBytes *int64           `json:"committed_object_bytes"`
 		Filesystem           *FilesystemSpace `json:"filesystem"`
+		WrittenBy            *WrittenBy       `json:"written_by"`
 	}
 	if err := json.Unmarshal(raw, &x); err != nil {
 		return Metadata{}, &SemanticError{Kind: KindMetadata, Err: err}
 	}
 	out.Swath, out.PublishedAt, out.Source, out.Scope, out.Coverage, out.CommittedObjectBytes = true, x.PublishedAt, x.Source, x.Scope, x.Coverage, x.CommittedObjectBytes
-	out.Collected, out.Filesystem = x.Collected, x.Filesystem
+	out.Collected, out.Filesystem, out.WrittenBy = x.Collected, x.Filesystem, x.WrittenBy
 	return out, nil
 }
