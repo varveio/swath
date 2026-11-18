@@ -48,14 +48,14 @@ func deps(t *testing.T, root, pkg string) map[string]bool {
 }
 
 // TestImportBoundary: the pipeline sees providers only through packages
-// source and registry. listing, order, parquetout, dataset, schema, journal
+// source and registry. inventory, order, parquetout, dataset, schema, journal
 // and registry import nothing under internal/source/ (directly or not),
 // internal/source imports no provider, the command imports providers only
 // to register them, and never test support (scalefake, shapes).
 func TestImportBoundary(t *testing.T) {
 	root := moduleDir(t)
 	providers := mod + "/internal/source/"
-	for _, p := range []string{"listing", "order", "parquetout", "dataset", "schema", "journal", "registry", "source"} {
+	for _, p := range []string{"inventory", "order", "parquetout", "dataset", "schema", "journal", "registry", "source"} {
 		for d := range deps(t, root, mod+"/internal/"+p) {
 			if strings.HasPrefix(d, providers) {
 				t.Errorf("internal/%s depends on provider package %s", p, strings.TrimPrefix(d, mod+"/"))
