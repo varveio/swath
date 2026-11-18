@@ -42,7 +42,15 @@ operation. Ordinary `swath resume` keeps source and destination identity fixed.
 ## Library interfaces
 
 The CLI is the product entry point. Internal engine packages are not a stable embedding
-API. The existing [Go dataset reader](reader/README.md) and
-[object-store I/O library](objfile/README.md) document their own interfaces; they are
-not a promise of an embeddable listing engine. A curated engine API needs a separate
-contract after the CLI and lifecycle settle.
+API. The [Go dataset reader](reader/README.md) and the
+[object-store I/O library](objfile/README.md) document their own interfaces, and the root
+module is importable by released version.
+
+What exists: the reader module holds an experimental contract of the four questions swath
+answers about a listed location (`reader/listing`: Page, Lookup, Walk and Summarize, their
+evidence and error classes) and an inventory view that answers them from a dataset
+(`reader/view`). Both may change in any release.
+
+Still to come: a public live source, one that answers the same contract by listing an
+object store or a filesystem directly. Until then the listing engine is reachable only
+through the CLI, and its internal packages are not an embedding API.
