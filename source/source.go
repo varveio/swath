@@ -44,7 +44,8 @@ func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, 
 // emit is called from the goroutine that called Walk, one batch at a time,
 // and nothing is emitted after Walk returns. When ctx ends, Walk returns
 // its error, even when emit has accepted every batch. A panic in the
-// walk's workers is returned as an error of no class.
+// walk's workers is returned as an error, which need not match a class;
+// a panic in emit is not recovered.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	return (*live.Source)(s).Walk(ctx, req, emit)
 }
