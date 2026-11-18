@@ -1,0 +1,166 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package view
+
+import (
+	"bytes"
+	"context"
+	"math"
+
+	seekparquet "github.com/varveio/seekparquet/go"
+
+	"github.com/varveio/swath/reader/listing"
+)
+
+// Page returns the next children of req.Prefix, one level by "/", in byte
+// order, as package listing states. A local child directory is its own
+// row, a KindDir. The entry at exactly the prefix comes back as Self on
+// the level's first page.
+//
+// A prefix outside the inventory's scope is ErrOutOfScope. A local
+// directory the inventory has as another kind, or below a symbolic link,
+// is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
+// absence, and an empty page otherwise.
+func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
+	if err := inv.checkPage(req); err != nil {
+		return listing.Page{}, err
+	}
+	if !inv.inScope(req.Prefix) {
+		return listing.Page{}, errOutOfScope
+	}
+	bind := inv.binding(req.Prefix)
+	cursor, err := decodeToken(req.Prefix, bind, req.Token)
+	if err != nil {
+		return listing.Page{}, err
+	}
+
+	first := req.Token == ""
+	limit := req.Limit
+	if first && len(req.Prefix) > 0 {
+		// One more, which is Self when the prefix has an entry.
+		limit++
+	}
+	listed, err := inv.sp.Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{
+		Prefix:    req.Prefix,
+		Delimiter: '/',
+		Cursor:    cursor,
+		Limit:     limit,
+		Columns:   inv.rows.columns,
+	}}, nil)
+	if err != nil {
+		return listing.Page{}, failed(ctx, err)
+	}
+
+	page := listing.Page{Evidence: inv.evidence()}
+	entries, next := listed.Entries, listed.Next
+	if limit > req.Limit {
+		if page.Self, entries, next, err = inv.self(req.Prefix, req.Limit, entries, next); err != nil {
+			return listing.Page{}, failed(ctx, err)
+		}
+	}
+	page.Entries = make([]listing.Entry, len(entries))
+	for i := range entries {
+		e, err := inv.listedEntry(entries[i].ListEntry)
+		if err != nil {
+			return listing.Page{}, failed(ctx, err)
+		}
+		page.Entries[i] = *e
+	}
+
+	if first && len(page.Entries) == 0 && page.Self == nil && inv.rows.local && len(req.Prefix) > 0 {
+		if err := inv.missingDirectory(ctx, req.Prefix); err != nil {
+			return listing.Page{}, failed(ctx, err)
+		}
+	}
+	if next != nil {
+		if page.Next, err = encodeToken(bind, next); err != nil {
+			return listing.Page{}, failed(ctx, err)
+		}
+	}
+	return page, nil
+}
+
+// self takes the entry at exactly prefix from the first page of its
+// level, listed with one entry more than limit for it: Self when the
+// first entry is it, else the page cut to limit, continuing after its
+// last entry.
+func (inv *Inventory) self(prefix []byte, limit int, entries []seekparquet.PageEntry, next *seekparquet.Cursor) (*listing.Entry, []seekparquet.PageEntry, *seekparquet.Cursor, error) {
+	if len(entries) > 0 && entries[0].Row != nil && bytes.Equal(entries[0].Row.Key, prefix) {
+		self, err := inv.listedEntry(entries[0].ListEntry)
+		return self, entries[1:], next, err
+	}
+	if len(entries) > limit {
+		entries = entries[:limit]
+		next = entries[limit-1].Cursor()
+	}
+	return nil, entries, next, nil
+}
+
+// checkPage refuses a request this package does not serve.
+func (inv *Inventory) checkPage(req listing.PageRequest) error {
+	if err := inv.checkPrefix(req.Prefix); err != nil {
+		return err
+	}
+	if req.Limit < 1 || req.Limit >= math.MaxInt-1 {
+		return invalid("a page's Limit is positive")
+	}
+	return nil
+}
+
+// listedEntry is one entry of a delimited listing, the caller's to keep.
+// An object store's common prefix is a KindPrefix entry; a local one is
+// its directory, from the directory's own row when the listing paired it
+// (ListEntry.Exact), else its key alone.
+func (inv *Inventory) listedEntry(le seekparquet.ListEntry) (*listing.Entry, error) {
+	d := decoder{rows: inv.rows}
+	switch {
+	case le.Row != nil:
+		e, err := d.entry(ownedRow(le.Row))
+		return &e, err
+	case !inv.rows.local:
+		return prefixEntry(le.CommonPrefix, listing.KindPrefix)
+	case le.Exact != nil:
+		e, err := d.entry(ownedRow(le.Exact))
+		return &e, err
+	}
+	return prefixEntry(le.CommonPrefix, listing.KindDir)
+}
+
+// prefixEntry is the entry of a common prefix with no row of its own, a
+// key the listing made from its rows' keys: checked as a row's key is.
+func prefixEntry(key []byte, kind listing.Kind) (*listing.Entry, error) {
+	if bytes.IndexByte(key, 0) >= 0 {
+		return nil, errNULKey
+	}
+	return &listing.Entry{Key: key, Kind: kind}, nil
+}
+
+// missingDirectory explains a local directory key with no row and nothing
+// under it: nothing when its name or an ancestor is an entry of unknown
+// kind, ErrNotDirectory when an ancestor is a symbolic link or the
+// inventory has its name as another kind, ErrNotFound when the inventory
+// proves it absent, else nothing.
+func (inv *Inventory) missingDirectory(ctx context.Context, prefix []byte) error {
+	name := prefix[:len(prefix)-1]
+	names := inv.ancestors(prefix) // the names on the way to it, then name
+	found, err := inv.entries(ctx, names)
+	switch {
+	case err != nil:
+		return err
+	case foundKind(found, names, listing.KindUnknown):
+		return nil
+	case foundKind(found, names[:len(names)-1], listing.KindSymlink):
+		return errThroughLink
+	case found[string(name)] != nil:
+		return errNotDirectory
+	case inv.provable:
+		return errNotFound
+	}
+	return nil
+}
+
+var (
+	errNotDirectory = wrap(listing.ErrNotDirectory, "the inventory lists the name as another kind")
+	errNotFound     = wrap(listing.ErrNotFound, "the inventory has no such directory")
+)
