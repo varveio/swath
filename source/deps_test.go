@@ -89,7 +89,7 @@ func TestLibraryImports(t *testing.T) {
 
 	core := deps(t, src)
 	for path := range core {
-		if strings.HasPrefix(path, mod+"/internal/source/") || slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
+		if strings.HasPrefix(path, mod+"/internal/source/") || strings.HasPrefix(path, src+"/") || slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
 			t.Errorf("%s links %s", src, path)
 		}
 	}
@@ -204,5 +204,29 @@ func TestLocalImports(t *testing.T) {
 	// The walk sees what it looks for where it is linked (not vacuous).
 	if _, ok := d[mod+"/internal/source/localfs"]; !ok {
 		t.Error("the walk does not see the local provider in the local package")
+	}
+}
+
+// TestAddressableImports: the providers source.Open reaches are the ones a
+// program imports. A program of source and source/s3 links no Google or
+// Azure SDK (the s3 package imports source); source/all links all three
+// SDKs and none of the command.
+func TestAddressableImports(t *testing.T) {
+	for path := range deps(t, src+"/s3") {
+		if slices.ContainsFunc([]string{"cloud.google.com/", "google.golang.org/api/", "github.com/Azure/"}, func(p string) bool { return strings.HasPrefix(path, p) }) {
+			t.Errorf("source and source/s3 link %s", path)
+		}
+	}
+
+	all := deps(t, src+"/all")
+	for _, sdk := range []string{"github.com/aws/aws-sdk-go-v2/service/s3", "google.golang.org/api/storage/v1", "github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"} {
+		if _, ok := all[sdk]; !ok {
+			t.Errorf("%s/all does not link %s", src, sdk)
+		}
+	}
+	for _, c := range command {
+		if _, ok := all[c]; ok {
+			t.Errorf("%s/all links %s", src, c)
+		}
 	}
 }

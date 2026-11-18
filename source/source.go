@@ -10,9 +10,9 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Source is an opened live location, opened by a provider package such as
-// github.com/varveio/swath/source/s3, as the package documentation states. The
-// zero Source is not usable.
+// Source is an opened live location, opened by Open or by a provider
+// package such as github.com/varveio/swath/source/s3, as the package
+// documentation states. The zero Source is not usable.
 type Source live.Source
 
 // Page returns the next children of req.Prefix, one level by "/", as

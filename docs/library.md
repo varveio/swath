@@ -9,7 +9,8 @@ The library is **experimental**: it is implemented and tested, but its API may c
 
 | Package | What it holds |
 |---|---|
-| `github.com/varveio/swath/source` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
+| `github.com/varveio/swath/source` | `Open`, which opens a `Source` from an address through the providers the program links; `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
+| `github.com/varveio/swath/source/all` | nothing but imports: it links every provider `source.Open` takes an address of |
 | `github.com/varveio/swath/source/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
 | `github.com/varveio/swath/source/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
 | `github.com/varveio/swath/source/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
@@ -19,6 +20,28 @@ The library is **experimental**: it is implemented and tested, but its API may c
 Pages, lookups and walks answer from the location as it is during the call. To ask the same questions of a saved inventory
 instead, or for the totals under several prefixes (a summary), open it with the `reader/view` package
 ([the inventory view](../reader/README.md#the-inventory-view)).
+
+## Open by address
+
+```go
+import (
+	"github.com/varveio/swath/source"
+	_ "github.com/varveio/swath/source/s3" // links s3:// addresses
+)
+
+src, err := source.Open(ctx, "s3://example-bucket", source.Options{Region: "eu-west-1"})
+```
+
+`source.Open` takes `s3://BUCKET`, `gs://BUCKET` or `az://ACCOUNT/CONTAINER`, as the command does. An address names
+a bucket or container only: a key prefix goes in each page, lookup or walk request, and an address with one is
+`listing.ErrInvalidRequest`. `Open` opens the providers the program links, as `database/sql` opens its drivers:
+import one provider's package for its side effect, several, or `github.com/varveio/swath/source/all` for every
+one; a program links only the cloud SDKs of the providers it imports. An address whose provider is not linked is
+`listing.ErrUnsupported`, and its message names the import to add. `source.Options` holds every provider's
+settings, each field naming the providers that read it; the others ignore it.
+
+A program that names its provider in code can call that package's own `Open` and `Options` instead, as below, and
+the compiler checks them. A local directory has no address: `local.Open` takes the directory the program opened.
 
 ## Open, page, look up, close
 

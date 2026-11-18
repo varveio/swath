@@ -8,12 +8,21 @@
 //
 // The API is experimental: it may change in any release.
 //
-// Four constructors open a Source, each in its own package under this one:
-// s3.Open (github.com/varveio/swath/source/s3) an S3 bucket, gcs.Open
+// Open opens a Source from an address, s3://BUCKET, gs://BUCKET or
+// az://ACCOUNT/CONTAINER, through the providers compiled into the program:
+// a program links one provider by importing its package for its side
+// effect, several by importing each, or every one by importing
+// github.com/varveio/swath/source/all:
+//
+//	import _ "github.com/varveio/swath/source/s3"
+//
+// Each provider package also has its own typed Open and Options, for a
+// caller that names the provider in code: s3.Open
+// (github.com/varveio/swath/source/s3) an S3 bucket, gcs.Open
 // (github.com/varveio/swath/source/gcs) a Google Cloud Storage bucket,
 // azblob.Open (github.com/varveio/swath/source/azblob) an Azure Blob
 // Storage container, and local.Open (github.com/varveio/swath/source/local)
-// a directory the caller opened. The Source owns the provider's client,
+// a directory the caller opened, which has no address. The Source owns the provider's client,
 // credentials and request limiter for as long as the caller keeps it, and
 // is safe for concurrent use: every call on it shares them, and builds its
 // own state for its own work. Its methods Page, Lookup and Walk answer with
@@ -39,6 +48,7 @@
 // objfile.MetadataRequest; a local walk's directory reads are not
 // reported. Walk sets no limit: a caller stops it by cancelling ctx.
 //
-// This package links no cloud SDK; a provider package links its own.
+// This package links no cloud SDK and no provider; a provider package
+// links its own SDK.
 // Neither links swath's command, its flags or its Parquet writer.
 package source

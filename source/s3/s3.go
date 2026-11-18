@@ -95,3 +95,20 @@ func Open(ctx context.Context, bucket string, opts Options) (*source.Source, err
 	}
 	return (*source.Source)(live.NewSource(st, false)), nil
 }
+
+// init links addresses s3://BUCKET to Open for source.Open.
+func init() {
+	live.Register("s3", func(ctx context.Context, bucket string, o live.Options) (*live.Source, error) {
+		s, err := Open(ctx, bucket, Options{
+			Region:          o.Region,
+			Endpoint:        o.Endpoint,
+			PathStyle:       o.PathStyle,
+			Profile:         o.Profile,
+			CredentialsFile: o.CredentialsFile,
+			Anonymous:       o.Anonymous,
+			MaxRequests:     o.MaxRequests,
+			RequestRate:     o.RequestRate,
+		})
+		return (*live.Source)(s), err
+	})
+}

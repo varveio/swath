@@ -106,3 +106,17 @@ func Open(ctx context.Context, account, container string, opts Options) (*source
 	}
 	return (*source.Source)(live.NewSource(st, false)), nil
 }
+
+// init links addresses az://ACCOUNT/CONTAINER to Open for source.Open.
+func init() {
+	live.Register("az", func(ctx context.Context, location string, o live.Options) (*live.Source, error) {
+		account, container, _ := strings.Cut(location, "/")
+		s, err := Open(ctx, account, container, Options{
+			Endpoint:    o.Endpoint,
+			Anonymous:   o.Anonymous,
+			MaxRequests: o.MaxRequests,
+			RequestRate: o.RequestRate,
+		})
+		return (*live.Source)(s), err
+	})
+}

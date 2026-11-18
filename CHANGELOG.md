@@ -65,6 +65,11 @@ Notable changes per release. The human summary of the current release is in the
   `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them
   ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
+- `source.Open` opens a `Source` from an address (`s3://BUCKET`, `gs://BUCKET`, `az://ACCOUNT/CONTAINER`) with one
+  `source.Options`, through the providers the program imports: `source/s3`, `source/gcs`, `source/azblob`, or
+  `source/all` for every one. An address whose provider is not imported is `listing.ErrUnsupported`, naming the
+  import; an address with a key prefix is `listing.ErrInvalidRequest`. Each provider keeps its typed `Open`
+  ([library guide](docs/library.md#open-by-address)).
 - `WalkSummary.Complete` says a walk read everything under its prefix: it finished, handed on no `Unread` and,
   over an inventory, the inventory's coverage is complete.
 - `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
