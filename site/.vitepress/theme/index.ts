@@ -27,7 +27,7 @@ type Session = [command: string, output: string][]
 // site/readme/hero.png: after changing it or the terminal's styles, run site/readme/render.sh and commit the PNG.
 const HERO = {
   caption: [
-    'Where 697 TiB sits in a public genomics bucket: 477,714 objects totalled in 3.5 seconds on a 4-vCPU cloud VM. ',
+    'Where 697 TiB sits in a public genomics bucket: 477,714 objects totaled in 3.5 seconds on a 4-vCPU cloud VM. ',
     { text: 'How this was measured', href: MEASURED_LEAD },
   ] as Caption,
   session: [

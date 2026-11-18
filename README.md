@@ -9,7 +9,7 @@ without listing again. swath reads listing metadata only; it never reads, change
 
 ![swath du s3://1000genomes: the largest prefixes of the bucket at any depth, each under its parent with its size, object count, share of the total as a bar, and newest object](site/readme/hero.png)
 
-Where 697 TiB sits in a public genomics bucket: 477,714 objects totalled in 3.5 seconds on a 4-vCPU cloud VM
+Where 697 TiB sits in a public genomics bucket: 477,714 objects totaled in 3.5 seconds on a 4-vCPU cloud VM
 ([how this was measured](docs/internals/measurements.md#the-home-pages-lead-view-1000genomes-2026-11-16)).
 
 ## Install and try
@@ -22,7 +22,7 @@ docker run --rm -t ghcr.io/varveio/swath:0.4.0 du s3://1000genomes --anonymous -
 
 `--anonymous` sends no credentials, and `-t` gives swath a terminal to draw the view on.
 
-swath is one static binary. To install 0.4.0, follow the steps for
+To install swath 0.4.0, follow the steps for
 [Linux](https://swath.varve.io/docs/install.html#linux),
 [macOS](https://swath.varve.io/docs/install.html#macos) or
 [Windows](https://swath.varve.io/docs/install.html#windows), or
@@ -33,11 +33,11 @@ Then try it on a directory of yours, or a bucket:
 
 ```bash
 swath du ~/Downloads             # replace with any directory
-swath du s3://bucket/prefix/     # also gs:// and az://
+swath du s3://bucket/prefix/     # also gs://bucket/prefix/ or az://account/container/prefix/
 ```
 
-Listing a bucket makes billable API requests; credentials come from the provider's usual chain
-([sources and credentials](https://swath.varve.io/docs/sources/)).
+Listing a bucket makes billable API requests. For S3, `--s3-region REGION` names the bucket's region;
+[sources and credentials](https://swath.varve.io/docs/sources/) covers authentication.
 
 ## Save an inventory, query it with SQL
 
@@ -46,8 +46,8 @@ objects, queried with [DuckDB](https://duckdb.org/):
 
 ```bash
 swath list s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ -o noaa --anonymous --s3-region us-east-1
-swath show noaa                    # what the inventory holds and how complete it is
-swath du --from-dataset noaa       # the same view as above, without listing again
+swath show noaa                    # confirm it says "complete" before querying
+swath du --from-dataset noaa       # this inventory's sizes, without listing again
 
 duckdb -c "SELECT regexp_extract(key, '\.(\w+)$', 1) AS ext, count(*) AS objects,
                   format_bytes(sum(size)::BIGINT) AS bytes
@@ -63,7 +63,7 @@ in 238 seconds on one 64-vCPU VM
 
 ## Go further
 
-swath divides a bucket's keys into ranges that workers list in parallel, and keeps dividing the busiest ones.
+swath lists ranges of a bucket's keys in parallel, splitting ranges further when workers become idle.
 The [field guide](https://swath.varve.io/field-guide/) shows how on a recorded run.
 
 - [Start here](https://swath.varve.io/docs/start-here.html): pick a job, and when swath fits.
