@@ -52,9 +52,9 @@ type Options struct {
 // Open opens bucket as a live source. It builds the source's client,
 // which may load credentials, and lists nothing: a bucket that is not
 // there, or that the credentials may not read, fails the first call, not
-// Open. Credentials that cannot be found or do not load are
-// listing.ErrAuth; an endpoint of the wrong form is listing.ErrUnsupported.
-// The caller closes the source.
+// Open. Credentials that cannot be found are listing.ErrAuth; an endpoint
+// of the wrong form is listing.ErrUnsupported. The caller closes the
+// source.
 //
 // Page needs storage.objects.list on the bucket. Lookup needs
 // storage.objects.get on the object, and storage.buckets.get on the bucket

@@ -16,18 +16,12 @@ import (
 // directory it holds.
 var errRoot = errors.New("swath: the root has no entry")
 
-// Summarize counts the entries of opts.Kinds at or under each target and
-// sums their sizes and newest change, one TargetSummary per target, in
-// order, as package listing states. Each target is answered on its own:
-// its State, Self and Reason by a Lookup of its key (the root's, the empty
-// key's, is unknown: no entry), whose Self an exact target counts; a
-// subtree target's entries at and under its key by one Walk of it, so
-// nested and repeated targets are each walked and counted in full.
+// Summarize counts the entries of opts.Kinds at or under each target, as
+// package listing states. Each target is answered on its own: its State,
+// Self and Reason by a Lookup of its key (the root's, the empty key's, is
+// unknown: no entry), and a subtree target's entries by one Walk of it.
 //
-// A subtree target's Unread counts what its walk handed on as Unread, and
-// it is Complete when its State is known (the root's excepted) and its
-// walk handed on none; an exact target is Complete when its State is
-// known. A subtree whose Lookup left it unknown is still walked, and when
+// A subtree whose Lookup left it unknown is still walked, and when
 // that walk fails the target counts what it read, incomplete, rather than
 // failing the call; so is one shown absent whose walk finds no local
 // directory (ErrNotFound), which holds nothing. A walk refused its
@@ -38,8 +32,7 @@ var errRoot = errors.New("swath: the root has no entry")
 // never followed) makes the target unknown, with that error as its
 // Reason, and incomplete, and the call goes on. Any other walk's failure,
 // and a lookup's, is Summarize's error;
-// when ctx ends, Summarize returns its error. A counted entry without a
-// size or a time, and a sum that overflows, make that total nil.
+// when ctx ends, Summarize returns its error.
 func (s *Source) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	counted, err := s.checkSummary(targets, opts)
 	if err != nil {

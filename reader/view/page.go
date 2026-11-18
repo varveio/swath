@@ -17,27 +17,19 @@ import (
 )
 
 // Page returns the next children of req.Prefix, one level by "/", in byte
-// order, from SeekParquet's delimited listing (Dataset.Page). An object's
-// child prefix is a KindPrefix entry; a local child directory is its own
+// order, as package listing states. A local child directory is its own
 // row, a KindDir. The entry at exactly the prefix comes back as Self on
-// the level's first page. A token is bound to the inventory's manifest
-// digest, to the prefix and to the kinds req.ChildTotals counts, if any:
-// one issued for another is ErrInvalidToken.
+// the level's first page.
 //
 // A prefix outside the inventory's scope is ErrOutOfScope. A local
 // directory the inventory has as another kind, or below a symbolic link,
 // is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
-// absence, and an empty page otherwise. When req.MaxDuration ends the
-// page it holds no entry, and its Next is req.Token, which starts the
-// page again.
+// absence, and an empty page otherwise.
 //
 // With req.ChildTotals, each child prefix or directory gets the totals
 // Summarize gives a subtree target at its key, from the rows the listing
-// established, within the page's MaxDuration. When it ends while they
-// are counted, the page keeps its entries, Self and Next, the totals
-// counted stand, those not yet counted are nil, and Evidence.Stop is
-// StopTimeBudget. They check the values they read, not the order of the
-// keys.
+// established, within the page's MaxDuration. They check the values they
+// read, not the order of the keys.
 func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	sel, err := inv.checkPage(req)
 	if err != nil {

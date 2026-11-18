@@ -74,13 +74,11 @@ type Disposer[R any] interface {
 }
 
 // Unreader is an Emitter told of each place its range could not read and
-// went on past, in the terms of the listing contract (reader/listing): a
-// local directory it could not open or finish reading, or an entry it
-// could not stat, with the class of the failure. A provider reports each
-// as it meets it, before the Expand that met it returns, and may call
-// Unread from several goroutines at once; the Unread's key passes to the
-// emitter. A count whose sink is an order.UnreadSink passes them on; any
-// other emitter ignores them, and an adapter between a provider and the
+// went on past, a listing.Unread with the class of the failure. A provider
+// reports each as it meets it, before the Expand that met it returns, and
+// may call Unread from several goroutines at once; the Unread's key passes
+// to the emitter. A count whose sink is an order.UnreadSink passes them on;
+// any other emitter ignores them, and an adapter between a provider and the
 // order stage forwards them. A stop is not reported: a walk that stops did
 // not finish, and says so.
 type Unreader interface {

@@ -27,38 +27,21 @@ import (
 // relative to root: "" pages root itself, "a/b/" the directory a/b below
 // it.
 //
-// Page and Lookup answer as package listing states, in byte order of
-// keys, which are any bytes but NUL. A child directory is a KindDir entry
-// with its metadata, its key ending in "/"; a prefix's own directory comes
-// back as the Self of its level's first page, beside Limit children. A
-// page reads its whole directory, again for each page, and holds only the
-// names that may still be on it, so its memory follows the request's
-// Limit, not the directory's size: a request's MaxDuration bounds that
-// work. A token resumes after the last key a page read, so a directory
-// that changes between pages repeats no key and skips no name that
-// stayed. A prefix that is not there is listing.ErrNotFound; one that names
-// something else than a directory, a symbolic link included,
-// listing.ErrNotDirectory, and so is one with a symbolic link on the way:
-// a link is never followed, so what lies past it is not reached, never
-// shown absent. A prefix on another device is listing.ErrOtherDevice.
-// Lookup answers as the contract states for a local source; an unknown
-// answer's Reason has the class a page through the same place fails with.
+// The source answers as package listing states for a local source. A
+// prefix's own directory comes back as the Self of its level's first page.
+// A page's memory follows the request's Limit, not the directory's size,
+// though each page reads its whole directory: a request's MaxDuration
+// bounds that work. A token resumes after the last key a page read, so a
+// directory that changes between pages repeats no key and skips no name
+// that stayed. A prefix that names a symbolic link, or has one on the way,
+// is listing.ErrNotDirectory: a link is never followed, so what lies past
+// it is not reached, never shown absent. An unknown Lookup's Reason has
+// the class a page through the same place fails with.
 //
-// Walk takes "" or a directory key, ending in "/", and refuses anything
-// else as listing.ErrInvalidRequest: no literal prefix matching. It fails
-// where a page of the same prefix fails, then hands on the directory's own
-// entry, below the root, and lists what is under it with the parallel
-// walker the swath command lists a tree with, each directory read relative
-// to its parent, following no symbolic link and entering no other device.
-// Its batches come in no key order, and a directory's entries unsorted. A
-// directory it cannot open or read, an entry it cannot stat, and a
-// directory on another device, listed and not entered, are handed to emit
-// as an Unread as the walk meets them, and the walk goes on. A walk has no
-// depth limit, but no key longer than 32 KiB: such an entry, a directory
-// with its subtree, is an Unread of class listing.ErrUnsupported. It
-// changes no process-wide setting. Summarize answers each target's state by a Lookup
-// of its key, so a directory's subtree target is present, with the
-// directory as its Self, even when empty, and walks each subtree target.
+// A walk fails where a page of the same prefix fails. It has no depth
+// limit, but no key longer than 32 KiB: such an entry, a directory with
+// its subtree, is an Unread of class listing.ErrUnsupported. It changes no
+// process-wide setting.
 //
 // A root that is not a directory is listing.ErrNotDirectory. On other
 // systems than Linux and macOS, Open is listing.ErrUnsupported.

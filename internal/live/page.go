@@ -19,30 +19,12 @@ import (
 )
 
 // Page returns the next children of req.Prefix, one level by "/", in byte
-// order (OrderBytes): one delimiter listing, the store's retries included,
-// and no request per child. The prefix is any key prefix, taken
-// literally: "a" holds both "ab" and the prefix "a/". A child prefix is a
-// KindPrefix entry; the object at exactly the prefix comes back once, as
-// the Self of the page that reads it, never as a child. req.Limit bounds
-// the children; Self comes beside them. A store's listing of req.Limit
-// entries may count Self among them, so the page that holds Self may hold
-// one child fewer: a token bound to its request's page size cannot be
-// continued with another.
-//
-// Page checks every page before returning it, as package listing states:
-// a key outside the prefix, below one of its children, holding a NUL, not
-// UTF-8, or not after the key before it, across pages too, more children
-// than asked for, and a truncated answer whose continuation token is
-// missing or repeats the one sent are ErrInvalidPage.
-//
-// A token is opaque and versioned. It carries the store's continuation
-// token and the level's last key, and is bound to the source's location
-// (the bucket and what decides which bucket of that name it is) and to
-// the prefix; one issued for another is ErrInvalidToken, before any
-// request. A live source gives no child totals: req.ChildTotals is
-// ErrUnsupported, before any request. When req.MaxDuration ends a page it
-// holds no entry, its Next is req.Token, which asks again, and its
-// Evidence.Stop is StopTimeBudget.
+// order (OrderBytes), as package listing states: one delimiter listing,
+// the store's retries included, and no request per child. Page checks
+// every page before returning it as the contract states, and a truncated
+// answer whose continuation token is missing is ErrInvalidPage too. A
+// token is bound to the source's location: the bucket and what decides
+// which bucket of that name it is.
 func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	if err := s.checkPage(req); err != nil {
 		return listing.Page{}, err

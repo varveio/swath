@@ -60,9 +60,9 @@ type Options struct {
 // Open opens bucket as a live source. It builds the source's client,
 // which may load credentials, and lists nothing: a bucket that is not
 // there, or that the credentials may not read, fails the first call, not
-// Open. Credentials that do not load are listing.ErrAuth; an endpoint of
-// the wrong form and an S3 directory bucket, which lists in no byte order,
-// are listing.ErrUnsupported. The caller closes the source.
+// Open. An endpoint of the wrong form and an S3 directory bucket, which
+// lists in no byte order, are listing.ErrUnsupported. The caller closes the
+// source.
 //
 // Page, Walk and Summarize need s3:ListBucket on the bucket. Lookup, and
 // Summarize's exact targets, need s3:GetObject on the key, and

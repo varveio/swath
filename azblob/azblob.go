@@ -75,9 +75,8 @@ var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 // Open opens the container of account as a live source. It builds
 // the source's client, which may load credentials, and sends nothing: a
 // container that is not there, or that the credentials may not read,
-// fails the first call, not Open. Credentials that do not load are
-// listing.ErrAuth; an endpoint of the wrong form is listing.ErrUnsupported.
-// The caller closes the source.
+// fails the first call, not Open. An endpoint of the wrong form is
+// listing.ErrUnsupported. The caller closes the source.
 //
 // Page needs permission to list the container's blobs. Lookup needs
 // permission to read the blob's properties, and to list the container to

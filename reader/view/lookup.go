@@ -15,17 +15,10 @@ import (
 )
 
 // Lookup says what is at exactly key: present when the inventory has a row
-// for it; absent only inside the inventory's scope and when its Unlocated
-// is 0, as of the listing; otherwise unknown. A key outside the scope is
-// unknown with ErrOutOfScope as its Reason, a key at or under a local
-// entry of unknown kind is unknown with a Reason that says so, a key
-// below a symbolic link is unknown with a Reason of ErrNotDirectory (not
-// reached: no listing follows a link), and a read that fails leaves it
-// unknown with the failure as its Reason. On a local
-// inventory a key without a trailing "/" is also looked up as a
-// directory's key. An empty key, or one holding a NUL, is
-// ErrInvalidRequest. It returns an error only for such a request, and when
-// ctx ends.
+// for it; absent only where the package documentation says the inventory
+// proves it; otherwise unknown. A key at or under a local entry of unknown
+// kind is unknown with a Reason that says so, and a read that fails leaves
+// it unknown with the failure as its Reason.
 func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := inv.checkKey(key); err != nil {
 		return listing.LookupResult{}, err

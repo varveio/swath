@@ -20,30 +20,15 @@ import (
 // emitted.
 var errStopped = errors.New("swath: the walk has stopped")
 
-// Walk hands emit every entry at or under req.Prefix, each once, in no
-// order, as package listing states, and every place the walk could not
-// read and went on past (an Unread), each in a batch of its own as the
-// walk meets it. On an object store the prefix is any key prefix, taken
-// literally, and the object at exactly it is included; workers list key
-// ranges at once and split them at page boundaries while workers are idle,
-// so a prefix that fits in one page is one request; req.Workers 1 lists
-// one continuation chain, never split; zero selects the source's default,
-// 64 for an object store. Each walk has a range engine of its own;
-// concurrent walks share the source's client and request limits only.
+// Walk hands emit every entry at or under req.Prefix, and every place the
+// walk could not read and went on past (an Unread), as package listing
+// states; each Unread comes in a batch of its own. A zero req.Workers
+// selects the source's default, 64 for an object store.
 //
-// emit is called from the goroutine that called Walk, one batch at a time.
-// A batch and what it reaches belong to the walk until emit returns, and
-// a worker whose batch emit has not taken waits: that is the backpressure,
-// and the walk holds no entry and no Unread it has not handed on. Every
-// entry is checked before it reaches emit: inside the prefix, no NUL in
-// its key, a size on every object, else ErrInvalidPage. An error from emit
-// stops the walk, and Walk returns it unchanged once the workers have
-// returned; nothing is emitted after Walk returns. The walk sets no limit:
-// when ctx ends, Walk returns its error, even when emit has accepted every
-// batch. A panic in the walk's workers is returned as an error of no class.
-// Whatever it returns, the WalkSummary counts what emit accepted, and its
-// Evidence.Stop is StopCompleted only when the walk returns no error; it
-// is Complete when the walk also handed on no Unread.
+// emit is called from the goroutine that called Walk, one batch at a time,
+// and nothing is emitted after Walk returns. When ctx ends, Walk returns
+// its error, even when emit has accepted every batch. A panic in the
+// walk's workers is returned as an error of no class.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err

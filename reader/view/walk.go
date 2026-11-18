@@ -13,24 +13,14 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Walk hands emit every entry at or under req.Prefix, the prefix's own
-// included when the inventory has it, each once. A walk of every level is
-// a range scan; with req.Workers above 1 (zero selects GOMAXPROCS)
-// SeekParquet scans shards of it in parallel and the walk hands their
-// batches to emit one at a time, from the goroutine that called Walk, in
-// no order. A batch holds no Unread: an inventory's gaps are unlocated
-// (Evidence.Unlocated).
+// Walk hands emit every entry at or under req.Prefix, as package listing
+// states. With req.Workers above 1 (zero selects GOMAXPROCS) SeekParquet
+// scans shards of the range in parallel, and the walk hands their batches
+// to emit one at a time, from the goroutine that called Walk.
 //
 // A local prefix the inventory has as another kind, or below a symbolic
 // link, is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
 // absence, and an empty walk otherwise.
-//
-// A batch, its entries and their values belong to the walk and are valid
-// until emit returns. An error from emit stops the walk and is returned
-// unchanged. When ctx ends, Walk returns its error. A walk that returns an
-// error returns with it the count of entries it handed on, and an
-// Evidence.Stop that is not StopCompleted. A walk that finished is
-// Complete when the inventory's coverage is (Evidence.Unlocated is 0).
 func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := inv.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err

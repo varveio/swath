@@ -34,14 +34,11 @@ func NewSource(s Store) *Source {
 }
 
 // Lookup says what is at exactly key: present with its entry, absent, or
-// unknown with the reason, as package listing states. A key is any
-// non-empty object key, "a/" as well as "a": the object at exactly "a/"
-// is not the prefix "a/". On S3 a key is absent only when HeadObject finds
-// no object and HeadBucket then shows the bucket is there; a 403, a
-// missing bucket and a failed probe leave it unknown, with the class of
-// the failure as Reason. Each provider package says how its store shows
-// a key absent. Lookup returns an error only for a key of the
-// wrong form (ErrInvalidRequest) or once ctx has ended.
+// unknown with the reason, as package listing states. On S3 a key is
+// absent only when HeadObject finds no object and HeadBucket then shows
+// the bucket is there; a 403, a missing bucket and a failed probe leave it
+// unknown, with the class of the failure as Reason. Each provider package
+// says how its store shows a key absent.
 func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := s.checkKey(key); err != nil {
 		return listing.LookupResult{}, err

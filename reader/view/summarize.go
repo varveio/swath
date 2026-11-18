@@ -16,22 +16,11 @@ import (
 // entry: an inventory has no row for it.
 var errRoot = errors.New("view: the root has no entry")
 
-// Summarize counts the entries of opts.Kinds at or under each target and
-// sums their sizes, space on disk and newest change, one TargetSummary per
-// target, in order. An entry counts toward every target that holds it. A
-// target's State and Self are what Lookup answers for its key; the root's,
-// a subtree target with an empty key, is unknown. A target outside the
-// inventory's scope is unknown with ErrOutOfScope as its Reason, and
-// counts nothing. A target is Complete when the inventory proves absence
-// (its Unlocated is 0) and its State is known, the root's excepted; its
-// Unread is always 0, since an inventory's gaps are unlocated.
-//
-// The call reads in two phases. First the entries at the targets' keys,
-// with those on the way to a local key when the inventory proves absence:
-// an exact target's totals are those of its own entry. Then the subtrees'
-// rows, in one aggregation through SeekParquet, every counted key's order
-// checked. A counted entry without a size or a time, and a sum that
-// overflows, make that total nil.
+// Summarize counts the entries of opts.Kinds at or under each target, as
+// package listing states. A target's State and Self are what Lookup
+// answers for its key; the root's, a subtree target with an empty key, is
+// unknown. A target outside the inventory's scope is unknown with
+// ErrOutOfScope as its Reason, and counts nothing.
 func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	sel, err := inv.checkSummary(targets, opts)
 	if err != nil {
