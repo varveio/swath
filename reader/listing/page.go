@@ -46,7 +46,10 @@ type PageRequest struct {
 	Limit int
 	// MaxDuration bounds the time of a page. Reaching it stops the page
 	// with StopTimeBudget: it holds no entry, and its Next is the
-	// request's Token, which asks again. Zero sets no bound.
+	// request's Token, which asks again. Reaching it while an inventory
+	// counts ChildTotals also says StopTimeBudget, but the page keeps its
+	// entries, Self and Next, and only the totals not yet counted are
+	// nil. Zero sets no bound.
 	MaxDuration time.Duration
 	// ChildTotals, when not nil, asks for the totals of each child prefix
 	// or directory, counted as it says. An inventory provides them; a live
@@ -71,8 +74,8 @@ type Page struct {
 	// Totals has one element per entry when the request asked for child
 	// totals, which only an inventory gives: a KindPrefix or KindDir
 	// entry's totals, as Summarize counts a Subtree target at its key, or
-	// nil for any other entry and wherever they are not known within the
-	// page's MaxDuration. Nil when not asked for.
+	// nil for any other entry and for one not counted within the page's
+	// MaxDuration. Nil when not asked for.
 	Totals []*Totals
 	// Self is the entry whose key is exactly the request's Prefix, such as
 	// an object "a/" in the level of "a/", on the one page of the level
@@ -83,7 +86,8 @@ type Page struct {
 	Order Order
 	// Next continues the level: pass it as the next request's Token. A
 	// page may be short or empty and still carry one. An empty Next ends
-	// the level only when Evidence.Stop is StopCompleted.
+	// the level only when Evidence.Stop is StopCompleted or the page holds
+	// entries.
 	Next string
 	// Evidence says where the page came from and whether it completed.
 	Evidence Evidence

@@ -106,13 +106,16 @@ func objects() []rec {
 }
 
 // tree is a local tree as swath lists it: directory rows ending in "/",
-// an empty directory, nested ones, a name that is not UTF-8, a symlink, a
-// FIFO and an entry of unknown kind, with every stat column.
+// an empty directory, nested ones, a name that is not UTF-8, a symlink
+// with its target, a FIFO and an entry of unknown kind, with every stat
+// column.
 func tree() []rec {
 	entry := func(key, kind string, size, alloc int64, ino uint64) rec {
 		return rec{key: key, kind: kind, size: ptr(size), alloc: ptr(alloc), modified: ptr(base.Add(time.Duration(ino) * time.Second)),
 			links: ptr[uint32](1), inode: ptr(ino), dev: ptr[uint64](64)}
 	}
+	link := entry("link", "symlink", 9, 0, 9)
+	link.extra = map[string]any{"link_target": "d"}
 	return []rec{
 		entry("a.txt", "file", 5, 4096, 1),
 		entry("bad\xffname.txt", "file", 3, 4096, 2),
@@ -122,7 +125,7 @@ func tree() []rec {
 		entry("d/nested/c.bin", "file", 100, 0, 6),
 		entry("empty/", "dir", 4096, 4096, 7),
 		entry("fifo", "fifo", 0, 0, 8),
-		entry("link", "symlink", 9, 0, 9),
+		link,
 		entry("u", "unknown", 0, 0, 10),
 		entry("z/", "dir", 4096, 4096, 11),
 		entry("z/y/", "dir", 4096, 4096, 12),
@@ -181,6 +184,9 @@ type fixture struct {
 	// and 4 KiB a part, so a few hundred rows span pages and parts.
 	pageRows  int
 	partBytes int64
+	// groupRows ends a row group, and so lets a part end; zero for the
+	// writer's default.
+	groupRows int64
 }
 
 // write writes f as a dataset with SeekParquet's writer, as swath's
@@ -225,7 +231,7 @@ func write(t testing.TB, f fixture) string {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	err = local.WriteDir(context.Background(), dir, schema, &rowReader{rows: rows}, local.DatasetOptions{
-		Part:          spwrite.PartOptions{Key: seekparquet.Key{Column: "key", Unique: spec.UniqueKeys}, SchemaID: string(f.id), PageRows: pageRows},
+		Part:          spwrite.PartOptions{Key: seekparquet.Key{Column: "key", Unique: spec.UniqueKeys}, SchemaID: string(f.id), PageRows: pageRows, RowGroupRows: f.groupRows},
 		PartBytes:     partBytes,
 		Extensions:    raw,
 		AllowUnsynced: true,
@@ -505,8 +511,10 @@ func sameEntry(e listing.Entry, r rec, isLocal bool) bool {
 	ok := bytes.Equal(e.Key, []byte(r.key)) && e.Kind == kindOf(r, isLocal) && eq64(e.Size, r.size) && sameTime
 	if !isLocal {
 		return ok && (e.StorageClass == nil) == (r.class == nil) && (r.class == nil || *e.StorageClass == *r.class) &&
-			e.AllocatedBytes == nil && e.Inode == nil && e.Device == nil && e.Links == nil
+			e.AllocatedBytes == nil && e.Inode == nil && e.Device == nil && e.Links == nil && e.LinkTarget == nil
 	}
+	target, linked := r.extra["link_target"].(string)
+	ok = ok && (e.LinkTarget != nil) == linked && string(e.LinkTarget) == target
 	return ok && eq64(e.AllocatedBytes, r.alloc) && e.StorageClass == nil &&
 		deref(e.Inode) == deref(r.inode) && deref(e.Device) == deref(r.dev) && deref(e.Links) == deref(r.links) &&
 		(e.Inode == nil) == (r.inode == nil)

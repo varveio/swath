@@ -7,10 +7,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/reader"
 	"github.com/varveio/swath/reader/listing"
@@ -308,4 +313,70 @@ func TestPageTimeBudget(t *testing.T) {
 			t.Errorf("page after %q = %+v, %v", token, p, err)
 		}
 	}
+}
+
+// TestPageChildTotalsTimeBudget: when the page's MaxDuration ends while
+// child totals are counted, the totals already counted stand and only
+// those not yet counted are nil; the page keeps its entries and says the
+// time budget stopped it. A child that fails before then fails the page.
+func TestPageChildTotalsTimeBudget(t *testing.T) {
+	stalledPage := func(t *testing.T, size int64) (listing.Page, error) {
+		rs := []rec{{key: "a/x", size: ptr(size)}}
+		for i := range 3000 {
+			rs = append(rs, rec{key: fmt.Sprintf("m/%05d", i), size: ptr[int64](1)})
+		}
+		dir := write(t, fixture{id: reader.S3ObjectsV1, rows: rs, partBytes: 1 << 10, groupRows: 256})
+		parts, err := filepath.Glob(filepath.Join(dir, "data", "*.parquet"))
+		if err != nil || len(parts) < 3 {
+			t.Fatalf("parts %v, %v", parts, err)
+		}
+		src := &stalledSource{slowSource: newSlowSource(t, dir, 0), part: "data/" + filepath.Base(parts[len(parts)-1])}
+		inv := openWith(t, dir, src)
+
+		req := listing.PageRequest{Limit: 10, ChildTotals: &listing.SummaryOptions{}}
+		inv.Page(context.Background(), req) // reads every part's keys
+		src.stalled.Store(true)             // the last part's reads now outlast the budget
+		req.MaxDuration = 200 * time.Millisecond
+		return inv.Page(context.Background(), req)
+	}
+
+	p, err := stalledPage(t, 1)
+	if err != nil || p.Evidence.Stop != listing.StopTimeBudget || len(p.Entries) != 2 || len(p.Totals) != 2 {
+		t.Fatalf("%+v, %v", p, err)
+	}
+	if p.Totals[0] == nil || p.Totals[0].Entries != 1 || p.Totals[1] != nil {
+		t.Errorf("a/ %v, m/ %v; want a/ counted, m/ nil", p.Totals[0], p.Totals[1])
+	}
+
+	if _, err := stalledPage(t, -1); !errors.Is(err, reader.ErrRow) {
+		t.Errorf("a negative size in a/, m/ late: %v, want %v", err, reader.ErrRow)
+	}
+}
+
+// stalledSource is a slowSource whose reads of one part, once stalled,
+// each take a second.
+type stalledSource struct {
+	*slowSource
+	part    string
+	stalled atomic.Bool
+}
+
+func (s *stalledSource) Open(ctx context.Context, name string) (seekparquet.SourceFile, error) {
+	f, err := s.slowSource.Open(ctx, name)
+	if err != nil || name != s.part {
+		return f, err
+	}
+	return stalledFile{slowFile: f.(slowFile), stalled: &s.stalled}, nil
+}
+
+type stalledFile struct {
+	slowFile
+	stalled *atomic.Bool
+}
+
+func (f stalledFile) ReadAt(p []byte, off int64) (int, error) {
+	if f.stalled.Load() {
+		time.Sleep(time.Second)
+	}
+	return f.slowFile.ReadAt(p, off)
 }

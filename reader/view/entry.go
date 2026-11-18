@@ -26,7 +26,7 @@ type rowShape struct {
 // storage_class; a local tree's entries are its own rows.
 var (
 	objectColumns = []string{"size", "last_modified", "storage_class"}
-	localColumns  = []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes"}
+	localColumns  = []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes", "link_target"}
 )
 
 // The projections' slots.
@@ -42,6 +42,7 @@ const (
 	slotInode
 	slotDevice
 	slotAllocated
+	slotLinkTarget
 )
 
 func shapeOf(id reader.SchemaID) rowShape {
@@ -133,6 +134,9 @@ func (d *decoder) entry(r row) (listing.Entry, error) {
 	if e.AllocatedBytes, err = d.size(r, slotAllocated); err != nil {
 		return listing.Entry{}, err
 	}
+	if e.LinkTarget, err = d.linkTarget(r); err != nil {
+		return listing.Entry{}, err
+	}
 	return e, nil
 }
 
@@ -210,6 +214,20 @@ func (d *decoder) links(r row) (*uint32, error) {
 		return nil, err
 	}
 	return d.slab.uint32(v.Uint32()), nil
+}
+
+// linkTarget reads a symbolic link's target as recorded: nil when the
+// listing did not record one. With a slab it is the row's own bytes,
+// valid as long as its key; without one, a copy.
+func (d *decoder) linkTarget(r row) ([]byte, error) {
+	v, ok, err := d.value(r, slotLinkTarget, seekparquet.KindByteArray, false)
+	if !ok {
+		return nil, err
+	}
+	if d.slab != nil {
+		return v.Bytes(), nil
+	}
+	return bytes.Clone(v.Bytes()), nil
 }
 
 func (d *decoder) word(r row, slot int) (*uint64, error) {
@@ -328,5 +346,6 @@ func cloneEntry(e *listing.Entry) *listing.Entry {
 	c.Key = bytes.Clone(e.Key)
 	c.Size, c.AllocatedBytes, c.LastModified, c.StorageClass = clone(e.Size), clone(e.AllocatedBytes), clone(e.LastModified), clone(e.StorageClass)
 	c.Device, c.Inode, c.Links = clone(e.Device), clone(e.Inode), clone(e.Links)
+	c.LinkTarget = bytes.Clone(e.LinkTarget)
 	return &c
 }
