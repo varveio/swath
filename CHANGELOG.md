@@ -5,6 +5,12 @@ Notable changes per release. The human summary of the current release is in the
 
 ## Unreleased
 
+### Added
+
+- A dataset's manifest records the build that wrote it (`extensions.swath.written_by`: tool, version and
+  revision). The member is optional: older readers ignore it and older manifests open without it.
+  `swath show -v` prints it.
+
 ### Changed
 
 - `swath du`'s table heads the newest time under a prefix `newest (ZONE)`, as the terminal view does, instead

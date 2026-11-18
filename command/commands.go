@@ -305,9 +305,9 @@ func showFlags(f *pflag.FlagSet, raw *bool) []*pflag.Flag {
 }
 
 // show prints what an output directory holds: a committed dataset or an
-// interrupted run; -v adds the dataset's format id and the run's journal
-// version and frozen identity; --journal dumps the journal's records as
-// JSON lines.
+// interrupted run; -v adds the dataset's format id and writing build, and
+// the run's journal version and frozen identity; --journal dumps the
+// journal's records as JSON lines.
 func show(args []string, stdout io.Writer) error {
 	f := pflag.NewFlagSet("show", pflag.ContinueOnError)
 	f.SetOutput(io.Discard)
@@ -465,7 +465,8 @@ func identityLine(id journal.Identity) string {
 // when it was listed, what it holds (its rows, the object bytes, the key
 // range, clipped to width when that is not 0 and left out where it cannot
 // fit), the coverage's account and the storage last: the Parquet parts and
-// the schema, and with verbose the SeekParquet format id too.
+// the schema, and with verbose the SeekParquet format id and the build that
+// wrote it too.
 func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int, verbose bool) {
 	c := &m.Coverage
 	fmt.Fprintf(w, "%s: %s\n", escapeControl(name), coverageVerdict(c.Complete, c.StopReason, c.Unreadable))
@@ -525,8 +526,15 @@ func writeSummary(w io.Writer, name string, m *dataset.Manifest, width int, verb
 		}
 		format += ", "
 	}
+	written := ""
+	if b := m.WrittenBy; verbose && b.Tool != "" {
+		written = ", written by " + b.Tool + " " + b.Version
+		if b.Revision != "" {
+			written += " revision " + b.Revision
+		}
+	}
 	parts := int64(len(m.Parts))
-	label(w, "storage", fmt.Sprintf("%s %s, %s of Parquet (%sschema %s)", count(parts), plural(parts, "part", "parts"), textout.Size(t.Bytes), format, m.SchemaID))
+	label(w, "storage", fmt.Sprintf("%s %s, %s of Parquet (%sschema %s%s)", count(parts), plural(parts, "part", "parts"), textout.Size(t.Bytes), format, m.SchemaID, escapeControl(written)))
 }
 
 // labelWidth is the room a summary's labels take: the longest, contents,
