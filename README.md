@@ -22,7 +22,8 @@ docker run --rm -t ghcr.io/varveio/swath:0.4.0 du s3://1000genomes --anonymous -
 
 `--anonymous` sends no credentials, and `-t` gives swath a terminal to draw the view on.
 
-To install swath 0.4.0, follow the steps for
+To install swath 0.4.0, run `brew install varveio/tap/swath` on macOS or Linux
+([Homebrew](https://swath.varve.io/docs/install.html#homebrew)), or follow the steps for
 [Linux](https://swath.varve.io/docs/install.html#linux),
 [macOS](https://swath.varve.io/docs/install.html#macos) or
 [Windows](https://swath.varve.io/docs/install.html#windows), or
