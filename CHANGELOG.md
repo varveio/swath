@@ -20,6 +20,85 @@ Notable changes per release. The human summary of the current release is in the
   (`invocation.narrowing` `provider_declined_prefix`). An Azure run with such an include that was
   interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2) (#621).
 
+### Fixed
+
+- A local listing on Linux and macOS opens every directory below the root relative to its parent's open
+  descriptor (`openat`, `O_NOFOLLOW`), never by its path. A symbolic link swapped in for a directory, or for any
+  directory above it, while the walk runs is not followed, so the walk does not leave its root through one; it
+  counts in `unsafe_dirs` (the getdents engine counted such a link in `open_errors`). The run report's
+  diagnostics gain `dir_opens` (`opened`, `redescents`, `refused`, `failed` by reason, `peak_kept`, `max_kept`).
+  Windows is unchanged.
+
+### Libraries
+
+- The root module `github.com/varveio/swath` is importable: its `go.mod` requires `reader` and `objfile` by
+  released version and carries no `replace`. `go.work` at the repository root joins the three modules, so a
+  build in a checkout compiles the local `reader/` and `objfile/`.
+- `reader/listing` (experimental: it may change in any release) is the contract of the questions swath
+  answers about a listed location: `Page`, `Lookup` and `Walk`, and an inventory's `Summarize`, their requests and results, the
+  common `Entry`, the `Evidence` every answer carries, the `Unread` places a walk could not read, and the error
+  classes. It holds types only and imports nothing beyond the standard library.
+- `reader/view` (experimental) answers those questions from an opened dataset, an inventory (`view.Open`):
+  pages with opaque tokens, lookups, walks and summaries, every answer's
+  evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
+  nothing in it was unreadable, and never at or under a local entry of unknown kind
+  ([reader guide](reader/README.md#the-inventory-view)).
+- `reader/listing`: `Evidence.Started` and `Finished` are each nil when the source does not know them.
+- The root package `github.com/varveio/swath` (experimental) answers `Page` and `Lookup` live: `s3.Open` opens a
+  bucket of S3 or an S3-compatible store as a `Source`, whose pages list one level by `/` with opaque tokens and
+  whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
+  `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
+  ([library guide](docs/library.md)).
+- A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them. No call has a
+  time limit of its own: a context deadline bounds it. A lookup left unknown carries evidence whose `Unlocated` is
+  nil.
+- The root package's `Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
+  only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
+  parallel; it sets no limit, and a caller stops it by cancelling its context, when it returns the context's error
+  and a summary that says it did not finish. Each place a local walk cannot read reaches the callback as an
+  `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them
+  ([library guide](docs/library.md#walks)).
+- `view.OpenDir` opens the inventory in a local dataset directory in one call.
+- `WalkSummary.Complete` says a walk read everything under its prefix: it finished, handed on no `Unread` and,
+  over an inventory, the inventory's coverage is complete.
+- `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
+  live source leaves it nil.
+- `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
+  of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
+  ([library guide](docs/library.md#google-cloud-storage)).
+- `azblob.Open(ctx, account, container, opts)` opens an Azure Blob Storage container as a `Source`. A level that one answer
+  holds is sorted from Azure's UTF-16 order into byte order; a longer level is `ErrUnsupported` from the page
+  where it leaves byte order. A hierarchical namespace's directories come back once, as prefixes
+  ([library guide](docs/library.md#azure-blob-storage)).
+- `local.Open` opens a directory the program already opened as a `Source` (Linux and macOS). Each page and lookup
+  opens what it reads relative to that directory, one name at a time, never following a symbolic link or
+  crossing to another device; a page is one directory level in byte order, a subdirectory a `dir` entry with its
+  metadata, and its memory follows the page's `Limit`, not the directory's size. Names are bytes: one that is
+  not UTF-8 pages and is looked up. Past a symbolic link a page or lookup is `ErrNotDirectory`. A walk takes
+  `""` or a directory key and lists it with the command's parallel walker, in no key order, without changing
+  `GOMAXPROCS` ([library guide](docs/library.md#a-local-directory)).
+- `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
+  a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
+- `command` (experimental) is the swath command line as a function: `Main(ctx, host, args, stdout, stderr)` runs
+  one command line and returns its exit code, `Exit` exits with it as the binary does, and `host` names the program
+  that embeds it, which `--version` then states. `cmd/swath` is `command.Exit(command.Main(...))`. The process-wide
+  policy is set when `Main` is called, never at import, and terminal detection follows the streams it is given
+  ([library guide](docs/library.md#run-the-command-line)).
+- In a program that embeds swath, the build that `--version`, the run report, the journal, Parquet `created_by`
+  and the User-Agent name is swath's version among the host's dependencies (`devel` for a local replacement or a
+  workspace module), not the host's version and revision.
+- GCS: a redirect's error message leaves out the target's query. Azure Blob: the Azure SDK's log never sees an
+  error answer's body, so a SAS echoed in it is not logged; swath still reports the service's error code.
+
+### Release
+
+- `reader/` and `objfile/` keep their own versions. A release where neither changed is one tag, `just release
+  X.Y.Z`. One where a nested module changed tags it first (`just release-modules`), points `go.mod` at it through
+  a pull request (`just release-prep`), then tags `vX.Y.Z` on the merge commit. The release workflow builds
+  without the workspace (`GOWORK=off`), as an outside project does, and refuses a tagged `go.mod` that carries a
+  `replace` or requires a nested tag that does not hold that module's code at the release commit
+  ([RELEASING.md](RELEASING.md#cutting-a-release)).
+
 ## 0.4.0
 
 swath lists S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage and local or mounted

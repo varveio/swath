@@ -117,6 +117,38 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   whose enumeration did not end (a read error), an entry whose stat failed. A walk that stops reports nothing
   more (`TestUnreadReachesTheSink`). The order stage's `order.SubtreeSink` tells when a directory's subtree
   ended; every report under it was made before.
+- **The library's live source** (`OpenLive`, `live_unix.go`; the public package `local`, Linux and macOS,
+  `listing.ErrUnsupported` elsewhere). A `live.Store` over a held root, for `swath.Source`'s `Page`,
+  `Lookup` and `Walk` ([library](../../library.md#a-local-directory)). Its location, which page tokens are bound to, is
+  the root's device and inode, never a path. A page of a prefix opens its directory as `Lookup` reaches a key's
+  parent (`resolve`, shared: each ancestor with `longpath.Search` and `O_NOFOLLOW`, device-checked, at most two
+  descriptors), then the directory itself `O_RDONLY|O_NOFOLLOW`, the root as `.` so that each page has its own
+  read offset and concurrent pages share nothing, and checks its device too: another device is
+  `listing.ErrOtherDevice`, a symbolic link at the prefix or on the way `ErrNotDirectory` (not followed: not
+  reached, never absent), nothing there `ErrNotFound`; `EACCES`/`EPERM` are `ErrAuth`, `ENAMETOOLONG`
+  `ErrUnsupported`, other errors `ErrUnavailable`, each message naming the level and the caller's prefix, never
+  a name read. A lookup that does not reach its key answers unknown with the same class as its `Reason`
+  (`unreadReason`). A walk opens its prefix as a page does, so it fails with the same classes, then lists it
+  through a held root of its own (`OpenDir`) with the parallel walker as a count does, its directories
+  unsorted and its batches in no key order (`live.Count`, unordered); it does not `Begin`, so it changes no
+  `GOMAXPROCS`. A page reads the directory whole (Linux: `getdents64`, an untyped entry typed by `fstatat` relative
+  to it and, when that stat fails, no directory; macOS: `os.File.ReadDir`, whose own `fstatat` of an untyped entry
+  fails the read when it fails, which APFS and HFS+, typing every entry, never ask), and keeps only the names,
+  with `/` on directories, that may still be on the page: of those that sort after the token's key, at most twice
+  the page's `Limit`, cut back to the first `Limit`+1 when it passes that, a name sorting after the last of them
+  passed over from then on (`levelNames`), so that a page's memory follows its `Limit` and not the directory's
+  size (`TestLivePageBounded`: a page of 100 of 200,000 files allocates fewer than 10,000 times, where holding and
+  sorting the directory whole allocated once per name). A name the read returned twice is kept once. It stats only
+  the page's non-directory entries relative to the directory, checking for a stop of the context before the first:
+  one gone since is left out, one that is a directory now (its key sorts elsewhere) too, one whose stat fails is
+  `unknown`. A child directory is a common prefix, not statted. The directory's own entry, from `fstat` of its
+  descriptor, is the first page's `Self`.
+  The store's token is the last key the page read, so the next page is the names after it: nothing is held
+  between pages, and a directory changing between them repeats and skips nothing that stayed
+  (`local/local_test.go`: the root's path replaced by a link, a link at and on the way to a prefix, a
+  directory replaced between pages, entries removed and added between pages,
+  descriptors after every call, concurrent pages; `TestLiveOtherDevice` through the `lookupFstat` seam;
+  `TestLiveUntyped` and `TestLiveCanceledAfterRead` through the `levelGetdents` seam).
 - **Paths past PATH_MAX.** A directory deeper than the kernel takes in one path (4,096 bytes on Linux, 1,024 on
   macOS) is opened as any other, one name below its parent, so a tree of any depth lists; its children are
   statted and their links read relative to it. A single name past the filesystem's limit fails as an open

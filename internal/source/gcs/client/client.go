@@ -2,17 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package client lists Cloud Storage buckets through Google's generated
-// JSON API client (google.golang.org/api/storage/v1): objects.list only,
-// one Objects.List call per attempt, with OAuth2 credentials from
-// golang.org/x/oauth2/google (or none), counted retries with full-jitter
-// backoff (objhttp.Do; the generated Do sends one request and never
-// retries), and typed errors.
+// JSON API client (google.golang.org/api/storage/v1): objects.list, and
+// objects.get and buckets.get for a lookup, one call per attempt, with
+// OAuth2 credentials from golang.org/x/oauth2/google (or none), counted
+// retries with full-jitter backoff (objhttp.Do; the generated Do sends one
+// request and never retries), and typed errors.
 //
 // Every response passes an objhttp.Guard first (16 MiB success bodies,
-// 64 KiB error bodies, the original body closed); a 200 must decode to an
-// objects envelope (kind storage#objects) without an error member, so an
-// empty, null or error body is never read as an empty final page.
-// Redirects are never followed.
+// 64 KiB error bodies, the original body closed); a 200 must decode to the
+// resource asked for (kind storage#objects, storage#object or
+// storage#bucket) without an error member, so an empty, null or error body
+// is never read as an empty final page. Redirects are never followed.
+// Every attempt, retries included, is reported to the objfile.Observer its
+// context carries, if any.
 //
 // Credentials live as long as the client: the token source is built on a
 // context that is never cancelled. Every attempt bounds its wait for a
@@ -146,6 +148,7 @@ type Client struct {
 	cfg      Config
 	endpoint string             // the JSON API base, with a trailing slash
 	svc      []*storage.Service // one per pooled transport, over its Guard; requests round-robin (pick)
+	pool     []*http.Client     // the pooled transports' clients (CloseIdleConnections)
 	next     atomic.Uint64
 	ts       *tokensource.Shared // nil: anonymous
 	source   string
@@ -186,7 +189,7 @@ func newClient(ctx context.Context, cfg Config, finder credentialFinder, pool []
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{cfg: cfg, endpoint: ep, source: "anonymous",
+	c := &Client{cfg: cfg, endpoint: ep, pool: pool, source: "anonymous",
 		Meter: objhttp.NewMeter(cfg.Retry)}
 	// The token source keeps this context for every refresh: it must
 	// outlive New's caller's deadline. The attempt deadline bounds the wait

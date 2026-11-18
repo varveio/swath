@@ -19,9 +19,11 @@ func (e *Error) Failure() objhttp.Failure {
 		case 403:
 			f.Class = objhttp.ClassAccessDenied
 		case 404:
-			// The client only lists (objects.list), whose 404 notFound is
-			// the bucket's: a missing prefix lists empty. A 404 without
-			// that reason (a wrong endpoint path) is not labelled.
+			// objects.list and buckets.get answer 404 notFound for a
+			// missing bucket (a missing prefix lists empty); objects.get
+			// answers it for a missing object or bucket alike, which a
+			// lookup tells apart with buckets.get. A 404 without that
+			// reason (a wrong endpoint path) is not labelled.
 			if e.Reason == "notFound" {
 				f.Class = objhttp.ClassNotFound
 			}

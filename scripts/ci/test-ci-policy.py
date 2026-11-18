@@ -79,6 +79,11 @@ class PolicyTests(unittest.TestCase):
             (['verify.py'], {'go', 'fixtures'}),
             (['dataset_schema.py'], {'go', 'fixtures'}),
             (['test_dataset_readers.py'], {'go', 'fixtures'}),
+            # The library packages: the root package and one per source.
+            (['walk.go'], {'go', 'fixtures'}),
+            (['walk_internal_test.go', 's3/s3.go'], {'go', 'fixtures'}),
+            (['gcs/gcs_test.go', 'azblob/azblob.go'], {'go', 'fixtures'}),
+            (['local/local.go'], {'go', 'fixtures', 'platforms'}),
             # A page under docs/ selects only the docs tier, with light files or an
             # independent module beside it; with any main-module input main runs as before.
             (['docs/start-here.md'], {'docs'}),
