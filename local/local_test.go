@@ -662,8 +662,8 @@ func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
 // TestWalk: a walk of the root, and of a directory below it, hands on
 // every entry filepath.WalkDir finds there, the directory's own below the
 // root, the symbolic link as itself,
-// and the directory it may not read as an Unread of class ErrAuth. It
-// leaves GOMAXPROCS as it was.
+// and the directory it may not read as an Unread of class ErrAuth, which
+// leaves it not Complete. It leaves GOMAXPROCS as it was.
 func TestWalk(t *testing.T) {
 	root, locked := tree(t)
 	src := open(t, hold(t, root))
@@ -689,7 +689,7 @@ func TestWalk(t *testing.T) {
 			return nil
 		})
 		slices.Sort(got)
-		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Evidence.Stop != listing.StopCompleted {
+		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Evidence.Stop != listing.StopCompleted || sum.Complete == locked {
 			t.Fatalf("workers %d: %q, %+v, %v; want %q", workers, got, sum, err, want)
 		}
 		if wantUnread := map[bool]int{true: 1}[locked]; len(unread) != wantUnread || sum.Unread != int64(wantUnread) || locked && unread[0] != "locked/" {
@@ -728,7 +728,7 @@ func TestWalkCancelled(t *testing.T) {
 		cancel()
 		return nil
 	})
-	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Entries == 0 {
+	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Complete || sum.Entries == 0 {
 		t.Fatalf("%+v, %v", sum, err)
 	}
 }
@@ -772,5 +772,30 @@ func TestSummarize(t *testing.T) {
 	dirs, _, err := src.Summarize(context.Background(), targets[1:2], listing.SummaryOptions{Kinds: []listing.Kind{listing.KindDir}})
 	if err != nil || dirs[0].Entries != 2 { // d/ itself and d/e/
 		t.Errorf("d/, counting directories: %+v, %v", dirs, err)
+	}
+}
+
+// TestSummarizeThroughLink: a subtree target that is, or lies behind, a
+// symbolic link is unknown with ErrNotDirectory and incomplete, and the
+// other targets are answered.
+func TestSummarizeThroughLink(t *testing.T) {
+	root, locked := tree(t)
+	src := open(t, hold(t, root))
+	targets := []listing.Target{{Key: []byte("d/"), Subtree: true}, {Key: []byte("link/"), Subtree: true}, {Key: []byte("link/x/"), Subtree: true}, {Key: []byte("locked/"), Subtree: true}}
+	sums, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
+	if err != nil || ev.Stop != listing.StopCompleted {
+		t.Fatalf("%+v, %v", ev, err)
+	}
+
+	if s := sums[0]; s.State != listing.LookupPresent || !s.Complete || s.Entries != 2 {
+		t.Errorf("d/: %+v", s)
+	}
+	for _, s := range sums[1:3] {
+		if s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrNotDirectory) || s.Complete || s.Entries != 0 || s.Unread != 0 {
+			t.Errorf("through the link: %+v", s)
+		}
+	}
+	if s := sums[3]; s.State != listing.LookupPresent || s.Complete == locked || s.Unread != map[bool]int64{true: 1}[locked] {
+		t.Errorf("locked/: %+v", s)
 	}
 }

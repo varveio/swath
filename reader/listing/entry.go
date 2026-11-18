@@ -86,4 +86,8 @@ type Entry struct {
 	Device *uint64
 	Inode  *uint64
 	Links  *uint32
+	// LinkTarget is a symbolic link's target as an inventory recorded it,
+	// its bytes unchanged: nil when the inventory has none, and always on
+	// a live source, which reads no link.
+	LinkTarget []byte
 }

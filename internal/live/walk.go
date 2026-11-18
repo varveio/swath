@@ -42,7 +42,8 @@ var errStopped = errors.New("swath: the walk has stopped")
 // when ctx ends, Walk returns its error, even when emit has accepted every
 // batch. A panic in the walk's workers is returned as an error of no class.
 // Whatever it returns, the WalkSummary counts what emit accepted, and its
-// Evidence.Stop is StopCompleted only when the walk returns no error.
+// Evidence.Stop is StopCompleted only when the walk returns no error; it
+// is Complete when the walk also handed on no Unread.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
@@ -71,6 +72,7 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 		return res, failure(ctx, err)
 	}
 	res.Evidence = evidence(started, finished, listing.StopCompleted)
+	res.Complete = res.Unread == 0
 	return res, nil
 }
 

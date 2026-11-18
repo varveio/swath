@@ -53,8 +53,10 @@ import (
 // Its batches come in no key order, and a directory's entries unsorted. A
 // directory it cannot open or read, an entry it cannot stat, and a
 // directory on another device, listed and not entered, are handed to emit
-// as an Unread as the walk meets them, and the walk goes on. It changes no
-// process-wide setting. Summarize answers each target's state by a Lookup
+// as an Unread as the walk meets them, and the walk goes on. A walk has no
+// depth limit, but no key longer than 32 KiB: such an entry, a directory
+// with its subtree, is an Unread of class listing.ErrUnsupported. It
+// changes no process-wide setting. Summarize answers each target's state by a Lookup
 // of its key, so a directory's subtree target is present, with the
 // directory as its Self, even when empty, and walks each subtree target.
 //

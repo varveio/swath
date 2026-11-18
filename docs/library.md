@@ -127,8 +127,8 @@ A walk that cannot read a place goes on past it and hands the function an `Unrea
 batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
 walk has them (a directory it cannot open or read, an entry it cannot stat, a directory on another device): on an
 object store a listing error ends the walk. The walk keeps none of them once the function has taken it, however
-many there are; `WalkSummary.Unread` counts them. A walk read everything under its prefix when it finished with
-no `Unread`.
+many there are; `WalkSummary.Unread` counts them. `WalkSummary.Complete` says the walk read everything under its
+prefix: it finished and handed on no `Unread`, and, over an inventory, the inventory's coverage is complete.
 
 ```go
 walkCtx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -164,8 +164,10 @@ A target is `Complete` when its key's state is known (the root's excepted) and i
 `Unread` counts what its walk could not read, and its totals then cover what was read. A summary lists no names: a
 program that wants them walks the target. A subtree whose lookup was left unknown is still walked; if that walk
 fails the target counts what it read and stays incomplete. A subtree whose walk is refused (`ErrAuth`) or reaches
-another device (`ErrOtherDevice`) counts one `Unread`, as a walk above it would. Any other failure is the call's
-error, and so is its context ending.
+another device (`ErrOtherDevice`) counts one `Unread`, as a walk above it would. A subtree whose walk finds no
+directory to enter (`ErrNotDirectory`: another kind, or a symbolic link at or on the way to its key) is unknown, with
+that error as its `Reason`, and incomplete. The other targets are answered either way. Any other failure is the
+call's error, and so is its context ending.
 
 ```go
 targets := []listing.Target{
@@ -360,7 +362,9 @@ library guarantees:
   on the directory's own entry (below the root) and lists what is under it with the parallel walker the command
   lists a tree with, by descriptor and following no symbolic link. Each directory's entries come unsorted and the batches in no
   key order. A directory it cannot open or read, an entry it cannot stat and a directory on another device (listed,
-  not entered) reach your function as an `Unread` as the walk meets them. A walk changes no process-wide setting.
+  not entered) reach your function as an `Unread` as the walk meets them. It has no depth limit, but no key longer
+  than 32 KiB: such an entry, a directory with its subtree, is an `Unread` of class `listing.ErrUnsupported`. A walk
+  changes no process-wide setting.
 - **A summary's state is a lookup.** A subtree target's state is a lookup of its directory, so an empty directory
   is present, with the directory as its `Self`, and the directory's own entry counts when `Kinds` names `dir`.
 
