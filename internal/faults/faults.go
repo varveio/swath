@@ -31,7 +31,7 @@ var SegmentPoints = []string{"segments-begun", "segment-published", "segments-wr
 // start, the capture start; later rows frames; the trailer and tail), its
 // fsync at the seal, then the flusher's directory sync,
 // ledger append, ledger sync and unlink. The durable kill matrices
-// (listing's TestDurableKillMatrix, cmd/swath's SIGKILL matrix) require
+// (listing's TestDurableKillMatrix, command's SIGKILL matrix) require
 // each of them reached on a fixture built to reach it.
 var SpillPoints = []string{"spill-dir-sync", "spill-write-header", "spill-write-frames", "spill-write-trailer", "spill-seal",
 	"spill-ledger-dirsync", "spill-ledger-append", "spill-ledger-sync", "spill-unlink"}

@@ -229,7 +229,7 @@ snapshot nor soft-deleted and is the current version, or lists no version id (a 
 was enabled, or an account without versioning). `TestVersionsListing` and `TestVersionsRestart` list names with
 up to five entries at page sizes that put seams inside names, with splits, and resume after names;
 `order`'s `TestGroupedProperty` walks random grouped queries. swath-replay refuses `include=` (its conformance
-profile); `cmd/swath`'s `TestAzblobAllVersions` runs `--all-versions` end to end through a proxy that answers
+profile); `command`'s `TestAzblobAllVersions` runs `--all-versions` end to end through a proxy that answers
 it as Azure answers it over a container of current blobs only: the plain listing (identical bytes, live).
 
 **Schema** `swath/azure-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor

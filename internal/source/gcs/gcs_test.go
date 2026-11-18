@@ -16,11 +16,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spf13/pflag"
-
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/client"
@@ -359,7 +356,7 @@ func TestDelimiterBoundaries(t *testing.T) {
 // listing's TestGCSCredentialRotationResumes).
 func TestIdentity(t *testing.T) {
 	ident := func(opt Options) map[string]string {
-		src, err := open(context.Background(), registry.Request{Root: "gs://bkt/p", Options: &opt, Workers: 1})
+		src, err := openView("gs://bkt/p", opt, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +386,7 @@ func TestIdentity(t *testing.T) {
 	if other := ident(Options{Endpoint: "http://127.0.0.1:1/storage/v1/", Anonymous: true, UserProject: "p4"}); other["user project"] == base["user project"] {
 		t.Fatal("a changed billed project leaves the identity equal")
 	}
-	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
+	src, err := openView("gs://bkt", Options{Client: supplied{}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +427,7 @@ func TestEndpointIdentityIsDestination(t *testing.T) {
 		"/a/./storage/v1/":            "/a/storage/v1/b/bkt/o",
 	} {
 		opt := Options{Bucket: "bkt", Endpoint: srv.URL + base, Anonymous: true}
-		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &opt, Workers: 1})
+		src, err := openView("gs://bkt", opt, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -467,7 +464,7 @@ func TestEndpointIdentityIsDestination(t *testing.T) {
 // the endpoint as not recorded, even for the same bucket and default
 // endpoint; and a run through a supplied client declares no resume.
 func TestOldJournalRefused(t *testing.T) {
-	src, err := open(context.Background(), registry.Request{Root: "gs://bkt/p", Options: &Options{Anonymous: true}, Workers: 1})
+	src, err := openView("gs://bkt/p", Options{Anonymous: true}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,33 +487,31 @@ func TestOldJournalRefused(t *testing.T) {
 	}
 }
 
+// view is an opened GCS listing, *Opened[Object] or *Opened[Generation].
+type view interface{ Locator() source.Locator }
+
+// openView opens root with opt and workers as the command opens a library
+// caller's options: every generation with opt.AllVersions.
+func openView(root string, opt Options, workers int) (view, error) {
+	opt.Workers = workers
+	if opt.AllVersions {
+		o, err := OpenGenerations(context.Background(), root, opt)
+		if err != nil {
+			return nil, err
+		}
+		return o, nil
+	}
+	o, err := Open(context.Background(), root, opt)
+	if err != nil {
+		return nil, err
+	}
+	return o, nil
+}
+
 type supplied struct{}
 
 func (supplied) List(context.Context, *client.ListInput) (*client.Page, error) {
 	return &client.Page{}, nil
-}
-
-// TestEngineFlagsShared: GCS takes the store's and the range engine's flag
-// groups the command registered once and passed to it, and opens with the
-// parsed values.
-func TestEngineFlagsShared(t *testing.T) {
-	pf, err := registry.Lookup("gs://bkt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
-	v := pf.RegisterFlags(f, true)
-	if err := f.Parse([]string{"--structure", "--anonymous", "--endpoint-url", "http://127.0.0.1:1/storage/v1/", "--request-timeout", "7s"}); err != nil {
-		t.Fatal(err)
-	}
-	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: v, Workers: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := src.(*opened[Object]).p
-	if !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous || p.opt.Endpoint != "http://127.0.0.1:1/storage/v1/" || p.opt.Timeout.Seconds() != 7 {
-		t.Fatalf("shared flags not applied: %+v", p.opt)
-	}
 }
 
 // TestBrokenADCRefused: malformed configured credentials refuse the
@@ -594,7 +589,7 @@ func newFake(t testing.TB, keys []string) (*gcstest.Strict, string) {
 func TestTariff(t *testing.T) {
 	for ep, want := range map[string]bool{"": true, client.DefaultEndpoint: true, "https://storage.googleapis.com/storage/v1": true,
 		"HTTPS://Storage.GoogleAPIs.com/storage/v1/": true, "http://127.0.0.1:1/storage/v1/": false, "https://storage.googleapis.com/other/v1/": false} {
-		src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Anonymous: true, Endpoint: ep}, Workers: 1})
+		src, err := openView("gs://bkt", Options{Anonymous: true, Endpoint: ep}, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -602,7 +597,7 @@ func TestTariff(t *testing.T) {
 			t.Errorf("%q: tariff %v %q, want one: %v", ep, rate, basis, want)
 		}
 	}
-	src, err := open(context.Background(), registry.Request{Root: "gs://bkt", Options: &Options{Client: supplied{}}, Workers: 1})
+	src, err := openView("gs://bkt", Options{Client: supplied{}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

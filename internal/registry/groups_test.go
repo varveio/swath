@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"github.com/spf13/pflag"
-
-	"github.com/varveio/swath/internal/source"
 )
 
 // panicOf runs f and returns what it panicked with, as text ("" if it did
@@ -27,8 +25,8 @@ func panicOf(f func()) (msg string) {
 }
 
 // group is a shared flag group registering one string flag, name.
-func group(title, name string) *source.FlagGroup {
-	return &source.FlagGroup{Name: title, Flags: func(fs *pflag.FlagSet, _ bool) any {
+func group(title, name string) *FlagGroup {
+	return &FlagGroup{Name: title, Flags: func(fs *pflag.FlagSet, _ bool) any {
 		return fs.String(name, "", "")
 	}}
 }
@@ -39,7 +37,7 @@ func group(title, name string) *source.FlagGroup {
 // shadowing the other.
 func TestGroupIdentity(t *testing.T) {
 	a, b := group("same", "dup"), group("same", "dup")
-	f := Factory{Shared: []*source.FlagGroup{a, b}, Flags: func(*pflag.FlagSet, bool, source.SharedValues) any { return nil }}
+	f := Factory{Shared: []*FlagGroup{a, b}, Flags: func(*pflag.FlagSet, bool, SharedValues) any { return nil }}
 	fs := pflag.NewFlagSet("", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	if msg := panicOf(func() { f.RegisterFlags(fs, false) }); !strings.Contains(msg, "dup") {
@@ -54,13 +52,13 @@ func TestSharedAccessorRefuses(t *testing.T) {
 	named, other := group("named", "x"), group("other", "y")
 	for _, c := range []struct {
 		why   string
-		flags func(source.SharedValues)
+		flags func(SharedValues)
 		want  string
 	}{
-		{"unnamed group", func(v source.SharedValues) { source.Shared[string](v, other) }, `"other" is not among`},
-		{"wrong type", func(v source.SharedValues) { source.Shared[int](v, named) }, `"named" holds *string, not *int`},
+		{"unnamed group", func(v SharedValues) { Shared[string](v, other) }, `"other" is not among`},
+		{"wrong type", func(v SharedValues) { Shared[int](v, named) }, `"named" holds *string, not *int`},
 	} {
-		f := Factory{Shared: []*source.FlagGroup{named}, Flags: func(_ *pflag.FlagSet, _ bool, v source.SharedValues) any {
+		f := Factory{Shared: []*FlagGroup{named}, Flags: func(_ *pflag.FlagSet, _ bool, v SharedValues) any {
 			c.flags(v)
 			return nil
 		}}
@@ -69,8 +67,8 @@ func TestSharedAccessorRefuses(t *testing.T) {
 		}
 	}
 	// The value of a named group of the right type is the group's own.
-	f := Factory{Shared: []*source.FlagGroup{named}, Flags: func(fs *pflag.FlagSet, _ bool, v source.SharedValues) any {
-		return source.Shared[string](v, named)
+	f := Factory{Shared: []*FlagGroup{named}, Flags: func(fs *pflag.FlagSet, _ bool, v SharedValues) any {
+		return Shared[string](v, named)
 	}}
 	fs := pflag.NewFlagSet("", pflag.ContinueOnError)
 	got := f.RegisterFlags(fs, false).(*string)

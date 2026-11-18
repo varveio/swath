@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // Erase adapts a provider of ranges R to Provider[any, P], so the order
@@ -98,6 +99,13 @@ func (t typed[R, P]) Fence(x string, top bool) {
 func (t typed[R, P]) Subtree(prefix string) {
 	if s, ok := t.e.(Subtreer); ok {
 		s.Subtree(prefix)
+	}
+}
+
+// Unread forwards to an Unreader emitter.
+func (t typed[R, P]) Unread(u listing.Unread) {
+	if ur, ok := t.e.(Unreader); ok {
+		ur.Unread(u)
 	}
 }
 

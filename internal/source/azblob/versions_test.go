@@ -12,9 +12,7 @@ import (
 	"testing"
 
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
-	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/azblob/client"
 	"github.com/varveio/swath/internal/source/keyrange"
@@ -282,15 +280,15 @@ func TestVersionCodec(t *testing.T) {
 // TestAllVersionsOpen: --all-versions opens the versions listing, its rows
 // bound to swath/azure-versions/v1, resumable as the current listing.
 func TestAllVersionsOpen(t *testing.T) {
-	src, err := open(context.Background(), registry.Request{Root: "az://acct/c",
-		Options: &Options{Client: &routed{pages: &pages{}}, AllVersions: true}, Workers: 1})
+	src, err := openView("az://acct/c", Options{Client: &routed{pages: &pages{}}, AllVersions: true}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := src.(*opened[Version]); !ok {
+	v, ok := src.(*Opened[Version])
+	if !ok {
 		t.Fatalf("%T", src)
 	}
-	if src.(registry.Source).Schema().ID != "swath/azure-versions/v1" || !src.(source.Capable).Capabilities().Resume {
-		t.Fatalf("schema %s, capabilities %+v", src.(registry.Source).Schema().ID, src.(source.Capable).Capabilities())
+	if v.Bound().Schema().ID != "swath/azure-versions/v1" || !v.Capabilities().Resume {
+		t.Fatalf("schema %s, capabilities %+v", v.Bound().Schema().ID, v.Capabilities())
 	}
 }
