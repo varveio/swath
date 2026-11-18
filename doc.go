@@ -29,9 +29,11 @@
 // error once ctx has ended. Error messages pass through swath's redaction
 // (objfile.RedactError) and carry no credential. Every request a call
 // sends, retries included, is reported to the objfile.Observer on ctx
-// (objfile.WithObserver): a page, and each of a walk's, as an
-// objfile.ListRequest, a lookup's (S3's HeadObject and HeadBucket, say)
-// as objfile.MetadataRequest.
+// (objfile.WithObserver): a page, and each of an object store walk's, as
+// an objfile.ListRequest, a lookup's (S3's HeadObject and HeadBucket, say)
+// as objfile.MetadataRequest; a local walk's directory reads are not
+// reported. Walk and Summarize set no limit: a caller stops them by
+// cancelling ctx.
 //
 // This package links no cloud SDK; a provider package links its own.
 // Neither links swath's command, its flags or its Parquet writer.

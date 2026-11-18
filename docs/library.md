@@ -119,52 +119,52 @@ stopped, and calls the function no more. Every entry is checked before it reache
 no NUL byte in its key, and a size (an object S3 lists without one is `listing.ErrInvalidPage`, never a size of
 zero). The ranges are checked too: no key range overlaps another, so no key reaches the function twice.
 
-A budget bounds a walk: `MaxEntries` stops it after the batch that reaches that many entries, `MaxDuration` once
-that time has passed, the function's own time included. A walk a budget stops returns no error: its
-`Evidence.Stop` names the bound, and its last batches hand the function, as `Unread` extents of class `budget`,
-the key intervals `(Key, Hi]` it did not read (an empty `Key` from the prefix's start, an empty `Hi` to its end).
-What the walk handed over and those intervals hold every key under the prefix once, so walking the intervals
-afterwards completes it. A walk whose context ends returns the context's error, even if the function took every
-batch.
+A walk sets no limit of its own. To stop one, cancel its context: `Walk` then returns the context's error, even
+if the function took every batch, together with a `WalkSummary` that counts what the function took and whose
+`Evidence.Stop` is not `completed`. A walk that returns no error finished: its `Evidence.Stop` is `completed`.
+
+A walk that cannot read a place goes on past it and hands the function an `Unread` for it as it meets it, in a
+batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
+walk has them (a directory it cannot open or read, an entry it cannot stat, a directory on another device): on an
+object store a listing error ends the walk. The walk keeps none of them once the function has taken it, however
+many there are; `WalkSummary.Unread` counts them. A walk read everything under its prefix when it finished with
+no `Unread`.
 
 ```go
+walkCtx, cancel := context.WithTimeout(ctx, time.Minute)
+defer cancel()
 var objects, size int64
-var unread []listing.Unread
-req := listing.WalkRequest{Prefix: []byte("logs/"), Budget: listing.Budget{MaxDuration: time.Minute}}
-res, err := src.Walk(ctx, req, func(b listing.WalkBatch) error {
+res, err := src.Walk(walkCtx, listing.WalkRequest{Prefix: []byte("logs/")}, func(b listing.WalkBatch) error {
 	for _, e := range b.Entries {
 		objects++
 		size += *e.Size
 	}
-	for _, u := range b.Unread {
-		unread = append(unread, listing.Unread{Key: bytes.Clone(u.Key), Hi: bytes.Clone(u.Hi), Scope: u.Scope, Class: u.Class})
-	}
 	return nil
 })
-if err != nil {
+switch {
+case errors.Is(err, context.DeadlineExceeded):
+	fmt.Printf("not finished in a minute: at least %d objects, %d bytes\n", res.Entries, size)
+case err != nil:
 	log.Fatal(err)
-}
-fmt.Printf("%d objects, %d bytes\n", objects, size)
-if res.Evidence.Stop != listing.StopCompleted {
-	fmt.Printf("stopped at the %s: %d key intervals not read\n", res.Evidence.Stop, len(unread))
+default:
+	fmt.Printf("%d objects, %d bytes\n", objects, size)
 }
 ```
 
 ## Summaries
 
 A summary answers, for each of several targets, how many objects lie at or under it, their bytes and their newest
-last-modified time, and what is at exactly its key. A target is a subtree (`Subtree`: every key that begins with
-`Key`, which the contract also calls a prefix) or one exact key. Each target is answered on its own: an exact target
-by a lookup, a subtree by one walk of its key, so nested and repeated targets are each walked and counted in full.
-A subtree target is present when an object has exactly its key, absent when its walk read everything and found
-none, and unknown otherwise, and at the root (the empty key). Without `Kinds` a summary counts objects and regular
-files, never folders or links.
+last-modified time, what is at exactly its key, and whether that count is complete. A target is a subtree
+(`Subtree`: every key that begins with `Key`, which the contract also calls a prefix) or one exact key. Each target
+is answered on its own: what is at its key by a lookup (the root, the empty key, is no entry: unknown), and a
+subtree's entries by one walk of its key, so nested and repeated targets are each walked and counted in full.
+Without `Kinds` a summary counts objects and regular files, never folders or links.
 
-The budget bounds each target's walk or lookup on its own. A target whose walk a bound stopped counts what was read,
-carries as its `Unread` the key intervals it did not read, and names the bound as its `Stop`: its totals are a lower
-bound. A target is complete when its `Stop` is `completed` and it has no `Unread`; `Evidence.Stop` names the first
-bound any target reached. A target the call could not read for another reason, such as an exact key whose lookup was
-refused, is unknown with that reason and an empty `Stop`: never complete.
+A target is `Complete` when its key's state is known (the root's excepted) and its walk handed on no `Unread`;
+`Unread` counts what its walk could not read, and its totals then cover what was read. A summary lists no names: a
+program that wants them walks the target. A subtree whose lookup was left unknown is still walked; if that walk
+fails the target counts what it read and stays incomplete. Any other failure is the call's error, and so is its
+context ending.
 
 ```go
 targets := []listing.Target{
@@ -172,7 +172,7 @@ targets := []listing.Target{
 	{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
 	{Key: []byte("README")},                    // exact: a lookup
 }
-sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: time.Minute}})
+sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -181,7 +181,7 @@ for i, s := range sums {
 	if s.Bytes != nil {
 		fmt.Printf(", %d bytes", *s.Bytes)
 	}
-	if len(s.Unread) > 0 {
+	if !s.Complete {
 		fmt.Print(", at least: not all of it was read")
 	}
 	fmt.Println()
@@ -195,9 +195,8 @@ and a summary need `s3:ListBucket` on the bucket; a summary's exact targets need
 ## Evidence and errors
 
 Every answer carries its evidence: it is live, and was read between the call's start and finish, which it gives.
-A walk's and a summary's also say whether the call completed or which bound stopped it (`Evidence.Stop`), and
-locate every gap as an `Unread` extent; a walk that met more of them than it can hold drops the rest and says so
-with a nil `Evidence.Unlocated`.
+`Evidence.Stop` says whether the call completed: `completed`, or `time_budget` for a page its `MaxDuration` ended,
+or empty for a walk that did not finish and a lookup left unknown, whose evidence never reads as complete.
 
 A call that fails returns an error that `errors.Is` matches to one of the contract's classes, read from the failure
 as swath's command reads it for its outcome: `ErrAuth` for credentials that do not load or a refusal,
@@ -250,7 +249,7 @@ What differs from S3:
   permission to list the container's blobs; a lookup needs permission to read the blob's properties, and to list to show
   a key absent. A request is reported to an `objfile.Observer` as a list request (List Blobs, the probe included) or a
   metadata request (Get Blob Properties, and the namespace's calls, unnamed).
-- **Walks.** A walk without a depth lists a flat namespace only, as the command does: each walk first asks the
+- **Walks.** A walk lists a flat namespace only, as the command does: each walk first asks the
   account's namespace with the same calls, and a hierarchical namespace, or one they cannot read, is
   `listing.ErrUnsupported` before any listing. Its ranges are listed in byte order whatever order Azure lists in.
 
@@ -355,6 +354,14 @@ library guarantees:
   page through the same place fails with (`listing.ErrNotDirectory` past a symbolic link).
 - **Names are bytes.** A key is any bytes but NUL, so a name that is not valid UTF-8 pages and is looked up
   like any other.
+- **A walk is the command's walker.** A walk takes `""` or a directory key, ending in `/`; any other prefix is
+  `listing.ErrInvalidRequest`, never matched literally. It fails where a page of the same prefix fails, then hands
+  on the directory's own entry (below the root) and lists what is under it with the parallel walker the command
+  lists a tree with, by descriptor and following no symbolic link. Each directory's entries come unsorted and the batches in no
+  key order. A directory it cannot open or read, an entry it cannot stat and a directory on another device (listed,
+  not entered) reach your function as an `Unread` as the walk meets them. A walk changes no process-wide setting.
+- **A summary's state is a lookup.** A subtree target's state is a lookup of its directory, so an empty directory
+  is present, with the directory as its `Self`, and the directory's own entry counts when `Kinds` names `dir`.
 
 To count or trace a call's work, an `objfile.Observer` on its context is told of each page as one list request
 and each lookup as one metadata request, named by the program's key.
@@ -385,6 +392,4 @@ of swath the host requires, or `devel` for a local replacement or a workspace mo
 
 ## Not in the library yet
 
-The library answers Page and Lookup on S3, GCS, Azure Blob Storage and a local directory, and Walk and Summarize on
-the three object stores. On a local directory a walk, and a summary with a subtree target, are
-`listing.ErrUnsupported`. A source's request limits hold within one process only.
+A walk on a local directory reports no observer requests. A source's request limits hold within one process only.

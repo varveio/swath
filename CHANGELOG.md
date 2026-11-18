@@ -36,10 +36,10 @@ Notable changes per release. The human summary of the current release is in the
   build in a checkout compiles the local `reader/` and `objfile/`.
 - `reader/listing` (experimental: it may change in any release) is the contract of the four questions swath
   answers about a listed location: `Page`, `Lookup`, `Walk` and `Summarize`, their requests and results, the
-  common `Entry`, the `Evidence` every answer carries, the `Unread` extents a call did not read, and the error
+  common `Entry`, the `Evidence` every answer carries, the `Unread` places a walk could not read, and the error
   classes with `Retryable`. It holds types only and imports nothing beyond the standard library.
 - `reader/view` (experimental) answers those four questions from an opened dataset, an inventory (`view.Open`):
-  pages with opaque tokens and optional child totals, lookups, walks and budgeted summaries, every answer's
+  pages with opaque tokens and optional child totals, lookups, walks and summaries, every answer's
   evidence taken from the manifest and never wider; a key is absent only inside the listing's scope, when
   nothing in it was unreadable, and never at or under a local entry of unknown kind
   ([reader guide](reader/README.md#the-inventory-view)).
@@ -50,15 +50,17 @@ Notable changes per release. The human summary of the current release is in the
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
-- A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them. A request
-  budget is `MaxEntries` and `MaxDuration`, the bounds every source enforces; a live page gives no child totals
-  (`ErrUnsupported`). A target a call did not read, such as an exact key whose lookup was refused, is never
-  reported as completed.
-- The root package's `Source` also walks and summarizes live on S3, GCS and Azure Blob Storage (a flat namespace
-  only). `Walk` hands a callback every object under a prefix once, listed flat and in parallel on the range
-  engine; an entry or time budget stops it, and the key intervals it did not read reach the callback as `Unread`
-  extents. `Summarize` answers each target on its own, by a lookup or a walk of it, and totals its objects, bytes
-  and newest time; a total with an `Unread` is a lower bound ([library guide](docs/library.md#walks)).
+- A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them, and its
+  `MaxDuration` bounds its time; a live page gives no child totals (`ErrUnsupported`). A lookup left unknown
+  carries evidence that is not completed.
+- The root package's `Source` also walks and summarizes live on S3, GCS, Azure Blob Storage (a flat namespace
+  only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
+  parallel; it sets no limit, and a caller stops it by cancelling its context, when it returns the context's error
+  and a summary that says it did not finish. Each place a local walk cannot read reaches the callback as an
+  `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them.
+  `Summarize` answers each target on its own, its state by a lookup and a subtree's totals by a walk, with its
+  objects, bytes and newest time, whether it is complete, and how many places under it were not read
+  ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
 - `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
   of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
@@ -71,8 +73,9 @@ Notable changes per release. The human summary of the current release is in the
   opens what it reads relative to that directory, one name at a time, never following a symbolic link or
   crossing to another device; a page is one directory level in byte order, a subdirectory a `dir` entry with its
   metadata, and its memory follows the page's `Limit`, not the directory's size. Names are bytes: one that is
-  not UTF-8 pages and is looked up. Past a symbolic link a page or lookup is `ErrNotDirectory`
-  ([library guide](docs/library.md#a-local-directory)).
+  not UTF-8 pages and is looked up. Past a symbolic link a page or lookup is `ErrNotDirectory`. A walk takes
+  `""` or a directory key and lists it with the command's parallel walker, in no key order, without changing
+  `GOMAXPROCS` ([library guide](docs/library.md#a-local-directory)).
 - `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
   a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
 - `command` (experimental) is the swath command line as a function: `Main(ctx, host, args, stdout, stderr)` runs
@@ -83,8 +86,6 @@ Notable changes per release. The human summary of the current release is in the
 - In a program that embeds swath, the build that `--version`, the run report, the journal, Parquet `created_by`
   and the User-Agent name is swath's version among the host's dependencies (`devel` for a local replacement or a
   workspace module), not the host's version and revision.
-- The local provider can walk a directory its caller opened (`OpenDir`, Linux and macOS), the groundwork for a
-  local `Walk`. No command option uses it; the command lists as before.
 - GCS: a redirect's error message leaves out the target's query. Azure Blob: the Azure SDK's log never sees an
   error answer's body, so a SAS echoed in it is not logged; swath still reports the service's error code.
 
