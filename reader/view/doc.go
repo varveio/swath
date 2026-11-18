@@ -56,8 +56,8 @@
 // # Errors
 //
 // A call that fails returns an error of a class of package listing, with
-// the cause wrapped beside it: a missing object is listing.ErrNotFound, a
-// refused access (fs.ErrPermission, a store's 401 or 403) listing.ErrAuth,
+// the cause wrapped beside it: data the reader refuses is
+// listing.ErrInvalidPage, a refused access (fs.ErrPermission, a store's 401 or 403) listing.ErrAuth,
 // a feature or limit SeekParquet does not support listing.ErrUnsupported,
 // and any other failure to read the dataset, an I/O or network error
 // past the storage's retries, listing.ErrUnavailable. A context's error

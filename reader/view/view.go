@@ -41,7 +41,7 @@ type Inventory struct {
 // part's schema (reader.Dataset.CheckSchema) and returns its inventory,
 // which owns the dataset until Close. It refuses what Open refuses, and a
 // failure to read the dataset is of a class of package listing, as a
-// call's is: a directory with no dataset is listing.ErrNotFound.
+// call's is.
 func OpenDir(ctx context.Context, dir string) (*Inventory, error) {
 	d, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{})
 	if err != nil {
@@ -168,12 +168,12 @@ func invalid(format string, args ...any) error {
 
 // failed is the error a call that read the inventory returns for err:
 // ctx's own once ctx has ended, else err in a class of package listing,
-// with err wrapped beside it. A missing object or manifest is ErrNotFound;
-// other data the reader refuses (reader.IsRefusal) ErrInvalidPage; a
-// refused access, or a store's answer of 401 or 403, ErrAuth; a feature or
-// limit the reader does not support ErrUnsupported; any other failure,
-// such as an I/O or network error past the storage's retries,
-// ErrUnavailable. An error the view gave a class keeps it.
+// with err wrapped beside it. Data the reader refuses (reader.IsRefusal),
+// a missing manifest among it, is ErrInvalidPage; a refused access, or a
+// store's answer of 401 or 403, ErrAuth; a feature or limit the reader
+// does not support ErrUnsupported; any other failure, such as a missing
+// file or an I/O or network error past the storage's retries,
+// ErrUnavailable. ErrNotFound is only ever the listed location's. An error the view gave a class keeps it.
 func failed(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -189,8 +189,6 @@ func failed(ctx context.Context, err error) error {
 	switch {
 	case err == nil || classed(err):
 		return err
-	case errors.Is(err, fs.ErrNotExist) || seekparquet.RefusalCodeOf(err) == seekparquet.CodeNoManifest:
-		class = listing.ErrNotFound
 	case reader.IsRefusal(err):
 		class = listing.ErrInvalidPage
 	case errors.Is(err, fs.ErrPermission) || code == http.StatusUnauthorized || code == http.StatusForbidden:

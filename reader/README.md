@@ -174,6 +174,6 @@ unlocated: a walk hands on no `Unread`, and a summary target is `Complete` only 
 key's state is known. The view checks every value it reads (a missing column, a negative size, a local kind swath
 does not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
 A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
-is `ErrInvalidPage`, a missing object `ErrNotFound`, a refused access `ErrAuth`, and any other failure to read the
-dataset `ErrUnavailable`.
+is `ErrInvalidPage`, a refused access `ErrAuth`, and any other failure to read the dataset, a missing file of it
+included, `ErrUnavailable`.
 [view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.

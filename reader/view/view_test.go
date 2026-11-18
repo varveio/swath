@@ -89,7 +89,7 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 
 // TestOpenRefuses: a dataset of versions, whose keys repeat, and one whose
 // manifest records no scope are refused as unsupported, by Open and by
-// OpenDir; OpenDir of a directory with no dataset is ErrNotFound.
+// OpenDir; OpenDir of a directory with no dataset is ErrInvalidPage.
 func TestOpenRefuses(t *testing.T) {
 	version := map[string]any{"is_latest": true, "is_delete_marker": false}
 	versions := write(t, fixture{id: reader.S3VersionsV1, rows: []rec{{key: "a", extra: version}, {key: "b", extra: version}}})
@@ -109,8 +109,8 @@ func TestOpenRefuses(t *testing.T) {
 			t.Errorf("%s: OpenDir = %v, want ErrUnsupported", name, err)
 		}
 	}
-	if _, err := OpenDir(context.Background(), t.TempDir()); !errors.Is(err, listing.ErrNotFound) {
-		t.Errorf("OpenDir of a directory with no dataset = %v, want ErrNotFound", err)
+	if _, err := OpenDir(context.Background(), t.TempDir()); !errors.Is(err, listing.ErrInvalidPage) {
+		t.Errorf("OpenDir of a directory with no dataset = %v, want ErrInvalidPage", err)
 	}
 }
 
@@ -225,7 +225,8 @@ func TestFailureClasses(t *testing.T) {
 	}{
 		{context.Background(), &os.PathError{Op: "open", Err: os.ErrPermission}, listing.ErrAuth},
 		{context.Background(), statusError(403), listing.ErrAuth},
-		{context.Background(), &os.PathError{Op: "open", Err: os.ErrNotExist}, listing.ErrNotFound},
+		{context.Background(), &os.PathError{Op: "open", Err: os.ErrNotExist}, listing.ErrUnavailable},
+		{context.Background(), &seekparquet.RefusalError{Code: seekparquet.CodeNoManifest}, listing.ErrInvalidPage},
 		{context.Background(), &seekparquet.RefusalError{Code: seekparquet.CodeInvalidParquet}, listing.ErrInvalidPage},
 		{context.Background(), &seekparquet.UnsupportedError{Code: seekparquet.UnsupportedEncoding}, listing.ErrUnsupported},
 		{context.Background(), io, listing.ErrUnavailable},
