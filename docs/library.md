@@ -127,8 +127,8 @@ A walk that cannot read a place goes on past it and hands the function an `Unrea
 batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
 walk has them (a directory it cannot open or read, an entry it cannot stat, a directory on another device): on an
 object store a listing error ends the walk. The walk keeps none of them once the function has taken it, however
-many there are; `WalkSummary.Unread` counts them. A walk read everything under its prefix when it finished with
-no `Unread`.
+many there are; `WalkSummary.Unread` counts them. `WalkSummary.Complete` says the walk read everything under its
+prefix: it finished and handed on no `Unread`, and, over an inventory, the inventory's coverage is complete.
 
 ```go
 walkCtx, cancel := context.WithTimeout(ctx, time.Minute)

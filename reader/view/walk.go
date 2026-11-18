@@ -29,7 +29,8 @@ import (
 // until emit returns. An error from emit stops the walk and is returned
 // unchanged. When ctx ends, Walk returns its error. A walk that returns an
 // error returns with it the count of entries it handed on, and an
-// Evidence.Stop that is not StopCompleted.
+// Evidence.Stop that is not StopCompleted. A walk that finished is
+// Complete when the inventory's coverage is (Evidence.Unlocated is 0).
 func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := inv.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
@@ -54,6 +55,7 @@ func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit fu
 		return res, failed(ctx, err)
 	}
 	res.Evidence.Stop = listing.StopCompleted
+	res.Complete = inv.provable
 	return res, nil
 }
 

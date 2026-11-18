@@ -94,7 +94,7 @@ func TestWalkEveryEntryOnce(t *testing.T) {
 					if got := keysOf(w.entries); !slices.Equal(got, want) {
 						t.Fatalf("walk %q workers %d:\n got %q\nwant %q", prefix, req.Workers, got, want)
 					}
-					if s.Entries != int64(len(w.entries)) || len(w.unread) != 0 || s.Evidence.Stop != listing.StopCompleted {
+					if s.Entries != int64(len(w.entries)) || len(w.unread) != 0 || s.Evidence.Stop != listing.StopCompleted || !s.Complete {
 						t.Fatalf("walk %+v: summary %+v, unread %v", req, s, w.unread)
 					}
 					for _, e := range w.entries {
@@ -129,7 +129,8 @@ func TestWalkEmitError(t *testing.T) {
 }
 
 // TestWalkScopeAndDirectories: a walk outside the scope is ErrOutOfScope;
-// a local directory the inventory has as another kind, or below a
+// one of an inventory whose coverage is not complete finishes and is not
+// Complete; a local directory the inventory has as another kind, or below a
 // symbolic link, is ErrNotDirectory,
 // one it proves absent ErrNotFound, one at or under an entry of unknown
 // kind neither; an empty one is its own entry.
@@ -142,6 +143,10 @@ func TestWalkScopeAndDirectories(t *testing.T) {
 	}
 	if w, s, err := walk(t, prefixed, listing.WalkRequest{Prefix: []byte("a/c/")}); err != nil || len(w.entries) != 1 || string(s.Evidence.Scope) != "a/" {
 		t.Errorf("walk inside the scope: %+v, %+v, %v", w, s, err)
+	}
+	partial := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects(), ext: coverage(extension(reader.S3ObjectsV1), map[string]any{"complete": false})}))
+	if _, s, err := walk(t, partial, listing.WalkRequest{}); err != nil || s.Evidence.Stop != listing.StopCompleted || s.Complete {
+		t.Errorf("walk of an inventory whose coverage is not complete: %+v, %v", s, err)
 	}
 
 	files := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
@@ -172,7 +177,7 @@ func TestWalkCancelled(t *testing.T) {
 			cancel()
 			return nil
 		})
-		if !errors.Is(err, context.Canceled) || s.Evidence.Stop == listing.StopCompleted || s.Entries != handed || handed == 0 {
+		if !errors.Is(err, context.Canceled) || s.Evidence.Stop == listing.StopCompleted || s.Complete || s.Entries != handed || handed == 0 {
 			t.Errorf("%+v: %+v, %v; want the context's error, unfinished, %d entries", req, s, err, handed)
 		}
 		cancel()

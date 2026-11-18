@@ -662,8 +662,8 @@ func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
 // TestWalk: a walk of the root, and of a directory below it, hands on
 // every entry filepath.WalkDir finds there, the directory's own below the
 // root, the symbolic link as itself,
-// and the directory it may not read as an Unread of class ErrAuth. It
-// leaves GOMAXPROCS as it was.
+// and the directory it may not read as an Unread of class ErrAuth, which
+// leaves it not Complete. It leaves GOMAXPROCS as it was.
 func TestWalk(t *testing.T) {
 	root, locked := tree(t)
 	src := open(t, hold(t, root))
@@ -689,7 +689,7 @@ func TestWalk(t *testing.T) {
 			return nil
 		})
 		slices.Sort(got)
-		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Evidence.Stop != listing.StopCompleted {
+		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Evidence.Stop != listing.StopCompleted || sum.Complete == locked {
 			t.Fatalf("workers %d: %q, %+v, %v; want %q", workers, got, sum, err, want)
 		}
 		if wantUnread := map[bool]int{true: 1}[locked]; len(unread) != wantUnread || sum.Unread != int64(wantUnread) || locked && unread[0] != "locked/" {
@@ -728,7 +728,7 @@ func TestWalkCancelled(t *testing.T) {
 		cancel()
 		return nil
 	})
-	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Entries == 0 {
+	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Complete || sum.Entries == 0 {
 		t.Fatalf("%+v, %v", sum, err)
 	}
 }
