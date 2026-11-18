@@ -263,9 +263,13 @@ do not repair the published candidate by hand.
    is green on that pull request (it builds the bottles), publish them with its number and head SHA:
    ```sh
    gh workflow run publish.yml -R varveio/homebrew-tap -f pull_request=PR -f head_sha=SHA
+   gh run watch -R varveio/homebrew-tap --exit-status   # pick the "brew pr-pull" run
    ```
    That uploads the bottles to a tap release, pushes the formula to the tap's `main` and closes
-   the pull request. Check that a fresh `brew install varveio/tap/swath` prints the new version.
+   the pull request. Once the run has succeeded, refresh the tap and check the installed version:
+   ```sh
+   brew update && brew upgrade varveio/tap/swath && swath --version   # brew install the first time
+   ```
 
 ### When a step fails half way
 
