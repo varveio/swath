@@ -184,6 +184,9 @@ type fixture struct {
 	// and 4 KiB a part, so a few hundred rows span pages and parts.
 	pageRows  int
 	partBytes int64
+	// groupRows ends a row group, and so lets a part end; zero for the
+	// writer's default.
+	groupRows int64
 }
 
 // write writes f as a dataset with SeekParquet's writer, as swath's
@@ -228,7 +231,7 @@ func write(t testing.TB, f fixture) string {
 	}
 	dir := filepath.Join(t.TempDir(), "ds")
 	err = local.WriteDir(context.Background(), dir, schema, &rowReader{rows: rows}, local.DatasetOptions{
-		Part:          spwrite.PartOptions{Key: seekparquet.Key{Column: "key", Unique: spec.UniqueKeys}, SchemaID: string(f.id), PageRows: pageRows},
+		Part:          spwrite.PartOptions{Key: seekparquet.Key{Column: "key", Unique: spec.UniqueKeys}, SchemaID: string(f.id), PageRows: pageRows, RowGroupRows: f.groupRows},
 		PartBytes:     partBytes,
 		Extensions:    raw,
 		AllowUnsynced: true,

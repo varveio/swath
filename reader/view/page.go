@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"runtime"
+	"sync"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
@@ -30,8 +32,8 @@ import (
 //
 // With req.ChildTotals, each child prefix or directory gets the totals
 // Summarize gives a subtree target at its key, from the rows the listing
-// established, within the page's MaxDuration: totals it does not reach
-// are nil, and leave the page complete.
+// established, within the page's MaxDuration: the totals counted when it
+// ends stand, those not yet counted are nil, and leave the page complete.
 // They check the values they read, not the order of the keys.
 func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	sel, err := inv.checkPage(req)
@@ -206,35 +208,46 @@ var (
 
 // childTotals are the totals of each child prefix or directory of a
 // page, aligned with listed: nil for any other entry, and for one whose
-// rows the listing did not establish, and all nil when op, bounded by the
-// page's MaxDuration, ends first; ctx is the caller's.
+// rows the listing did not establish. Each child is aggregated on its
+// own, several at once, so that when op, bounded by the page's
+// MaxDuration, ends first, the totals already counted stand and only the
+// rest are nil; ctx is the caller's.
 func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.PageEntry, sel selection) ([]*listing.Totals, error) {
-	out := make([]*listing.Totals, len(listed))
 	var counted []int
-	var spans []seekparquet.RowSpan
 	for i, le := range listed {
-		if le.CommonPrefix == nil {
-			continue
+		if le.CommonPrefix != nil && established(le.Rows) {
+			counted = append(counted, i)
 		}
-		if !established(le.Rows) {
-			continue
-		}
-		counted = append(counted, i)
-		spans = append(spans, le.Rows)
-	}
-	if len(spans) == 0 {
-		return out, nil
 	}
 
-	totals, err := inv.aggregate(op, spans, sel, false)
-	if err != nil {
-		if ctx.Err() == nil && op.Err() != nil {
-			return out, nil
-		}
-		return nil, failed(ctx, err)
+	out := make([]*listing.Totals, len(listed))
+	errs := make([]error, len(listed))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for range min(len(counted), runtime.GOMAXPROCS(0)) {
+		wg.Go(func() {
+			for i := range next {
+				totals, err := inv.aggregate(op, []seekparquet.RowSpan{listed[i].Rows}, sel, false)
+				if err == nil {
+					out[i] = totals[0]
+				}
+				errs[i] = err
+			}
+		})
 	}
-	for j, i := range counted {
-		out[i] = totals[j]
+	for _, i := range counted {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+
+	if timeUp(ctx, op) {
+		return out, nil
+	}
+	for _, err := range errs {
+		if err != nil {
+			return nil, failed(ctx, err)
+		}
 	}
 	return out, nil
 }
