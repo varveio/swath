@@ -43,5 +43,5 @@ Parquet inventories. Releases are published on the [releases page](https://githu
   [swath completion](commands/swath-completion.md).
 - [Exit codes](reference/exit-codes.md), [Run report and progress file](reference/run-report.md),
   [Log events](reference/log-events.md).
-- [The Go library](library.md) (experimental): page and look up an S3 bucket from a Go program, or run the swath
-  command line in one.
+- [The Go library](library.md) (experimental): page, look up and walk a bucket, container or directory from a Go
+  program.

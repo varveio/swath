@@ -1,16 +1,17 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package gcs_test
+package s3_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
-	"github.com/varveio/swath/gcs"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source/s3"
 )
 
 // Open a bucket, page one level of it, look up one key and close it. A
@@ -18,7 +19,7 @@ import (
 // never absent.
 func Example() {
 	ctx := context.Background()
-	src, err := gcs.Open(ctx, "example-bucket", gcs.Options{})
+	src, err := s3.Open(ctx, "example-bucket", s3.Options{Region: "eu-west-1"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -55,5 +56,37 @@ func Example() {
 		fmt.Println("unknown: not authorized to tell")
 	default:
 		fmt.Println("unknown:", r.Reason)
+	}
+}
+
+// Walk everything under a prefix, in parallel, for at most a minute:
+// count the objects and their bytes. A walk sets no limit of its own; the
+// caller stops it by cancelling its context, and the summary says whether
+// it finished.
+func Example_walk() {
+	ctx := context.Background()
+	src, err := s3.Open(ctx, "example-bucket", s3.Options{Region: "eu-west-1"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer src.Close()
+
+	walkCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	var objects, size int64
+	res, err := src.Walk(walkCtx, listing.WalkRequest{Prefix: []byte("logs/")}, func(b listing.WalkBatch) error {
+		for _, e := range b.Entries {
+			objects++
+			size += *e.Size
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		fmt.Printf("not finished in a minute: at least %d objects, %d bytes\n", res.Entries, size)
+	case err != nil:
+		log.Fatal(err)
+	default:
+		fmt.Printf("%d objects, %d bytes\n", objects, size)
 	}
 }

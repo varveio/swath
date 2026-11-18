@@ -34,12 +34,9 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 
 | Path | What it is |
 |---|---|
-| `cmd/swath` | the swath binary, which runs `command` |
-| `command` | the command line, as a function another Go program can call ([library](../library.md#run-the-command-line)) |
-| `*.go`, `s3/` | the experimental Go library: a live `Source` and its S3 provider ([library](../library.md)) |
-| `gcs/` | the library's Google Cloud Storage provider ([library](../library.md#google-cloud-storage)) |
-| `azblob/` | the experimental Go library's Azure Blob Storage provider ([library](../library.md#azure-blob-storage)) |
-| `local/` | the library's local source: a directory the caller opened ([library](../library.md#a-local-directory)) |
+| `cmd/swath` | the swath binary, which runs the command line in `internal/command` |
+| `source/` | the experimental Go library: a live `Source` ([library](../library.md)) |
+| `source/s3`, `source/gcs`, `source/azblob`, `source/local` | the library's providers, each opening a `Source`: an S3 bucket, a Google Cloud Storage bucket, an Azure Blob Storage container, a directory the caller opened ([library](../library.md)) |
 | `cmd/swath-replay` | the replay server ([swath-replay.md](swath-replay.md)) |
 | `internal/` | the lister's packages ([architecture](architecture.md#packages)) |
 | `reader/`, `objfile/` | nested modules, importable on their own ([`reader`](../../reader/README.md), [`objfile`](../../objfile/README.md)) |

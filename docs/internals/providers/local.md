@@ -118,7 +118,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   more (`TestUnreadReachesTheSink`). The order stage's `order.SubtreeSink` tells when a directory's subtree
   ended; every report under it was made before.
 - **The library's live source** (`OpenLive`, `live_unix.go`; the public package `local`, Linux and macOS,
-  `listing.ErrUnsupported` elsewhere). A `live.Store` over a held root, for `swath.Source`'s `Page`,
+  `listing.ErrUnsupported` elsewhere). A `live.Store` over a held root, for `source.Source`'s `Page`,
   `Lookup` and `Walk` ([library](../../library.md#a-local-directory)). Its location, which page tokens are bound to, is
   the root's device and inode, never a path. A page of a prefix opens its directory as `Lookup` reaches a key's
   parent (`resolve`, shared: each ancestor with `longpath.Search` and `O_NOFOLLOW`, device-checked, at most two
@@ -145,7 +145,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   descriptor, is the first page's `Self`.
   The store's token is the last key the page read, so the next page is the names after it: nothing is held
   between pages, and a directory changing between them repeats and skips nothing that stayed
-  (`local/local_test.go`: the root's path replaced by a link, a link at and on the way to a prefix, a
+  (`source/local/local_test.go`: the root's path replaced by a link, a link at and on the way to a prefix, a
   directory replaced between pages, entries removed and added between pages,
   descriptors after every call, concurrent pages; `TestLiveOtherDevice` through the `lookupFstat` seam;
   `TestLiveUntyped` and `TestLiveCanceledAfterRead` through the `levelGetdents` seam).

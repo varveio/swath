@@ -141,7 +141,8 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
 ## The listing contract
 
 The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the questions swath
-answers about a listed location, from a live source or from an opened inventory: Page (the next children of a
+answers about a listed location, from a live source (package `github.com/varveio/swath/source` in the root
+module, [the Go library](../docs/library.md)) or from an opened inventory: Page (the next children of a
 prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
 (count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
 common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope and unlocated gaps), the
@@ -175,5 +176,6 @@ key's state is known. The view checks every value it reads (a missing column, a 
 does not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
 A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
 is `ErrInvalidPage`, a refused access `ErrAuth`, and any other failure to read the dataset, a missing file of it
-included, `ErrUnavailable`.
+included, `ErrUnavailable`. A context's error is returned as it is and matches no class; an error returned by a
+walk's own callback is returned as it is, so it need not match one.
 [view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.

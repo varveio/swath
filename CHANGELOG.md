@@ -37,7 +37,7 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Libraries
 
-- The root module `github.com/varveio/swath` is importable: its `go.mod` requires `reader` and `objfile` by
+- The module `github.com/varveio/swath` is importable: its `go.mod` requires `reader` and `objfile` by
   released version and carries no `replace`. `go.work` at the repository root joins the three modules, so a
   build in a checkout compiles the local `reader/` and `objfile/`.
 - `reader/listing` (experimental: it may change in any release) is the contract of the questions swath
@@ -50,33 +50,38 @@ Notable changes per release. The human summary of the current release is in the
   nothing in it was unreadable, and never at or under a local entry of unknown kind
   ([reader guide](reader/README.md#the-inventory-view)).
 - `reader/listing`: `Evidence.Started` and `Finished` are each nil when the source does not know them.
-- The root package `github.com/varveio/swath` (experimental) answers `Page` and `Lookup` live: `s3.Open` opens a
-  bucket of S3 or an S3-compatible store as a `Source`, whose pages list one level by `/` with opaque tokens and
+- Package `github.com/varveio/swath/source` (experimental) answers `Page` and `Lookup` live: `s3.Open`
+  (`source/s3`) opens a bucket of S3 or an S3-compatible store as a `Source`, whose pages list one level by `/` with opaque tokens and
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
 - A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them. No call has a
   time limit of its own: a context deadline bounds it. A lookup left unknown carries evidence whose `Unlocated` is
   nil.
-- The root package's `Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
+- `source.Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
   only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
   parallel; it sets no limit, and a caller stops it by cancelling its context, when it returns the context's error
   and a summary that says it did not finish. Each place a local walk cannot read reaches the callback as an
   `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them
   ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
+- `source.Open` opens a `Source` from an address (`s3://BUCKET`, `gs://BUCKET`, `az://ACCOUNT/CONTAINER`) with one
+  `source.Options`, through the providers the program imports: `source/s3`, `source/gcs`, `source/azblob`, or
+  `source/all` for every one. An address whose provider is not imported is `listing.ErrUnsupported`, naming the
+  import; an address with a key prefix is `listing.ErrInvalidRequest`. Each provider keeps its typed `Open`
+  ([library guide](docs/library.md#open-by-address)).
 - `WalkSummary.Complete` says a walk read everything under its prefix: it finished, handed on no `Unread` and,
   over an inventory, the inventory's coverage is complete.
 - `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
   live source leaves it nil.
-- `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
+- `gcs.Open` (`source/gcs`) opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
   of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
   ([library guide](docs/library.md#google-cloud-storage)).
-- `azblob.Open(ctx, account, container, opts)` opens an Azure Blob Storage container as a `Source`. A level that one answer
+- `azblob.Open(ctx, account, container, opts)` (`source/azblob`) opens an Azure Blob Storage container as a `Source`. A level that one answer
   holds is sorted from Azure's UTF-16 order into byte order; a longer level is `ErrUnsupported` from the page
   where it leaves byte order. A hierarchical namespace's directories come back once, as prefixes
   ([library guide](docs/library.md#azure-blob-storage)).
-- `local.Open` opens a directory the program already opened as a `Source` (Linux and macOS). Each page and lookup
+- `local.Open` (`source/local`) opens a directory the program already opened as a `Source` (Linux and macOS). Each page and lookup
   opens what it reads relative to that directory, one name at a time, never following a symbolic link or
   crossing to another device; a page is one directory level in byte order, a subdirectory a `dir` entry with its
   metadata, and its memory follows the page's `Limit`, not the directory's size. Names are bytes: one that is
@@ -85,14 +90,6 @@ Notable changes per release. The human summary of the current release is in the
   `GOMAXPROCS` ([library guide](docs/library.md#a-local-directory)).
 - `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
   a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
-- `command` (experimental) is the swath command line as a function: `Main(ctx, host, args, stdout, stderr)` runs
-  one command line and returns its exit code, `Exit` exits with it as the binary does, and `host` names the program
-  that embeds it, which `--version` then states. `cmd/swath` is `command.Exit(command.Main(...))`. The process-wide
-  policy is set when `Main` is called, never at import, and terminal detection follows the streams it is given
-  ([library guide](docs/library.md#run-the-command-line)).
-- In a program that embeds swath, the build that `--version`, the run report, the journal, Parquet `created_by`
-  and the User-Agent name is swath's version among the host's dependencies (`devel` for a local replacement or a
-  workspace module), not the host's version and revision.
 - GCS: a redirect's error message leaves out the target's query. Azure Blob: the Azure SDK's log never sees an
   error answer's body, so a SAS echoed in it is not logged; swath still reports the service's error code.
 

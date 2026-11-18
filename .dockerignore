@@ -1,7 +1,7 @@
 # Build context for the Dockerfile.
 #
 # The context is what the build stage compiles and the images carry: the main module's go.mod,
-# go.sum, build.sh and notices.sh, the packages the two commands build from (cmd/, command/,
+# go.sum, build.sh and notices.sh, the packages the two commands build from (cmd/,
 # internal/), the nested modules (objfile/, reader/) and the go.work that joins them, plus LICENSE
 # and NOTICE for /licenses/. Nothing else from the repository: not docs/ (its media and evidence
 # archives), bench/, testdata/, site/, tools/, scripts/ or .git. Inside the directories it admits it
@@ -16,7 +16,6 @@
 !build.sh
 !notices.sh
 !cmd/
-!command/
 !internal/
 !objfile/
 !reader/

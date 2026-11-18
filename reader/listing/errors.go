@@ -8,21 +8,25 @@ import "errors"
 // The error classes. A call that fails returns an error that matches its
 // class with errors.Is, and may wrap a cause beside it. An answer's
 // unknown key is a LookupUnknown with its class as the Reason, and a place
-// a walk could not read an Unread with its class as the Reason. The errors
-// of an ended ctx are returned as they are, matching no class.
+// a walk could not read an Unread with its class as the Reason. An ended
+// ctx's errors match no class. Two errors of Walk need not match one: an
+// error returned by the caller's own emit, which Walk returns as it is,
+// and a panic a live walk recovered inside its workers, which Walk returns
+// as an error.
 var (
 	// ErrInvalidRequest is a request that breaks this contract: a key or
 	// prefix of the wrong form, a NUL in a key, a Limit that is not
 	// positive, a negative number of workers. It is refused before any
-	// request.
+	// request. It is also a source configured wrongly for a location that
+	// exists, which the store tells: an S3 bucket reached through another
+	// region than its own.
 	ErrInvalidRequest = errors.New("listing: invalid request")
 	// ErrInvalidToken is a page token issued for another source,
 	// inventory or prefix, or of a version the backend does not read. It is refused before any request.
 	ErrInvalidToken = errors.New("listing: invalid page token")
 	// ErrNotFound is a location the call needs that does not exist: the
-	// bucket or container (on S3, one the service says is in another
-	// region than the source's), a local root, or a local directory to
-	// page or walk. A missing key is LookupAbsent, never this error.
+	// bucket or container, a local root, or a local directory to page or
+	// walk. A missing key is LookupAbsent, never this error.
 	ErrNotFound = errors.New("listing: not found")
 	// ErrNotDirectory is a local prefix that names an entry other than a
 	// directory.

@@ -305,9 +305,10 @@ TMPDIR=/path/on/disk GOCACHE=/path/on/disk/.gocache ./build.sh -o swath
 
 On one tester's machine that build took under 4 minutes and the cache grew to about 850 MB.
 
-`go install github.com/varveio/swath/cmd/swath@VERSION` is not
-supported yet: the module points its nested `reader` and `objfile` modules at local directories, which
-`go install` refuses. Build from a checkout instead.
+`go install github.com/varveio/swath/cmd/swath@VERSION` works from the first release that tags the nested
+`reader` and `objfile` modules at the versions its `go.mod` requires: the module carries no `replace`
+([Cutting a release](../RELEASING.md#cutting-a-release)). It does not work for 0.4.0, whose `go.mod` points
+them at local directories, which `go install` refuses: build 0.4.0 from a checkout.
 
 ## Platforms
 

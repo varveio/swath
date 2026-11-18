@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package s3 opens an Amazon S3 bucket, or a bucket of an S3-compatible
-// store, as a live swath.Source.
+// store, as a live source.Source.
 //
 // The API is experimental: it may change in any release.
 package s3
@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/varveio/swath"
 	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/internal/source/objhttp"
 	s3source "github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
 )
 
 // Options configure an S3 source. The zero value reaches AWS's own
@@ -29,7 +29,7 @@ type Options struct {
 	// Region is the bucket's region, which requests are signed for. Empty
 	// takes AWS_REGION, AWS_DEFAULT_REGION or the profile's, else
 	// us-east-1. A bucket in another region fails a call with
-	// listing.ErrNotFound, its message naming the bucket's region.
+	// listing.ErrInvalidRequest, its message naming the bucket's region.
 	Region string
 	// Endpoint is an S3-compatible store's URL, http(s)://host[:port][/path],
 	// without user information, a query or a fragment. Empty is AWS's own.
@@ -68,7 +68,7 @@ type Options struct {
 // s3:GetObject on the key, and s3:ListBucket on the bucket to tell an
 // absent key: without it S3 answers a missing key with 403, which leaves
 // the key unknown.
-func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, error) {
+func Open(ctx context.Context, bucket string, opts Options) (*source.Source, error) {
 	switch {
 	case bucket == "" || strings.ContainsAny(bucket, "/\x00"):
 		return nil, objfile.RedactError(fmt.Errorf("%w: bucket %q: a bucket's name, with no slash", listing.ErrInvalidRequest, bucket))
@@ -93,5 +93,22 @@ func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, erro
 		}
 		return nil, objfile.RedactError(err)
 	}
-	return (*swath.Source)(live.NewSource(st, false)), nil
+	return (*source.Source)(live.NewSource(st, false)), nil
+}
+
+// init links addresses s3://BUCKET to Open for source.Open.
+func init() {
+	live.Register("s3", func(ctx context.Context, bucket string, o live.Options) (*live.Source, error) {
+		s, err := Open(ctx, bucket, Options{
+			Region:          o.Region,
+			Endpoint:        o.Endpoint,
+			PathStyle:       o.PathStyle,
+			Profile:         o.Profile,
+			CredentialsFile: o.CredentialsFile,
+			Anonymous:       o.Anonymous,
+			MaxRequests:     o.MaxRequests,
+			RequestRate:     o.RequestRate,
+		})
+		return (*live.Source)(s), err
+	})
 }

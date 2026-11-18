@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/varveio/swath/azblob"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source/azblob"
 )
 
 // Open a container, page one level of it, look up one key and close it. A

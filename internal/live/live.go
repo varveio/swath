@@ -1,11 +1,11 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-// Package live is the live Source that package swath, at the module
-// root, exposes as swath.Source, and what a provider package such as
-// github.com/varveio/swath/s3 builds one over: an opened store (Store),
-// whose Source NewSource makes. It is internal, so no code outside swath
-// adds a kind of storage.
+// Package live is the live Source that package
+// github.com/varveio/swath/source exposes as source.Source, and what a
+// provider package such as github.com/varveio/swath/source/s3 builds one
+// over: an opened store (Store), whose Source NewSource makes. It is
+// internal, so no code outside swath adds a kind of storage.
 package live
 
 import (

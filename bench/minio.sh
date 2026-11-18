@@ -56,7 +56,7 @@ campaign)
   "$SELF" up "$KEYS"
   SWATH_MINIO_ENDPOINT=http://127.0.0.1:$PORT SWATH_MINIO_ACCESS_KEY=$AK SWATH_MINIO_SECRET_KEY=$SK \
     SWATH_CAMPAIGN_KEYS=$KEYS SWATH_CAMPAIGN_RESULTS=$RESULTS \
-    go test -p 1 -count=1 -timeout 3h ./command -run '^TestDurableMinIO$' -v > "${RESULTS%.*}.log" 2>&1
+    go test -p 1 -count=1 -timeout 3h ./internal/command -run '^TestDurableMinIO$' -v > "${RESULTS%.*}.log" 2>&1
   ;;
 *)
   echo "usage: minio.sh up KEYFILE [BUCKET] | down | campaign KEYFILE" >&2

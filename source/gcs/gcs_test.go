@@ -17,15 +17,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath"
-	"github.com/varveio/swath/gcs"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
+	"github.com/varveio/swath/source/gcs"
 )
 
 // open opens bucket at endpoint, without credentials, until the test ends.
-func open(t *testing.T, endpoint, bucket string) *swath.Source {
+func open(t *testing.T, endpoint, bucket string) *source.Source {
 	t.Helper()
 	src, err := gcs.Open(context.Background(), bucket, gcs.Options{Endpoint: endpoint, Anonymous: true})
 	if err != nil {

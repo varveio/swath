@@ -2,24 +2,46 @@
 
 swath's listing code is also a Go library: a program can open an S3 or GCS bucket, an Azure container or a local
 directory and ask it, during its own run, for the next children of a prefix (a **page**), for what is at exactly
-one key (a **lookup**) or for everything under a prefix (a **walk**), with no swath process and no output files. A `Source` links neither swath's command, its flags nor its Parquet writer. A program can also run
-the whole command line ([Run the command line](#run-the-command-line)).
+one key (a **lookup**) or for everything under a prefix (a **walk**), with no swath process and no output files. A
+`Source` links neither swath's command, its flags nor its Parquet writer.
 
 The library is **experimental**: it is implemented and tested, but its API may change in any release.
 
 | Package | What it holds |
 |---|---|
-| `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
-| `github.com/varveio/swath/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
-| `github.com/varveio/swath/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
-| `github.com/varveio/swath/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
-| `github.com/varveio/swath/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
+| `github.com/varveio/swath/source` | `Open`, which opens a `Source` from an address through the providers the program links; `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
+| `github.com/varveio/swath/source/all` | nothing but imports: it links every provider `source.Open` takes an address of |
+| `github.com/varveio/swath/source/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
+| `github.com/varveio/swath/source/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
+| `github.com/varveio/swath/source/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
+| `github.com/varveio/swath/source/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
-| `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 
 Pages, lookups and walks answer from the location as it is during the call. To ask the same questions of a saved inventory
 instead, or for the totals under several prefixes (a summary), open it with the `reader/view` package
 ([the inventory view](../reader/README.md#the-inventory-view)).
+
+## Open by address
+
+```go
+import (
+	"github.com/varveio/swath/source"
+	_ "github.com/varveio/swath/source/s3" // links s3:// addresses
+)
+
+src, err := source.Open(ctx, "s3://example-bucket", source.Options{Region: "eu-west-1"})
+```
+
+`source.Open` takes `s3://BUCKET`, `gs://BUCKET` or `az://ACCOUNT/CONTAINER`, as the command does. An address names
+a bucket or container only: a key prefix goes in each page, lookup or walk request, and an address with one is
+`listing.ErrInvalidRequest`. `Open` opens the providers the program links, as `database/sql` opens its drivers:
+import one provider's package for its side effect, several, or `github.com/varveio/swath/source/all` for every
+one; a program links only the cloud SDKs of the providers it imports. An address whose provider is not linked is
+`listing.ErrUnsupported`, and its message names the import to add. `source.Options` holds every provider's
+settings, each field naming the providers that read it; the others ignore it.
+
+A program that names its provider in code can call that package's own `Open` and `Options` instead, as below, and
+the compiler checks them. A local directory has no address: `local.Open` takes the directory the program opened.
 
 ## Open, page, look up, close
 
@@ -65,7 +87,7 @@ default:
 }
 ```
 
-The same program is the package's [`Example`](../s3/example_test.go), which the tests compile.
+The same program is the package's [`Example`](../source/s3/example_test.go), which the tests compile.
 
 `Open` builds the bucket's client and may load credentials; it lists nothing, so a bucket that is not there fails
 the first call. `s3.Options` takes the region, an S3-compatible endpoint and path-style addressing, a profile, a
@@ -150,7 +172,7 @@ default:
 }
 ```
 
-The program is the s3 package's [`Example_walk`](../s3/example_test.go). A walk needs `s3:ListBucket` on the
+The program is the s3 package's [`Example_walk`](../source/s3/example_test.go). A walk needs `s3:ListBucket` on the
 bucket.
 
 ## Evidence and errors
@@ -162,9 +184,13 @@ as complete. No call has a time limit of its own: bound any call with a context 
 
 A call that fails returns an error that `errors.Is` matches to one of the contract's classes, read from the failure
 as swath's command reads it for its outcome: `ErrAuth` for credentials that do not load or a refusal,
-`ErrNotFound` for a bucket that is not there or is in another region, `ErrUnavailable` once the client's retries are
-spent (throttling included), `ErrInvalidPage`, `ErrInvalidToken`, `ErrInvalidRequest` and `ErrUnsupported`. A call
-whose context ends returns the context's error. Error messages pass through swath's redaction and carry no credential.
+`ErrNotFound` for a bucket that is not there, `ErrInvalidRequest` for a request the contract refuses and for a
+bucket that is there but in another region than the source's (the message names the bucket's region),
+`ErrUnavailable` once the client's retries are spent (throttling included), `ErrInvalidPage`, `ErrInvalidToken` and
+`ErrUnsupported`. A call whose context ends returns the context's error. A walk has two exceptions, which need not
+match a class: an error your function returns, which `Walk` returns unchanged, and a panic in the walk's own
+goroutines, which `Walk` recovers and returns as an error. A panic in your function is not recovered. Error messages
+pass through swath's redaction and carry no credential.
 
 To count or trace the requests a call sends, put an `objfile.Observer` on its context (`objfile.WithObserver`), as
 for dataset reads: every attempt, retries included, is reported to it, a page's and each of a walk's as a list
@@ -183,7 +209,7 @@ defer src.Close()
 ```
 
 The rest is as on S3: the same `Page`, `Lookup`, `Walk` and `Close`, checks, tokens, evidence and error classes. The
-package's [`Example`](../azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
+package's [`Example`](../source/azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
 replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, say), unsigned access to a public container and the same two
 request limits; credentials otherwise come from the environment, as for the command: `AZURE_STORAGE_SAS_TOKEN`, else
 `AZURE_STORAGE_KEY`, else Entra ID ([Authentication and permissions](sources/azure.md#authentication-and-permissions)).
@@ -216,8 +242,8 @@ What differs from S3:
 
 ## Google Cloud Storage
 
-`github.com/varveio/swath/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
-walks, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
+`github.com/varveio/swath/source/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
+walks, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../source/gcs/example_test.go)):
 
 ```go
 src, err := gcs.Open(ctx, "example-bucket", gcs.Options{})
@@ -245,7 +271,7 @@ otherwise come from Application Default Credentials, as for the command
 
 ## A local directory
 
-`github.com/varveio/swath/local` opens a directory as a `Source`, on Linux and macOS. The program opens the
+`github.com/varveio/swath/source/local` opens a directory as a `Source`, on Linux and macOS. The program opens the
 directory itself, without following a symbolic link, and hands swath the open file: swath never resolves the
 directory by its path, so what it reads is the directory the program opened, even once that path names
 something else.
@@ -279,7 +305,7 @@ for {
 }
 ```
 
-The same program is the package's [`Example`](../local/example_test.go), which the tests compile.
+The same program is the package's [`Example`](../source/local/example_test.go), which the tests compile.
 
 The program owns the directory: it keeps it open until the source's `Close` returns, and `Close` does not close
 it. Keys are relative to it. A page's prefix is `""` for the directory itself or a directory's key, such as
@@ -326,30 +352,6 @@ library guarantees:
 
 To count or trace a call's work, an `objfile.Observer` on its context is told of each page as one list request
 and each lookup as one metadata request, named by the program's key.
-
-## Run the command line
-
-A program that needs a whole run, with its flags, output, progress files and exit codes, rather than one page or
-lookup, can run the swath command line itself. `command.Main(ctx, host, args, stdout, stderr)` runs one command
-line (`args` without the program name) and returns its exit code; the swath binary is
-`command.Exit(command.Main(...))` and nothing else. This package links the whole command, its providers and its
-Parquet writer, which `Source` does not.
-
-```go
-command.Exit(command.Main(context.Background(), "example-host", os.Args[1:], os.Stdout, os.Stderr))
-```
-
-`Main` is for a process dedicated to the call, such as a child the host starts for one command line. It sets the
-command's process-wide policy when it is called, never when the package is imported, and does not undo it when it
-returns: the Azure SDK's own log is turned off, SIGINT, SIGTERM and SIGHUP stop the run, SIGPIPE is ignored, and a
-run that has not finished stopping within the shutdown grace ends the process. Terminal detection (`--format auto`,
-color, the live progress line) follows the `stdout` and `stderr` given to `Main`: a writer that is not an `*os.File`
-is not a terminal. `command.Exit` ends the process as the binary does: on Unix, a run a signal stopped dies by that
-signal.
-
-`host` names the program this copy is built into (the binary passes `""`), and `--version` then says so. The version that
-`--version`, the run report, the journal, Parquet `created_by` and the User-Agent give is swath's own: the version
-of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision.
 
 ## Not in the library yet
 

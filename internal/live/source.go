@@ -14,8 +14,8 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Source is an opened live location over a Store. Package swath defines
-// swath.Source on it and documents the methods there.
+// Source is an opened live location over a Store. Package source defines
+// source.Source on it and documents the methods there.
 type Source struct {
 	store Store
 	// utf8Keys: the store's keys are UTF-8 (NewSource).
@@ -32,7 +32,7 @@ func NewSource(s Store, byteKeys bool) *Source {
 	return &Source{store: s, utf8Keys: !byteKeys}
 }
 
-// Lookup answers swath.Source.Lookup.
+// Lookup answers source.Source.Lookup.
 func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, error) {
 	if err := s.checkKey(key); err != nil {
 		return listing.LookupResult{}, err
@@ -52,7 +52,7 @@ func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, 
 	return r, nil
 }
 
-// Close answers swath.Source.Close.
+// Close answers source.Source.Close.
 func (s *Source) Close() error {
 	return s.store.Close()
 }

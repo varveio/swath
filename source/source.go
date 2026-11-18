@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package swath
+package source
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Source is an opened live location, opened by a provider package such as
-// github.com/varveio/swath/s3, as the package documentation states. The
-// zero Source is not usable.
+// Source is an opened live location, opened by Open or by a provider
+// package such as github.com/varveio/swath/source/s3, as the package
+// documentation states. The zero Source is not usable.
 type Source live.Source
 
 // Page returns the next children of req.Prefix, one level by "/", as
@@ -44,7 +44,8 @@ func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, 
 // emit is called from the goroutine that called Walk, one batch at a time,
 // and nothing is emitted after Walk returns. When ctx ends, Walk returns
 // its error, even when emit has accepted every batch. A panic in the
-// walk's workers is returned as an error of no class.
+// walk's workers is returned as an error, which need not match a class;
+// a panic in emit is not recovered.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	return (*live.Source)(s).Walk(ctx, req, emit)
 }

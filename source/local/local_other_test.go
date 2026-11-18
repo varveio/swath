@@ -10,8 +10,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/varveio/swath/local"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source/local"
 )
 
 // TestUnsupported: a local source lists on Linux and macOS only.

@@ -39,7 +39,7 @@ for f in "${LISTS[@]}"; do
   # shellcheck disable=SC2086
   SWATH_CORPUS_ENDPOINT=http://127.0.0.1:$PORT SWATH_CORPUS_NAME=$name SWATH_CAMPAIGN_RESULTS=$RESULTS \
     SWATH_CAMPAIGN_KEYS=$slice \
-    go test -p 1 -count=1 -timeout 3h ${GOTEST_FLAGS:-} ./command -run '^TestDurableCorpus$' -v > "${RESULTS%.*}-$name.log" 2>&1 || rc=$?
+    go test -p 1 -count=1 -timeout 3h ${GOTEST_FLAGS:-} ./internal/command -run '^TestDurableCorpus$' -v > "${RESULTS%.*}-$name.log" 2>&1 || rc=$?
   grep -E '^(--- FAIL|ok|FAIL)|durable_campaign_test' "${RESULTS%.*}-$name.log" || true
   [ "$rc" = 0 ] || failed=1
   kill "$kf" 2>/dev/null

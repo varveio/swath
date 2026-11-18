@@ -79,7 +79,11 @@
 // No call sets a bound of its own: a caller bounds any call with a ctx
 // deadline, and the call then returns context.DeadlineExceeded. A call that
 // fails returns an error matching one of the classes ErrInvalidRequest to
-// ErrUnavailable with errors.Is. Error messages carry no credential. Every
+// ErrUnavailable with errors.Is, with two exceptions besides ctx's own
+// errors, which need not match a class: an error returned by the caller's
+// own emit, which Walk returns unchanged, and a panic in a live walk's own
+// goroutines, which Walk recovers and returns as an error. A panic in emit
+// is not recovered. Error messages carry no credential. Every
 // storage request a call makes, retries included, is reported to the storage
 // observer on ctx (objfile.Observer), as dataset reads are.
 //

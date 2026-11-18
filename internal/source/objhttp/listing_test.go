@@ -32,7 +32,7 @@ func TestListingClass(t *testing.T) {
 		{"parse", &ExhaustedError{Attempts: 9, Err: failure(ClassParse, 200, true)}, listing.ErrUnavailable},
 		{"unsupported", failure(ClassUnsupported, 0, false), listing.ErrUnsupported},
 		{"not_found", failure(ClassNotFound, 404, false), listing.ErrNotFound},
-		{"region_redirect", failure(ClassRegionRedirect, 301, false), listing.ErrNotFound},
+		{"region_redirect", failure(ClassRegionRedirect, 301, false), listing.ErrInvalidRequest},
 		{"unreachable", failure(ClassUnreachable, 0, false), listing.ErrUnavailable},
 		{"server error", &ExhaustedError{Attempts: 9, Err: failure(ClassOther, 500, true)}, listing.ErrUnavailable},
 		{"another answer", failure(ClassOther, 400, false), listing.ErrUnsupported},

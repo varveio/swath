@@ -71,7 +71,7 @@ class PolicyTests(unittest.TestCase):
         cases = [
             (['internal/x.go'], {'go', 'fixtures'}),
             (['cmd/swath/main.go'], {'go', 'fixtures'}),
-            (['command/main.go'], {'go', 'fixtures'}),
+            (['internal/command/main.go'], {'go', 'fixtures'}),
             (['cmd/swath-replay/main_test.go'], {'go', 'fixtures'}),
             (['bench/s3fake/main.go'], {'go', 'fixtures'}),
             (['bench/compare.sh'], {'go', 'fixtures'}),
@@ -79,11 +79,11 @@ class PolicyTests(unittest.TestCase):
             (['verify.py'], {'go', 'fixtures'}),
             (['dataset_schema.py'], {'go', 'fixtures'}),
             (['test_dataset_readers.py'], {'go', 'fixtures'}),
-            # The library packages: the root package and one per source.
-            (['walk.go'], {'go', 'fixtures'}),
-            (['walk_internal_test.go', 's3/s3.go'], {'go', 'fixtures'}),
-            (['gcs/gcs_test.go', 'azblob/azblob.go'], {'go', 'fixtures'}),
-            (['local/local.go'], {'go', 'fixtures', 'platforms'}),
+            # The library packages: package source and one per provider under it.
+            (['source/source.go'], {'go', 'fixtures'}),
+            (['source/deps_test.go', 'source/s3/s3.go'], {'go', 'fixtures'}),
+            (['source/gcs/gcs_test.go', 'source/azblob/azblob.go'], {'go', 'fixtures'}),
+            (['source/local/local.go'], {'go', 'fixtures', 'platforms'}),
             # A page under docs/ selects only the docs tier, with light files or an
             # independent module beside it; with any main-module input main runs as before.
             (['docs/start-here.md'], {'docs'}),
@@ -94,7 +94,7 @@ class PolicyTests(unittest.TestCase):
             (['docs/troubleshooting.md', 'site/index.html', 'README.md', 'docs/ops/dev/CI.md'], {'docs'}),
             (['docs/start-here.md', 'objfile/object.go'], {'docs', 'objfile'}),
             (['docs/start-here.md', 'cmd/swath/main.go'], {'go', 'fixtures'}),
-            (['docs/commands/swath-list.md', 'command/main_test.go'], {'go', 'fixtures'}),
+            (['docs/commands/swath-list.md', 'internal/command/main_test.go'], {'go', 'fixtures'}),
             (['docs/start-here.md', 'reader/read.go'], {'go', 'reader', 'fixtures'}),
             (['docs/start-here.md', 'Dockerfile'], {'go', 'fixtures', 'images', 'platforms'}),
             (['docs/start-here.md', 'docs/replay-provider-evidence.tar.gz'], {'go', 'fixtures'}),

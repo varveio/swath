@@ -450,7 +450,7 @@ func docSection(t *testing.T, name, marker, body string) {
 		}
 		return
 	}
-	t.Errorf("docs/%s: the %s block is stale; run UPDATE=1 go test ./command -run '^TestDocs'", name, marker)
+	t.Errorf("docs/%s: the %s block is stale; run UPDATE=1 go test ./internal/command -run '^TestDocs'", name, marker)
 }
 
 // TestRefusedRunLeavesOwnerMetadata: a run refused because another process

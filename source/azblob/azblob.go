@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package azblob opens an Azure Blob Storage container as a live
-// swath.Source.
+// source.Source.
 //
-// A page is in byte order, as every swath.Source's is, which is not the
+// A page is in byte order, as every source.Source's is, which is not the
 // order Azure lists a level in. A container of an account with a flat
 // namespace lists a level in UTF-16 code-unit order, which is byte order
 // except between names whose first differing characters are one in
@@ -37,12 +37,12 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/varveio/swath"
 	"github.com/varveio/swath/internal/live"
 	azsource "github.com/varveio/swath/internal/source/azblob"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
 )
 
 // Options configure an Azure Blob Storage source. The zero value reaches
@@ -82,7 +82,7 @@ var accountName = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
 // permission to read the blob's properties, and to list the container to
 // tell an absent blob: a key is absent only when Get Blob Properties
 // finds no blob and a listing then shows the container is there.
-func Open(ctx context.Context, account, container string, opts Options) (*swath.Source, error) {
+func Open(ctx context.Context, account, container string, opts Options) (*source.Source, error) {
 	switch {
 	case !accountName.MatchString(account) || container == "" || strings.ContainsAny(container, "/\x00"):
 		return nil, objfile.RedactError(fmt.Errorf("%w: account %q, container %q", listing.ErrInvalidRequest, account, container))
@@ -104,5 +104,19 @@ func Open(ctx context.Context, account, container string, opts Options) (*swath.
 		}
 		return nil, objfile.RedactError(err)
 	}
-	return (*swath.Source)(live.NewSource(st, false)), nil
+	return (*source.Source)(live.NewSource(st, false)), nil
+}
+
+// init links addresses az://ACCOUNT/CONTAINER to Open for source.Open.
+func init() {
+	live.Register("az", func(ctx context.Context, location string, o live.Options) (*live.Source, error) {
+		account, container, _ := strings.Cut(location, "/")
+		s, err := Open(ctx, account, container, Options{
+			Endpoint:    o.Endpoint,
+			Anonymous:   o.Anonymous,
+			MaxRequests: o.MaxRequests,
+			RequestRate: o.RequestRate,
+		})
+		return (*live.Source)(s), err
+	})
 }
