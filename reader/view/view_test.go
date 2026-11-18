@@ -177,34 +177,31 @@ func TestRowFaults(t *testing.T) {
 	}
 }
 
-// TestTimestampYears: a timestamp is read when its year is one RFC 3339
-// carries, 1 to 9999, and refused otherwise by every question, as
-// listing.ErrInvalidPage with reader.ErrRow beside it.
+// TestTimestampYears: a timestamp outside the years 1 to 9999 is read as
+// it is by every question.
 func TestTimestampYears(t *testing.T) {
 	ctx := context.Background()
-	first, last := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)
-	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: []rec{{key: "a", modified: &first}, {key: "b", modified: &last}}}))
-	w, _, err := walk(t, inv, listing.WalkRequest{Workers: 1})
-	if err != nil || len(w.entries) != 2 || !w.entries[0].LastModified.Equal(first) || !w.entries[1].LastModified.Equal(last) {
-		t.Fatalf("walk of the first and last instants RFC 3339 carries: %+v, %v", w.entries, err)
-	}
-
 	for name, f := range map[string]fixture{
-		"year 10000": {id: reader.S3ObjectsV1, rows: []rec{{key: "a", modified: ptr(last.Add(time.Microsecond))}}},
-		"year 0":     {id: reader.LocalV1, rows: []rec{{key: "a", kind: "file", modified: ptr(first.Add(-time.Microsecond))}}},
+		"year 10000": {id: reader.S3ObjectsV1, rows: []rec{{key: "a", modified: ptr(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC))}}},
+		"year 0":     {id: reader.LocalV1, rows: []rec{{key: "a", kind: "file", modified: ptr(time.Date(0, 12, 31, 23, 59, 59, 999999000, time.UTC))}}},
 	} {
+		want := *f.rows[0].modified
 		inv := open(t, write(t, f))
-		_, walkErr := inv.Walk(ctx, listing.WalkRequest{Workers: 1}, func(listing.WalkBatch) error { return nil })
-		_, pageErr := inv.Page(ctx, listing.PageRequest{Limit: 5})
-		lookup, err := inv.Lookup(ctx, []byte("a"))
-		if err != nil {
-			t.Fatal(err)
+		w, _, err := walk(t, inv, listing.WalkRequest{Workers: 1})
+		if err != nil || len(w.entries) != 1 || !w.entries[0].LastModified.Equal(want) {
+			t.Errorf("%s: walk %+v, %v", name, w.entries, err)
 		}
-		_, _, summaryErr := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{})
-		for op, err := range map[string]error{"Walk": walkErr, "Page": pageErr, "Lookup": lookup.Reason, "Summarize": summaryErr} {
-			if !errors.Is(err, listing.ErrInvalidPage) || !errors.Is(err, reader.ErrRow) {
-				t.Errorf("%s: %s = %v, want %v and %v", name, op, err, listing.ErrInvalidPage, reader.ErrRow)
-			}
+		page, err := inv.Page(ctx, listing.PageRequest{Limit: 5})
+		if err != nil || len(page.Entries) != 1 || !page.Entries[0].LastModified.Equal(want) {
+			t.Errorf("%s: page %+v, %v", name, page.Entries, err)
+		}
+		lookup, err := inv.Lookup(ctx, []byte("a"))
+		if err != nil || lookup.State != listing.LookupPresent || !lookup.Entry.LastModified.Equal(want) {
+			t.Errorf("%s: lookup %+v, %v", name, lookup, err)
+		}
+		sums, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{})
+		if err != nil || len(sums) != 1 || sums[0].Totals.Newest == nil || !sums[0].Totals.Newest.Equal(want) {
+			t.Errorf("%s: summary %+v, %v", name, sums, err)
 		}
 	}
 }

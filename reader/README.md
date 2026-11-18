@@ -172,9 +172,8 @@ and when `Unlocated` is 0, never at or under a local entry of unknown kind (`lis
 directory the listing did not read), and never below a symbolic link, which no listing follows (unknown, with
 `ErrNotDirectory`); a question outside the scope is unknown (`ErrOutOfScope`). The listing's own gaps stay
 unlocated: a walk hands on no `Unread`, and a summary target is `Complete` only when `Unlocated` is 0 and its
-key's state is known. The view checks every value it reads (a missing column, a negative size, a time outside the
-years 1 to 9999, a local kind swath does not write), not every part's schema: an application admitting an inventory
-runs `Dataset.CheckSchema` first.
+key's state is known. The view checks every value it reads (a missing column, a negative size, a local kind swath
+does not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
 A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
 is `ErrInvalidPage`, a missing object `ErrNotFound`, a refused access `ErrAuth`, and any other failure to read the
 dataset `ErrUnavailable`, which `listing.Retryable` reports.

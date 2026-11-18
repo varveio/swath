@@ -46,10 +46,9 @@
 // It does not check every part's columns: an application that admits an
 // inventory runs reader.Dataset.CheckSchema first. Every value the view
 // reads is checked as it is read: a column a part lacks or holds with
-// another physical type, a negative size, a time outside the years 1 to
-// 9999 (what RFC 3339 carries), a local kind swath does not write, or a
-// directory whose key does not end in "/" (and the reverse) is a
-// *reader.SemanticError, and it, a key holding a NUL byte, which no
+// another physical type, a negative size, a local kind swath does not
+// write, or a directory whose key does not end in "/" (and the reverse)
+// is a *reader.SemanticError, and it, a key holding a NUL byte, which no
 // listing key may hold, and any data SeekParquet refuses are
 // listing.ErrInvalidPage. Summarize checks the values it sums, and the
 // order of the keys it counts but not their form.
