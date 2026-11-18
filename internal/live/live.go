@@ -36,17 +36,16 @@ type Store interface {
 	// the class of the failure that prevented an answer as its Reason. It
 	// returns an error only once ctx has ended. The caller sets Evidence.
 	Lookup(ctx context.Context, key []byte) (listing.LookupResult, error)
+	// Walk lists every entry under w.Prefix into sink, flat, in parallel
+	// and in no order, each once: a provider of its own for this call,
+	// over the store's client, credentials and limiter, on its range
+	// engine, bound to its row schema and counted (Count). It returns when
+	// every worker has, with an error that matches a class of package
+	// listing, or with ctx's own once ctx has ended. Each place the walk
+	// could not read and went on past reaches sink.Unread.
+	Walk(ctx context.Context, w Walk, sink Sink) error
 	// Close releases what the store holds open.
 	Close() error
-}
-
-// ByteKeys is a Store whose keys are any bytes but NUL, as a local
-// directory's names are. A Store without it has UTF-8 keys, as every
-// object store's are: the Source refuses a key or prefix that is not
-// UTF-8 before any request, and a listed key that is not as
-// listing.ErrInvalidPage.
-type ByteKeys interface {
-	ByteKeys()
 }
 
 // Level is one answer of a delimiter listing, as the store gave it.

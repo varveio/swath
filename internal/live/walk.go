@@ -25,16 +25,12 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
 	}
-	walker, ok := s.store.(Walker)
-	if !ok {
-		return listing.WalkSummary{}, fmt.Errorf("%w: this source does not walk", listing.ErrUnsupported)
-	}
 
 	op, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
 	w := &walk{op: op, stop: stop, prefix: req.Prefix, emit: emit, queue: make(chan handoff)}
 	started := time.Now()
-	err := w.run(walker, Walk{Prefix: req.Prefix, Workers: req.Workers})
+	err := w.run(s.store, Walk{Prefix: req.Prefix, Workers: req.Workers})
 	finished := time.Now()
 
 	res := listing.WalkSummary{Entries: w.entries, Unread: w.unread, Evidence: evidence(started, finished, "")}
@@ -99,7 +95,7 @@ type handoff struct {
 // batches its workers hand over from this one, until walker returns: its
 // error. A panic of emit's ends the walk, waits for its workers, and goes
 // on.
-func (w *walk) run(walker Walker, lw Walk) error {
+func (w *walk) run(store Store, lw Walk) error {
 	listed := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -107,7 +103,7 @@ func (w *walk) run(walker Walker, lw Walk) error {
 				listed <- fmt.Errorf("swath: the walk panicked: %v\n%s", v, debug.Stack())
 			}
 		}()
-		listed <- walker.Walk(w.op, lw, w)
+		listed <- store.Walk(w.op, lw, w)
 	}()
 
 	ended := false

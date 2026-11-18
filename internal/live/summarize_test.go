@@ -14,7 +14,7 @@ import (
 // unknown counts nothing and is not complete, and the call is still
 // completed.
 func TestSummarizeUnknownTargetIncomplete(t *testing.T) {
-	sums, ev, err := NewSource(answering{}).Summarize(context.Background(), []listing.Target{{Key: []byte("a")}}, listing.SummaryOptions{})
+	sums, ev, err := NewSource(answering{}, false).Summarize(context.Background(), []listing.Target{{Key: []byte("a")}}, listing.SummaryOptions{})
 	if err != nil || ev.Stop != listing.StopCompleted {
 		t.Fatalf("%+v, %v", ev, err)
 	}

@@ -25,17 +25,14 @@ const maxListKeys = 1000
 // Live is a bucket opened for one-level listings, lookups and walks
 // (OpenLive): the built client, with its credentials and admission, and
 // no range engine, which each walk builds for itself (Walk). It is a
-// live.Store and a live.Walker, safe for concurrent use.
+// live.Store, safe for concurrent use.
 type Live struct {
 	bucket   string
 	client   *client.Client
 	location string
 }
 
-var (
-	_ live.Store  = (*Live)(nil)
-	_ live.Walker = (*Live)(nil)
-)
+var _ live.Store = (*Live)(nil)
 
 // OpenLive builds opt.Bucket's client as New does, which may load
 // credentials, and lists nothing. It does not use opt.Prefix, the range

@@ -18,15 +18,18 @@ import (
 // swath.Source on it and documents the methods there.
 type Source struct {
 	store Store
-	// utf8Keys: the store's keys are UTF-8, unless it is a ByteKeys.
+	// utf8Keys: the store's keys are UTF-8 (NewSource).
 	utf8Keys bool
 }
 
 // NewSource is the Source over an opened store, which it owns from then
-// on: Close closes it.
-func NewSource(s Store) *Source {
-	_, raw := s.(ByteKeys)
-	return &Source{store: s, utf8Keys: !raw}
+// on: Close closes it. byteKeys says the store's keys are any bytes but
+// NUL, as a local directory's names are; otherwise they are UTF-8, as
+// every object store's are, and the Source refuses a key or prefix that
+// is not UTF-8 before any request, and a listed key that is not as
+// listing.ErrInvalidPage.
+func NewSource(s Store, byteKeys bool) *Source {
+	return &Source{store: s, utf8Keys: !byteKeys}
 }
 
 // Lookup answers swath.Source.Lookup.

@@ -17,9 +17,7 @@ import (
 // command's default for an object store (--workers).
 const walkWorkers = 64
 
-var _ live.Walker = (*Live)(nil)
-
-// Walk lists w.Prefix for one walk (live.Walker): a provider of its own
+// Walk lists w.Prefix for one walk (live.Store): a provider of its own
 // over the source's client (New), admitted as the command's listing is,
 // so a hierarchical namespace, or one that cannot be read, is
 // listing.ErrUnsupported before any listing request. The provider's

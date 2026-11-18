@@ -18,7 +18,7 @@ import (
 // command's default for an object store (--workers).
 const walkWorkers = 64
 
-// Walk lists w.Prefix for one walk (live.Walker): a provider of its own
+// Walk lists w.Prefix for one walk (live.Store): a provider of its own
 // over the source's client, on the range engine with no seed and no
 // probes, so that a prefix that fits in one page is one request and only
 // a larger one spreads, as idle workers ask for splits; one worker lists

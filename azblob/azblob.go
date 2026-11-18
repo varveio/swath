@@ -104,5 +104,5 @@ func Open(ctx context.Context, account, container string, opts Options) (*swath.
 		}
 		return nil, objfile.RedactError(err)
 	}
-	return (*swath.Source)(live.NewSource(st)), nil
+	return (*swath.Source)(live.NewSource(st, false)), nil
 }

@@ -34,11 +34,7 @@ type Live struct {
 	location string
 }
 
-var (
-	_ live.Store    = (*Live)(nil)
-	_ live.ByteKeys = (*Live)(nil)
-	_ live.Walker   = (*Live)(nil)
-)
+var _ live.Store = (*Live)(nil)
 
 // OpenLive opens root, a directory the caller opened (O_DIRECTORY, not
 // following a symbolic link) and keeps open until the store is closed, as
@@ -67,10 +63,6 @@ func (l *Live) Location() string { return l.location }
 // Close releases nothing: the caller owns the held directory and closes
 // it (live.Store).
 func (l *Live) Close() error { return nil }
-
-// ByteKeys says the store's keys are a directory's names, any bytes but
-// NUL (live.ByteKeys).
-func (l *Live) ByteKeys() {}
 
 // List is one level of the directory at prefix, "" for the held one or a
 // directory key below it, in byte order of keys, continuing after the key
@@ -143,7 +135,7 @@ func failed(ctx context.Context, prefix string, err error) error {
 	return fmt.Errorf("%w (prefix %q)", err, prefix)
 }
 
-// Walk lists every entry at or under w.Prefix for one walk (live.Walker):
+// Walk lists every entry at or under w.Prefix for one walk (live.Store):
 // "" for the held directory, or a directory key below it, whose own entry
 // comes first, from the fstat of its descriptor. The prefix is opened
 // first as a level is (openLevel), so one that is not there, is no

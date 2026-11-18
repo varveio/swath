@@ -18,19 +18,6 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Walker is a Store that can also walk: list everything under a prefix,
-// flat and in parallel, through its provider's range engine.
-type Walker interface {
-	// Walk lists every entry under w.Prefix into sink, in no order, each
-	// once: a provider of its own for this call, over the store's
-	// client, credentials and limiter, bound to its row schema and counted
-	// (Count). It returns when every worker has, with an error that
-	// matches a class of package listing, or with ctx's own once ctx has
-	// ended. Each place the walk could not read and went on past reaches
-	// sink.Unread.
-	Walk(ctx context.Context, w Walk, sink Sink) error
-}
-
 // Walk is what one walk lists.
 type Walk struct {
 	// Prefix is the scope: the keys that begin with it.

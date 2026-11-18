@@ -91,7 +91,7 @@ at a time. `internal/live` joins the two: the `Store` a provider implements, and
 contract's classes through `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither
 package links the command, pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 
-`Source.Walk` lists a prefix flat. A store that walks (`live.Walker`) builds a provider of its own for each call,
+`Source.Walk` lists a prefix flat. A store (`live.Store`) builds a provider of its own for each call,
 over its shared client (S3's, GCS's and Azure's `Live.Walk`: the range engine with no seed and no probes, Azure's
 after the namespace admission of `New`), binds it to its schema
 and runs the order stage's unordered count into the walk's sink (`live.Count`: `bind`,
