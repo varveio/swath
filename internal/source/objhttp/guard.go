@@ -150,11 +150,14 @@ func (g *Guard) roundTrip(req *http.Request) (*http.Response, error) {
 	if ok {
 		limit = orDefault(g.MaxBody, defaultMaxBody)
 	}
+	// A HEAD answer has no body: its Content-Length is the object's size,
+	// which goes up unchanged.
+	head := req.Method == http.MethodHead
 	// A declared length within the limit is read into one allocation (the
 	// MinRead spare keeps ReadFrom from growing it for the final EOF read);
 	// otherwise the buffer grows as io.ReadAll's would.
 	size := int64(bytes.MinRead)
-	if n := resp.ContentLength; n >= 0 && n <= limit {
+	if n := resp.ContentLength; !head && n >= 0 && n <= limit {
 		size += n
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, size))
@@ -192,17 +195,27 @@ func (g *Guard) roundTrip(req *http.Request) (*http.Response, error) {
 
 	out := *resp
 	out.Body = io.NopCloser(bytes.NewReader(body))
-	out.ContentLength = int64(len(body))
 	out.Header = resp.Header.Clone()
 	if out.Header == nil {
 		out.Header = http.Header{}
 	}
-	out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	if !head {
+		out.ContentLength = int64(len(body))
+		out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	}
 	out.TransferEncoding = nil
 	if c != nil {
 		c.Status, c.Header = out.StatusCode, out.Header
 	}
 	return &out, nil
+}
+
+// CloseIdleConnections closes Next's idle connections, when Next can
+// (http.Client.CloseIdleConnections reaches a transport only through it).
+func (g *Guard) CloseIdleConnections() {
+	if c, ok := g.Next.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 func orDefault(v, def int64) int64 {
