@@ -362,7 +362,9 @@ library guarantees:
   on the directory's own entry (below the root) and lists what is under it with the parallel walker the command
   lists a tree with, by descriptor and following no symbolic link. Each directory's entries come unsorted and the batches in no
   key order. A directory it cannot open or read, an entry it cannot stat and a directory on another device (listed,
-  not entered) reach your function as an `Unread` as the walk meets them. A walk changes no process-wide setting.
+  not entered) reach your function as an `Unread` as the walk meets them. It has no depth limit, but no key longer
+  than 32 KiB: such an entry, a directory with its subtree, is an `Unread` of class `listing.ErrUnsupported`. A walk
+  changes no process-wide setting.
 - **A summary's state is a lookup.** A subtree target's state is a lookup of its directory, so an empty directory
   is present, with the directory as its `Self`, and the directory's own entry counts when `Kinds` names `dir`.
 

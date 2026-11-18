@@ -62,6 +62,15 @@ Notable changes per release. The human summary of the current release is in the
   objects, bytes and newest time, whether it is complete, and how many places under it were not read
   ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
+- `WalkSummary.Complete` says a walk read everything under its prefix: it finished, handed on no `Unread` and,
+  over an inventory, the inventory's coverage is complete.
+- `Entry.LinkTarget` is a symbolic link's target as an inventory recorded it, in its pages, lookups and walks; a
+  live source leaves it nil.
+- A live `Summarize` subtree target whose walk finds no directory to enter, because its key is, or lies behind, a
+  symbolic link or names another kind (`ErrNotDirectory`), is unknown with that reason and incomplete; the other
+  targets are answered.
+- An inventory page counts each child's totals on its own: when its `MaxDuration` ends, the totals counted stand
+  and only those not yet counted are nil.
 - `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
   of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
   ([library guide](docs/library.md#google-cloud-storage)).
