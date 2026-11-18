@@ -17,7 +17,6 @@ import (
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
-	"github.com/varveio/swath/reader/listing"
 )
 
 // Parallel core: Swath's range tiling, seed, demand-driven owner split
@@ -564,16 +563,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	wait, _ := e.(source.Awaiter) // the account's only: whether the output waits for r
 	llo := max(r.lo, r.after)
 	k := p.resumeKey()
-	// An Expand that returns early reports the rest of r it did not emit,
-	// (through, hi] (source.Unreader), unless r ended or handed that rest to
-	// its children.
-	unread, _ := e.(source.Unreader)
-	through, rest := llo, true
-	defer func() {
-		if err != nil && rest && unread != nil {
-			unread.Unread(unreadInterval(through, r.hi, r.open))
-		}
-	}()
 	fenceAt := func(x string, top bool) {
 		if fence != nil && (top || (x >= llo && x >= k && (p.safe(x) || x == k))) {
 			fence.Fence(x, top)
@@ -702,7 +691,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		switch {
 		case done:
 			fenceAt(r.hi, r.open)
-			rest = false
 		case p.d.Groups && grp.open:
 			// A hot key's group is still open: rows of key c may follow on
 			// the next page, so c is not yet a fence (every row up to it
@@ -711,7 +699,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.c.Inc(cGroupsFenceDeferred)
 		default:
 			fenceAt(c, false)
-			through = c
 		}
 		p.lock()
 		p.c.Add(cOverfetchKeys, int64(overfetch))
@@ -816,12 +803,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			}
 			p.covered(r.lo, c, false)
 			fenceAt(c, false)
-			rest = false // (c, hi] is the children's
 			if err := e.Child(lower); err != nil {
-				if unread != nil {
-					u, _ := p.Dropped(upper) // never handed on
-					unread.Unread(u)
-				}
 				return err
 			}
 			return e.Child(upper)
@@ -829,27 +811,6 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		in.Token = out.Token
 		p.maybeProbe(pctx, st, r, c)
 	}
-}
-
-// Dropped is the extent of r, which a stopped count drops unexpanded
-// (source.Dropper): its key interval, or, for a root (the sequential
-// chain, the seed, a prior's tiling, a resume), the scope after the resume
-// key.
-func (p *Engine[P]) Dropped(r Range) (listing.Unread, bool) {
-	if r.kind == interval || r.kind == reused {
-		return unreadInterval(max(r.lo, r.after), r.hi, r.open), true
-	}
-	return unreadInterval(p.resumeKey(), "", true), true
-}
-
-// unreadInterval is the key interval (lo, hi], or (lo, ⊤] when open, that
-// a stop kept the listing from reading.
-func unreadInterval(lo, hi string, open bool) listing.Unread {
-	u := listing.Unread{Key: []byte(lo), Scope: listing.UnreadInterval, Class: listing.UnreadBudget}
-	if !open {
-		u.Hi = []byte(hi)
-	}
-	return u
 }
 
 func (p *Engine[P]) covered(lo, hi string, open bool) {

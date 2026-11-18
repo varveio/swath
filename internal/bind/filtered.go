@@ -62,15 +62,6 @@ func (f filtered[P]) Planner() source.Planner[any] {
 	return nil
 }
 
-// Dropped forwards the provider's (source.Dropper): the filters drop
-// rows, not ranges.
-func (f filtered[P]) Dropped(r any) (listing.Unread, bool) {
-	if d, ok := f.p.(source.Dropper[any]); ok {
-		return d.Dropped(r)
-	}
-	return listing.Unread{}, false
-}
-
 type filteredDisposer[P any] struct {
 	filtered[P]
 	d source.Disposer[any]

@@ -114,7 +114,7 @@ func (o *Opened) Lookup(ctx context.Context, key string) (LookupResult, error) {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) {
 			return LookupResult{State: listing.LookupAbsent}, nil
 		}
-		return lookupUnknown(unreadClass(err), err), nil
+		return lookupUnknown(err), nil
 	}
 	if strings.HasSuffix(key, "/") && row.Data.Kind != KindDir {
 		return LookupResult{State: listing.LookupAbsent}, nil
@@ -159,9 +159,9 @@ func (p *Provider) resolve(ctx context.Context, names []string) (int, *LookupRes
 		var r LookupResult
 		switch err := lookupFstat(fd, &s); {
 		case err != nil:
-			r = lookupUnknown(unreadClass(err), err)
+			r = lookupUnknown(err)
 		case int64(s.Dev) != p.dev: //nolint:unconvert // Dev's type differs by platform
-			r = lookupUnknown(listing.UnreadOtherDevice, fmt.Errorf("level %d below the root: %w", i+1, errOtherDevice))
+			r = lookupUnknown(fmt.Errorf("level %d below the root: %w", i+1, errOtherDevice))
 		default:
 			continue
 		}
@@ -188,7 +188,7 @@ func lookupAncestor(dir int, name string, level int, err error) LookupResult {
 	case errors.Is(err, unix.ENOENT):
 		return LookupResult{State: listing.LookupAbsent}
 	case !errors.Is(err, unix.ENOTDIR) && !errors.Is(err, unix.ELOOP):
-		return lookupUnknown(unreadClass(err), at(err))
+		return lookupUnknown(at(err))
 	}
 
 	// A no-follow directory open refuses a symbolic link and any other
@@ -199,16 +199,16 @@ func lookupAncestor(dir int, name string, level int, err error) LookupResult {
 	case errors.Is(serr, unix.ENOENT):
 		return LookupResult{State: listing.LookupAbsent}
 	case serr != nil:
-		return lookupUnknown(unreadClass(serr), at(serr))
+		return lookupUnknown(at(serr))
 	case s.Mode&unix.S_IFMT == unix.S_IFLNK:
-		return lookupUnknown(listing.UnreadSymlinkAncestor, at(errSymlink))
+		return lookupUnknown(at(errSymlink))
 	case s.Mode&unix.S_IFMT == unix.S_IFDIR: // a directory again since the open
-		return lookupUnknown(listing.UnreadUnstable, at(err))
+		return lookupUnknown(at(err))
 	}
 	return LookupResult{State: listing.LookupAbsent}
 }
 
-// lookupUnknown is a lookup that did not reach its key.
-func lookupUnknown(class listing.UnreadClass, err error) LookupResult {
-	return LookupResult{State: listing.LookupUnknown, Class: class, Err: err}
+// lookupUnknown is a lookup that did not reach its key because of err.
+func lookupUnknown(err error) LookupResult {
+	return LookupResult{State: listing.LookupUnknown, Err: unreadReason(err)}
 }

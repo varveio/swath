@@ -29,17 +29,19 @@
 // only when it gives no answer: a request it refuses, or ctx ending.
 //
 // Walk hands every entry at or under a prefix to emit, exactly once, in no
-// order; a live walk adds every extent it did not read as an Unread, and an
-// inventory's walk the key interval a budget kept it from. It lists its
-// scope flat, in parallel only when the scope is larger than a page; a
-// page is not a walk with parallelism off. A live walk spills nothing to disk
-// and retains no key after it returns. When ctx ends, Walk returns the
-// context's error.
+// order, and with them, as it meets each one, every place a live walk could
+// not read and went on past (an Unread). It lists its scope flat, in
+// parallel only when the scope is larger than a page; a page is not a walk
+// with parallelism off. It sets no limit: a caller stops a walk by
+// cancelling ctx, and Walk then returns the context's error with a
+// WalkSummary of what it handed on. A live walk spills nothing to disk and
+// retains no key, nor any Unread, after it hands it on.
 //
 // Summarize counts the entries at or under each of several targets and sums
 // their sizes, space on disk and newest change, one TargetSummary per target,
-// in the order of targets. A live source looks up or walks each target on
-// its own; an inventory aggregates key ranges.
+// in the order of targets, each saying whether it is complete and how many
+// places under it were not read. A live source looks up each target and
+// walks each subtree on its own; an inventory aggregates key ranges.
 //
 // # Keys
 //
@@ -65,17 +67,17 @@
 //
 // Every answer carries an Evidence: which backend answered, over what
 // interval its entries were acquired, the scope it covers, the entries its
-// source did not read, and whether the call itself completed. Source coverage
-// (Unread, Evidence.Unlocated) and the call's completeness (Evidence.Stop)
-// are separate: an exact sum over an inventory's rows says nothing about what
-// its listing missed. Nothing is proven absent from a source with unlocated
-// gaps, and nothing outside an answer's scope is absent: it is unknown.
+// source may lack without recording their keys, and whether the call itself
+// completed. Source coverage (Unread, Evidence.Unlocated) and the call's
+// completeness (Evidence.Stop) are separate: an exact sum over an
+// inventory's rows says nothing about what its listing missed. Nothing is
+// proven absent from a source with unlocated gaps, and nothing outside an
+// answer's scope is absent: it is unknown.
 //
-// # Budgets and errors
+// # Errors
 //
-// A call that reaches a bound of its request stops without an error and says
-// which in Evidence.Stop; a Summarize target whose own entry the bound kept
-// it from reading is unknown with ErrBudgetExceeded as its Reason. A call
+// A page that reaches its MaxDuration stops without an error and says so in
+// Evidence.Stop; Walk and Summarize have no bound but ctx. A call
 // that fails returns an error matching one of the classes ErrInvalidRequest
 // to ErrUnavailable with errors.Is, and Retryable says whether trying it
 // again later can succeed. Error messages carry no credential. Every storage

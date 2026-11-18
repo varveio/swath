@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/reader"
 	"github.com/varveio/swath/reader/listing"
@@ -109,70 +108,12 @@ func TestWalkEveryEntryOnce(t *testing.T) {
 	}
 }
 
-// TestWalkEntryBudget: a walk stops exactly at MaxEntries and hands on
-// the interval after the last key it handed as unread; a walk resumed
-// after it reads the rest.
-func TestWalkEntryBudget(t *testing.T) {
-	rs := objects()
-	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: rs}))
-	for _, max := range []int64{1, 7, 40, int64(len(rs)) - 1} {
-		w, s, err := walk(t, inv, listing.WalkRequest{Budget: listing.Budget{MaxEntries: max}})
-		if err != nil || s.Evidence.Stop != listing.StopEntryBudget || s.Entries != max || int64(len(w.entries)) != max {
-			t.Fatalf("max %d: %+v, %d entries, %v", max, s, len(w.entries), err)
-		}
-		last := w.entries[max-1].Key
-		if len(w.unread) != 1 || string(w.unread[0].Key) != string(last) || w.unread[0].Hi != nil ||
-			w.unread[0].Scope != listing.UnreadInterval || w.unread[0].Class != listing.UnreadBudget {
-			t.Fatalf("max %d: unread %+v after %q", max, w.unread, last)
-		}
-		var rest []string
-		for _, r := range rs {
-			if r.key > string(last) {
-				rest = append(rest, r.key)
-			}
-		}
-		if len(rest) != len(rs)-int(max) {
-			t.Fatalf("max %d: %d keys after %q, want %d", max, len(rest), last, len(rs)-int(max))
-		}
-	}
-
-	// A budget the walk does not exceed completes it.
-	if _, s, err := walk(t, inv, listing.WalkRequest{Budget: listing.Budget{MaxEntries: int64(len(rs))}}); err != nil || s.Evidence.Stop != listing.StopCompleted {
-		t.Fatalf("whole budget: %+v, %v", s, err)
-	}
-}
-
-// TestWalkTimeBudget: a walk its MaxDuration ends hands on the interval
-// after the last key it handed as unread.
-func TestWalkTimeBudget(t *testing.T) {
-	rs := objects()
-	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: rs}))
-	var entries []string
-	var unread []listing.Unread
-	s, err := inv.Walk(context.Background(), listing.WalkRequest{Budget: listing.Budget{MaxDuration: 5 * time.Millisecond}}, func(b listing.WalkBatch) error {
-		for _, e := range b.Entries {
-			entries = append(entries, string(e.Key))
-		}
-		unread = append(unread, b.Unread...)
-		if len(b.Entries) > 0 {
-			time.Sleep(20 * time.Millisecond)
-		}
-		return nil
-	})
-	if err != nil || s.Evidence.Stop != listing.StopTimeBudget || len(entries) == 0 || len(entries) >= len(rs) {
-		t.Fatalf("%+v, %d entries, %v", s, len(entries), err)
-	}
-	if len(unread) != 1 || string(unread[0].Key) != entries[len(entries)-1] || unread[0].Class != listing.UnreadBudget {
-		t.Fatalf("unread %+v after %q", unread, entries[len(entries)-1])
-	}
-}
-
 // TestWalkEmitError: an error from emit stops the walk and comes back
 // unchanged, whichever way it walks.
 func TestWalkEmitError(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
 	stop := errors.New("stop here")
-	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}, {Budget: listing.Budget{MaxEntries: 5}}} {
+	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}} {
 		calls := 0
 		_, err := inv.Walk(context.Background(), req, func(listing.WalkBatch) error {
 			calls++
@@ -219,17 +160,20 @@ func TestWalkScopeAndDirectories(t *testing.T) {
 	}
 }
 
-// TestWalkCancelled: a cancelled ctx ends the walk with its error.
+// TestWalkCancelled: a cancelled ctx ends the walk with its error, and
+// the summary counts what it handed on and says it did not finish.
 func TestWalkCancelled(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
 	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}} {
 		ctx, cancel := context.WithCancel(context.Background())
-		_, err := inv.Walk(ctx, req, func(listing.WalkBatch) error {
+		handed := int64(0)
+		s, err := inv.Walk(ctx, req, func(b listing.WalkBatch) error {
+			handed += int64(len(b.Entries))
 			cancel()
 			return nil
 		})
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("%+v: %v, want the context's error", req, err)
+		if !errors.Is(err, context.Canceled) || s.Evidence.Stop == listing.StopCompleted || s.Entries != handed || handed == 0 {
+			t.Errorf("%+v: %+v, %v; want the context's error, unfinished, %d entries", req, s, err, handed)
 		}
 		cancel()
 	}

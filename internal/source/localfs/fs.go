@@ -304,9 +304,9 @@ type Provider struct {
 	// opened (Opened.Begin's unreadable; nil: nobody asks), set before
 	// workers start.
 	unreadable func(string)
-	// unreadTo is told each place the listing did not read (unread),
-	// concurrently; set before workers start.
-	unreadTo func(key string, scope listing.UnreadScope, class listing.UnreadClass)
+	// unreadTo is told each place the listing could not read (unread),
+	// concurrently; set before workers start, by tests only.
+	unreadTo func(key string, reason error)
 	// unsorted: a count, whose rows nothing orders; a directory's entries
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
@@ -337,10 +337,7 @@ func (p *Provider) warnf(code, format string, a ...any) {
 	p.warn(code, fmt.Sprintf(format, a...))
 }
 
-var (
-	_ source.Provider[Range, Entry] = (*Provider)(nil)
-	_ source.Dropper[Range]         = (*Provider)(nil)
-)
+var _ source.Provider[Range, Entry] = (*Provider)(nil)
 
 // New validates root and returns a provider for it. A root that is not a
 // directory (a file, as du and ls take one) lists as its one entry, keyed
@@ -405,18 +402,9 @@ func (p *Provider) Stats() Stats {
 }
 
 // Dispose releases what a range that will never be expanded holds (a
-// stopped listing's) and reports it not read (unread). It implements
-// source.Disposer.
+// stopped listing's). It implements source.Disposer.
 func (p *Provider) Dispose(r Range) {
-	p.unreadStopped(nil, r, false)
 	p.release(r)
-}
-
-// Dropped is what a stopped listing did not read of r, which it drops
-// unexpanded (source.Dropper): as Dispose reports it.
-func (p *Provider) Dropped(r Range) (listing.Unread, bool) {
-	key, scope, ok := p.stopped(r, false)
-	return listing.Unread{Key: []byte(key), Scope: scope, Class: listing.UnreadBudget}, ok
 }
 
 // release releases what a range holds once expanded or disposed: a chunk's
@@ -436,7 +424,6 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	var st Stats
 	st.unreadTo, _ = e.(source.Unreader)
 	if ctx.Err() != nil { // as if disposed
-		p.unreadStopped(&st, r, false)
 		return ctx.Err()
 	}
 	if t, ok := e.(source.Subtreer); ok && r.chunk == nil && !p.file {
@@ -450,72 +437,47 @@ func (p *Provider) Expand(ctx context.Context, r Range, e source.Emitter[Range, 
 	} else {
 		err = p.expandPortable(ctx, r, e, &st)
 	}
-	if err != nil {
-		p.unreadStopped(&st, r, st.DirsRead > 0)
-	}
 	p.mu.Lock()
 	p.stats.add(&st)
 	p.mu.Unlock()
 	return err
 }
 
-// unread reports a place the listing did not read, as a worker meets it:
-// the key of a directory or entry, how much at it was not read and why,
-// in the contract's terms (reader/listing). Every such place is reported
-// here, before the Expand that met it returns, to that Expand's emitter
-// (st.unreadTo: an order.UnreadSink's count passes it on), or from
-// Dispose (st nil) for a range a stopped listing never expanded, which
-// the count reports itself (Dropped). p.unreadTo, nil outside tests, is
-// told them all.
-func (p *Provider) unread(st *Stats, key string, scope listing.UnreadScope, class listing.UnreadClass) {
-	if st != nil && st.unreadTo != nil {
-		st.unreadTo.Unread(listing.Unread{Key: []byte(key), Scope: scope, Class: class})
+// unread reports a place the listing could not read and went on past, as
+// a worker meets it: the key of a directory or entry, and why, in the
+// listing contract's class (unreadReason). It reaches the Expand's
+// emitter (st.unreadTo: an order.UnreadSink's count passes it on), and
+// p.unreadTo, nil outside tests.
+func (p *Provider) unread(st *Stats, key string, reason error) {
+	if st.unreadTo != nil {
+		st.unreadTo.Unread(listing.Unread{Key: []byte(key), Reason: reason})
 	}
 	if p.unreadTo != nil {
-		p.unreadTo(key, scope, class)
+		p.unreadTo(key, reason)
 	}
 }
 
-// unreadStopped reports a range a stopped listing did not finish
-// (stopped).
-func (p *Provider) unreadStopped(st *Stats, r Range, opened bool) {
-	if key, scope, ok := p.stopped(r, opened); ok {
-		p.unread(st, key, scope, listing.UnreadBudget)
-	}
-}
-
-// stopped is what a stopped listing (UnreadBudget: the caller's stop) did
-// not read of r: a chunk, a continuation or a directory it opened did not
-// end its enumeration; nothing at or under a directory it never opened
-// was read. A single-file root has nothing more to read.
-func (p *Provider) stopped(r Range, opened bool) (key string, scope listing.UnreadScope, ok bool) {
-	switch {
-	case p.file:
-		return "", "", false
-	case r.chunk != nil || opened:
-		return r.prefix, listing.UnreadListing, true
-	}
-	return r.prefix, listing.UnreadSubtree, true
-}
-
-// unreadClass says why an open, read or stat that failed with err left a
-// place unread: a symbolic link where a directory was, another device,
-// permission, a name too long, the tree changing under the listing (the
-// entry gone, or no longer a directory), else an I/O error.
-func unreadClass(err error) listing.UnreadClass {
+// unreadReason is err, why an open, read or stat failed, beside its class
+// in the listing contract: a refusal (EACCES, EPERM) listing.ErrAuth;
+// another device than the root's listing.ErrOtherDevice; a symbolic link
+// where a directory was, which is never followed, listing.ErrNotDirectory:
+// what lies past it is not reached, never absent; a name the system
+// refuses as too long listing.ErrUnsupported, which asking again does not
+// change; an I/O error, and the tree changing under the listing (the entry
+// gone, or no longer a directory), listing.ErrUnavailable.
+func unreadReason(err error) error {
+	class := listing.ErrUnavailable
 	switch {
 	case errors.Is(err, errSymlink):
-		return listing.UnreadSymlinkAncestor
+		class = listing.ErrNotDirectory
 	case errors.Is(err, errOtherDevice):
-		return listing.UnreadOtherDevice
+		class = listing.ErrOtherDevice
 	case errors.Is(err, fs.ErrPermission):
-		return listing.UnreadPermission
+		class = listing.ErrAuth
 	case errors.Is(err, syscall.ENAMETOOLONG):
-		return listing.UnreadNameTooLong
-	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
-		return listing.UnreadUnstable
+		class = listing.ErrUnsupported
 	}
-	return listing.UnreadIO
+	return fmt.Errorf("%w: %w", class, err)
 }
 
 // errOtherDevice: a directory opened below the root is on another device
@@ -526,11 +488,15 @@ var errOtherDevice = errors.New("on another device than the root")
 // walk never follows.
 var errSymlink = errors.New("a symbolic link, not followed")
 
+// errKeyTooLong is the Reason of an entry left out because its key passes
+// maxKeyBytes, a directory with its subtree.
+var errKeyTooLong = fmt.Errorf("%w: its key passes the limit of %d bytes", listing.ErrUnsupported, maxKeyBytes)
+
 // readFailed counts a directory read that failed: its enumeration ended
 // there.
 func (p *Provider) readFailed(r Range, st *Stats, err error) {
 	st.note(&st.ReadErrors, r.path, err)
-	p.unread(st, r.prefix, listing.UnreadListing, unreadClass(err))
+	p.unread(st, r.prefix, unreadReason(err))
 }
 
 // statFailed counts an entry left out because its stat failed (path names
@@ -541,7 +507,7 @@ func (p *Provider) statFailed(key, path string, st *Stats, err error) {
 		return
 	}
 	st.note(&st.StatErrors, path, err)
-	p.unread(st, key, listing.UnreadSubtree, unreadClass(err))
+	p.unread(st, key, unreadReason(err))
 }
 
 // emit hands a directory's sorted rows to e, splicing each subdirectory in
@@ -559,7 +525,7 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 			if long {
 				name := strings.TrimSuffix(row.Key[len(r.prefix):], "/")
 				st.note(&st.KeyTooLong, r.path+string(os.PathSeparator)+name, fmt.Errorf("its key of %d bytes passes the limit of %d", len(row.Key), maxKeyBytes))
-				p.unread(st, row.Key, listing.UnreadSubtree, listing.UnreadNameTooLong)
+				p.unread(st, row.Key, errKeyTooLong)
 			} else {
 				st.Skipped++
 			}
@@ -579,7 +545,7 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 		switch {
 		case stop:
 			st.OtherDevice++
-			p.unread(st, row.Key, listing.UnreadSubtree, listing.UnreadOtherDevice)
+			p.unread(st, row.Key, unreadReason(errOtherDevice))
 		case p.prune != nil && p.prune(row.Key):
 			st.PrunedDirs++
 			stop = true

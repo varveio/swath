@@ -522,10 +522,7 @@ func SetRequeueBackoff(base, maxWait time.Duration) (restore func()) {
 }
 
 // expandSequential lists the whole scope with one continuation-token chain.
-// When it returns early it reports the rest of the scope after the last
-// row it emitted (source.Unreader); in group mode, whose groups a page may
-// cut, the scope after the resume key.
-func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range, P]) (err error) {
+func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range, P]) error {
 	in := p.query()
 	last := ""
 	skip := ""
@@ -534,12 +531,6 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 	if p.opt.Resume != nil {
 		in.After, skip = p.safeStart(p.opt.Resume.After), p.opt.Resume.After
 	}
-	through := skip // every row up to it emitted
-	defer func() {
-		if u, ok := e.(source.Unreader); ok && err != nil {
-			u.Unread(unreadInterval(through, "", true))
-		}
-	}()
 	for {
 		out, err := p.list(ctx, in)
 		if err != nil {
@@ -601,9 +592,6 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		}
 		if err := p.emit(rows, e); err != nil {
 			return err
-		}
-		if n > 0 && !p.d.Groups {
-			through = last
 		}
 		if stop && (n < len(out.Rows) || out.Truncated) {
 			// The cap left rows out, or may have: a page the store says

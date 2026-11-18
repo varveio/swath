@@ -27,9 +27,9 @@
 // read, never below a symbolic link, which no listing follows (unknown,
 // with listing.ErrNotDirectory as the Reason), and only as of the listing.
 //
-// An inventory's own gaps are never located. When a bound of the request
-// stops a Walk or a Summarize, the keys it did not reach come back as
-// listing.UnreadInterval extents of class listing.UnreadBudget.
+// An inventory's own gaps are never located: a Walk hands on no
+// listing.Unread, and a Summarize target is complete only when Unlocated
+// is 0.
 //
 // # Keys
 //

@@ -5,7 +5,6 @@ package view
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"sync"
 
@@ -16,14 +15,11 @@ import (
 
 // Walk hands emit every entry at or under req.Prefix, the prefix's own
 // included when the inventory has it, each once. A walk of every level is
-// a range scan; with req.Workers above 1 (zero selects GOMAXPROCS) and
-// neither MaxEntries nor MaxDuration, SeekParquet scans shards of it in
-// parallel and the
-// walk hands their batches to emit one at a time, from the goroutine that
-// called Walk, in no order. A budgeted walk scans in key order, so that
-// where it stops is one key: it hands emit a last batch holding the
-// interval after the last key it handed, of class UnreadBudget, and
-// Evidence.Stop names the bound. It stops exactly at MaxEntries.
+// a range scan; with req.Workers above 1 (zero selects GOMAXPROCS)
+// SeekParquet scans shards of it in parallel and the walk hands their
+// batches to emit one at a time, from the goroutine that called Walk, in
+// no order. A batch holds no Unread: an inventory's gaps are unlocated
+// (Evidence.Unlocated).
 //
 // A local prefix the inventory has as another kind, or below a symbolic
 // link, is ErrNotDirectory; one it lacks, ErrNotFound when it proves the
@@ -31,7 +27,9 @@ import (
 //
 // A batch, its entries and their values belong to the walk and are valid
 // until emit returns. An error from emit stops the walk and is returned
-// unchanged. When ctx ends, Walk returns its error.
+// unchanged. When ctx ends, Walk returns its error. A walk that returns an
+// error returns with it the count of entries it handed on, and an
+// Evidence.Stop that is not StopCompleted.
 func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := inv.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err
@@ -40,34 +38,23 @@ func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit fu
 		return listing.WalkSummary{}, errOutOfScope
 	}
 
-	op, cancel := withBudget(ctx, req.Budget.MaxDuration)
-	defer cancel()
-	w := walker{inv: inv, emit: emit, max: req.Budget.MaxEntries}
-	err := w.run(op, req)
+	w := walker{inv: inv, emit: emit}
+	err := w.run(ctx, req)
 	if err == nil && w.entries == 0 && inv.rows.local && len(req.Prefix) > 0 {
-		err = inv.missingDirectory(op, req.Prefix)
+		err = inv.missingDirectory(ctx, req.Prefix)
 	}
 
-	stop := listing.StopCompleted
+	res := listing.WalkSummary{Entries: w.entries, Evidence: inv.evidence("")}
 	switch {
 	case w.emitErr != nil:
-		return listing.WalkSummary{}, w.emitErr
+		return res, w.emitErr
 	case ctx.Err() != nil:
-		return listing.WalkSummary{}, ctx.Err()
-	case errors.Is(err, errEntryBudget):
-		stop = listing.StopEntryBudget
-	case err != nil && timeUp(ctx, op):
-		stop = listing.StopTimeBudget
+		return res, ctx.Err()
 	case err != nil:
-		return listing.WalkSummary{}, failed(ctx, err)
+		return res, failed(ctx, err)
 	}
-	if stop != listing.StopCompleted {
-		unread := listing.WalkBatch{Unread: []listing.Unread{{Key: w.last, Scope: listing.UnreadInterval, Class: listing.UnreadBudget}}}
-		if err := emit(unread); err != nil {
-			return listing.WalkSummary{}, err
-		}
-	}
-	return listing.WalkSummary{Entries: w.entries, Evidence: inv.evidence(stop)}, nil
+	res.Evidence.Stop = listing.StopCompleted
+	return res, nil
 }
 
 func (inv *Inventory) checkWalk(req listing.WalkRequest, emit func(listing.WalkBatch) error) error {
@@ -80,59 +67,42 @@ func (inv *Inventory) checkWalk(req listing.WalkRequest, emit func(listing.WalkB
 	case req.Workers < 0:
 		return invalid("a negative number of workers")
 	}
-	return checkBudget(req.Budget)
+	return nil
 }
 
-// errEntryBudget ends a walk that reached its MaxEntries with entries
-// left to hand.
-var errEntryBudget = errors.New("view: the walk's entry budget is reached")
-
-// walker is one Walk: what it handed emit, and its entry budget.
+// walker is one Walk: what it handed emit.
 type walker struct {
 	inv  *Inventory
 	emit func(listing.WalkBatch) error
-	// max is the budget's MaxEntries, zero for none.
-	max int64
-	// entries counts the entries handed to emit, and last is the key of
-	// the last one, in key order unless the walk is parallel.
+	// entries counts the entries handed to emit.
 	entries int64
-	last    []byte
 	// emitErr is the error emit returned.
 	emitErr error
 }
 
 // run walks req.Prefix as req asks: in parallel shards when it sets
-// workers and no bound, else in key order.
+// workers, else in key order.
 func (w *walker) run(ctx context.Context, req listing.WalkRequest) error {
 	workers := req.Workers
 	if workers == 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
-	if workers > 1 && req.Budget.MaxEntries == 0 && req.Budget.MaxDuration == 0 {
+	if workers > 1 {
 		return w.parallel(ctx, req.Prefix, workers)
 	}
 	return w.scan(ctx, req.Prefix)
 }
 
-// hand gives emit a batch of entries, cut where the entry budget ends:
-// errEntryBudget when it cut one.
+// hand gives emit a batch of entries.
 func (w *walker) hand(entries []listing.Entry) error {
-	n, over := len(entries), false
-	if w.max > 0 && w.entries+int64(n) > w.max {
-		n, over = int(w.max-w.entries), true
+	if len(entries) == 0 {
+		return nil
 	}
-
-	if n > 0 {
-		if err := w.emit(listing.WalkBatch{Entries: entries[:n]}); err != nil {
-			w.emitErr = err
-			return err
-		}
-		w.entries += int64(n)
-		w.last = append(w.last[:0], entries[n-1].Key...)
+	if err := w.emit(listing.WalkBatch{Entries: entries}); err != nil {
+		w.emitErr = err
+		return err
 	}
-	if over {
-		return errEntryBudget
-	}
+	w.entries += int64(len(entries))
 	return nil
 }
 

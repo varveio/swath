@@ -239,14 +239,6 @@ func (inv *Inventory) checkKey(key []byte) error {
 	return nil
 }
 
-// checkBudget refuses a negative bound.
-func checkBudget(b listing.Budget) error {
-	if b.MaxEntries < 0 || b.MaxDuration < 0 {
-		return invalid("a negative bound")
-	}
-	return nil
-}
-
 // errTimeBudget is the cause of a call's context ending at its
 // MaxDuration.
 var errTimeBudget = errors.New("view: the call's time budget ended")

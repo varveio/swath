@@ -4,7 +4,6 @@
 package s3_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -60,9 +59,10 @@ func Example() {
 	}
 }
 
-// Walk everything under a prefix, in parallel, within a minute: count the
-// objects and their bytes, and keep the key intervals the walk did not
-// read when the minute ran out.
+// Walk everything under a prefix, in parallel, for at most a minute:
+// count the objects and their bytes. A walk sets no limit of its own; the
+// caller stops it by cancelling its context, and the summary says whether
+// it finished.
 func Example_walk() {
 	ctx := context.Background()
 	src, err := s3.Open(ctx, "example-bucket", s3.Options{Region: "eu-west-1"})
@@ -71,25 +71,23 @@ func Example_walk() {
 	}
 	defer src.Close()
 
+	walkCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	var objects, size int64
-	var unread []listing.Unread
-	req := listing.WalkRequest{Prefix: []byte("logs/"), Budget: listing.Budget{MaxDuration: time.Minute}}
-	res, err := src.Walk(ctx, req, func(b listing.WalkBatch) error {
+	res, err := src.Walk(walkCtx, listing.WalkRequest{Prefix: []byte("logs/")}, func(b listing.WalkBatch) error {
 		for _, e := range b.Entries {
 			objects++
 			size += *e.Size
 		}
-		for _, u := range b.Unread {
-			unread = append(unread, listing.Unread{Key: bytes.Clone(u.Key), Hi: bytes.Clone(u.Hi), Scope: u.Scope, Class: u.Class})
-		}
 		return nil
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		fmt.Printf("not finished in a minute: at least %d objects, %d bytes\n", res.Entries, size)
+	case err != nil:
 		log.Fatal(err)
-	}
-	fmt.Printf("%d objects, %d bytes\n", objects, size)
-	if res.Evidence.Stop != listing.StopCompleted {
-		fmt.Printf("stopped at the %s: %d key intervals not read\n", res.Evidence.Stop, len(unread))
+	default:
+		fmt.Printf("%d objects, %d bytes\n", objects, size)
 	}
 }
 
@@ -108,7 +106,7 @@ func Example_summarize() {
 		{Key: []byte("logs/2026/"), Subtree: true}, // nested: counted in full, by a walk of its own
 		{Key: []byte("README")},                    // exact: a lookup
 	}
-	sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{Budget: listing.Budget{MaxDuration: time.Minute}})
+	sums, ev, err := src.Summarize(ctx, targets, listing.SummaryOptions{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -117,7 +115,7 @@ func Example_summarize() {
 		if s.Bytes != nil {
 			fmt.Printf(", %d bytes", *s.Bytes)
 		}
-		if len(s.Unread) > 0 {
+		if !s.Complete {
 			fmt.Print(", at least: not all of it was read")
 		}
 		fmt.Println()

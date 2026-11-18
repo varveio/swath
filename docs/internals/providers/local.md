@@ -107,22 +107,19 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   required). The prefix's own entry is not listed (`Lookup` answers it). The caller keeps the file open until
   every range is expanded or disposed. `Lookup` resolves one key the same way: `ENOENT` or `ENOTDIR` at the
   key, or at a directory on the way whose name is no symbolic link (`fstatat` tells), is absent; a symbolic link at the key is present as itself; a symbolic link or
-  another device on the way, `EACCES`, `EPERM`, `ENAMETOOLONG` and other errors are unknown, with the class
-  of the contract's `Unread`. The walk reports each place it did not read as a worker meets it
-  (`Provider.unread`), with the contract's scope and class (`reader/listing`), to the emitter of the range
-  that met it (`source.Unreader`), so a count whose sink is an `order.UnreadSink` is told them; no library
-  walk of a local source takes them yet, only tests do: a directory not opened or not entered (`subtree`:
-  permission, a symbolic link in its place, another device, a name too long, the tree changing under it,
-  I/O), a directory whose enumeration did not end (`listing`: a read error), an entry whose stat failed
-  (`subtree`), and, when
-  the walk stops, `budget` for each range it did not finish: `listing` for a directory it had opened, a
-  chunk or a continuation, `subtree` for one it never opened; for the ranges still queued, the count
-  reports what `Dropped` says of each before it disposes them (`TestStoppedWalkReportsUnread`,
-  `TestUnreadReachesTheSink`). The order stage's `order.SubtreeSink` tells when a directory's subtree
+  another device on the way, `EACCES`, `EPERM`, `ENAMETOOLONG` and other errors are unknown, with the
+  contract's class as the reason (`unreadReason`). The walk reports each place it could not read as a worker
+  meets it (`Provider.unread`), with its key and a reason of the contract's classes (`reader/listing`), to the
+  emitter of the range that met it (`source.Unreader`), so a count whose sink is an `order.UnreadSink`, a
+  library walk's, is told them: a directory not opened or not entered (`ErrAuth` for a refusal,
+  `ErrNotDirectory` for a symbolic link in its place, `ErrOtherDevice`, `ErrUnsupported` for a name or key too
+  long or a directory too large to sort, `ErrUnavailable` for the tree changing under it or I/O), a directory
+  whose enumeration did not end (a read error), an entry whose stat failed. A walk that stops reports nothing
+  more (`TestUnreadReachesTheSink`). The order stage's `order.SubtreeSink` tells when a directory's subtree
   ended; every report under it was made before.
 - **The library's live source** (`OpenLive`, `live_unix.go`; the public package `local`, Linux and macOS,
-  `listing.ErrUnsupported` elsewhere). A `live.Store` over a held root, for `swath.Source`'s `Page` and
-  `Lookup` ([library](../../library.md#a-local-directory)). Its location, which page tokens are bound to, is
+  `listing.ErrUnsupported` elsewhere). A `live.Store` over a held root, for `swath.Source`'s `Page`,
+  `Lookup` and `Walk` ([library](../../library.md#a-local-directory)). Its location, which page tokens are bound to, is
   the root's device and inode, never a path. A page of a prefix opens its directory as `Lookup` reaches a key's
   parent (`resolve`, shared: each ancestor with `longpath.Search` and `O_NOFOLLOW`, device-checked, at most two
   descriptors), then the directory itself `O_RDONLY|O_NOFOLLOW`, the root as `.` so that each page has its own
@@ -131,7 +128,10 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   reached, never absent), nothing there `ErrNotFound`; `EACCES`/`EPERM` are `ErrAuth`, `ENAMETOOLONG`
   `ErrUnsupported`, other errors `ErrUnavailable`, each message naming the level and the caller's prefix, never
   a name read. A lookup that does not reach its key answers unknown with the same class as its `Reason`
-  (`classed`). A page reads the directory whole (Linux: `getdents64`, an untyped entry typed by `fstatat` relative
+  (`unreadReason`). A walk opens its prefix as a page does, so it fails with the same classes, then lists it
+  through a held root of its own (`OpenDir`) with the parallel walker as a count does, its directories
+  unsorted and its batches in no key order (`live.Count`, unordered); it does not `Begin`, so it changes no
+  `GOMAXPROCS`. A page reads the directory whole (Linux: `getdents64`, an untyped entry typed by `fstatat` relative
   to it and, when that stat fails, no directory; macOS: `os.File.ReadDir`, whose own `fstatat` of an untyped entry
   fails the read when it fails, which APFS and HFS+, typing every entry, never ask), and keeps only the names,
   with `/` on directories, that may still be on the page: of those that sort after the token's key, at most twice

@@ -229,11 +229,9 @@ func TestRequestChecks(t *testing.T) {
 		"local walk no slash":     second(files.Walk(ctx, listing.WalkRequest{Prefix: []byte("d")}, emit)),
 		"negative workers":        second(objects.Walk(ctx, listing.WalkRequest{Workers: -1}, emit)),
 		"no emit":                 second(objects.Walk(ctx, listing.WalkRequest{}, nil)),
-		"negative budget":         second(objects.Walk(ctx, listing.WalkRequest{Budget: listing.Budget{MaxEntries: -1}}, emit)),
 		"no kind":                 third(objects.Summarize(ctx, nil, listing.SummaryOptions{Kinds: []listing.Kind{0}})),
 		"empty exact target":      third(objects.Summarize(ctx, []listing.Target{{}}, listing.SummaryOptions{})),
 		"local subtree no slash":  third(files.Summarize(ctx, []listing.Target{{Key: []byte("d"), Subtree: true}}, listing.SummaryOptions{})),
-		"negative child budget":   second(objects.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{Budget: listing.Budget{MaxEntries: -1}}})),
 		"negative page duration":  second(objects.Page(ctx, listing.PageRequest{Limit: 1, MaxDuration: -1})),
 		"NUL in a subtree target": third(objects.Summarize(ctx, []listing.Target{{Key: []byte{0}, Subtree: true}}, listing.SummaryOptions{})),
 	} {

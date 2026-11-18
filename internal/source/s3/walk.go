@@ -24,9 +24,8 @@ const walkWorkers = 64
 // a larger one spreads, as idle workers ask for splits; one worker lists
 // one continuation chain (Sequential). An object listed without a size is
 // listing.ErrInvalidPage, and each range's keys are checked strictly
-// ascending and apart from every other range's (live.Count). A range a stop cuts short is reported unread by its
-// key interval (keyrange). Its errors are classed as the source's other
-// calls' are.
+// ascending and apart from every other range's (live.Count). Its errors
+// are classed as the source's other calls' are.
 func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	workers := w.Workers
 	if workers == 0 {

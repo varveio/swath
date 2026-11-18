@@ -16,60 +16,46 @@ import (
 // entry: an inventory has no row for it.
 var errRoot = errors.New("view: the root has no entry")
 
-// errUnreached is the Reason of a target whose own entry a bound of the
-// request kept the call from reading.
-var errUnreached = wrap(listing.ErrBudgetExceeded, "a bound of the request kept the call from reading the target's entry")
-
 // Summarize counts the entries of opts.Kinds at or under each target and
 // sums their sizes, space on disk and newest change, one TargetSummary per
 // target, in order. An entry counts toward every target that holds it. A
 // target's State and Self are what Lookup answers for its key; the root's,
 // a subtree target with an empty key, is unknown. A target outside the
 // inventory's scope is unknown with ErrOutOfScope as its Reason, and
-// counts nothing. A target unknown for a reason other than a bound, the
-// root excepted, has an empty Stop: it is never complete.
+// counts nothing. A target is Complete when the inventory proves absence
+// (its Unlocated is 0) and its State is known, the root's excepted; its
+// Unread is always 0, since an inventory's gaps are unlocated.
 //
-// The call reads in two phases, both within opts.Budget. First the entries
-// at the targets' keys, in target order, with those on the way to a local
-// key when the inventory proves absence: an exact target's totals are those
-// of its own entry. Then the subtrees' rows, in one aggregation through
-// SeekParquet, every counted key's order checked. MaxEntries bounds the rows
-// of both phases together, each counted once however many targets hold it;
-// MaxDuration the whole call. A target whose own entry the budget does not
-// reach is unknown, with listing.ErrBudgetExceeded as its Reason, and
-// counts nothing; a subtree whose rows it does not reach counts nothing.
-// Either has one Unread, the whole target's key interval, of class
-// UnreadBudget, and its Stop and Evidence.Stop name the bound. A counted
-// entry without a size or a time, and a sum that overflows, make that
-// total nil.
+// The call reads in two phases. First the entries at the targets' keys,
+// with those on the way to a local key when the inventory proves absence:
+// an exact target's totals are those of its own entry. Then the subtrees'
+// rows, in one aggregation through SeekParquet, every counted key's order
+// checked. A counted entry without a size or a time, and a sum that
+// overflows, make that total nil.
 func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	sel, err := inv.checkSummary(targets, opts)
 	if err != nil {
 		return nil, listing.Evidence{}, err
 	}
 
-	op, cancel := withBudget(ctx, opts.Budget.MaxDuration)
-	defer cancel()
-	s := newSummary(inv, sel, targets, opts.Budget)
+	s := newSummary(inv, sel, targets)
 	s.outside()
-	if err := s.locate(op); err != nil {
-		return s.fail(ctx, op, err)
+	if err := s.locate(ctx); err != nil {
+		return nil, listing.Evidence{}, failed(ctx, err)
 	}
-	if err := s.readOwn(op); err != nil {
-		return s.fail(ctx, op, err)
+	if err := s.readOwn(ctx); err != nil {
+		return nil, listing.Evidence{}, failed(ctx, err)
 	}
-	if err := s.count(op); err != nil {
-		return s.fail(ctx, op, err)
+	if err := s.count(ctx); err != nil {
+		return nil, listing.Evidence{}, failed(ctx, err)
 	}
-	return s.out, inv.evidence(s.stop), nil
+	s.complete()
+	return s.out, inv.evidence(listing.StopCompleted), nil
 }
 
-// checkSummary refuses targets and options of the wrong form, and returns
-// the kinds the options count.
+// checkSummary refuses targets of the wrong form, and returns the kinds
+// the options count.
 func (inv *Inventory) checkSummary(targets []listing.Target, opts listing.SummaryOptions) (selection, error) {
-	if err := checkBudget(opts.Budget); err != nil {
-		return selection{}, err
-	}
 	for _, t := range targets {
 		check := inv.checkKey
 		if t.Subtree {
@@ -82,14 +68,12 @@ func (inv *Inventory) checkSummary(targets []listing.Target, opts listing.Summar
 	return selectionOf(opts.Kinds)
 }
 
-// summary is one Summarize call: its targets, where their rows lie, what
-// the budget has admitted, their summaries, and the bound that stopped
-// it.
+// summary is one Summarize call: its targets, where their rows lie, and
+// their summaries.
 type summary struct {
 	inv     *Inventory
 	sel     selection
 	targets []listing.Target
-	budget  listing.Budget
 	out     []listing.TargetSummary
 
 	// own holds the row spans of the names of each target's key that hold
@@ -97,35 +81,24 @@ type summary struct {
 	own   [][]seekparquet.RowSpan
 	under []seekparquet.RowSpan
 
-	// rows is the entry budget both phases share.
-	rows rowBudget
-
 	// known marks the targets whose State is set, and done those whose
 	// totals are.
 	known []bool
 	done  []bool
-	stop  listing.StopReason
 }
 
-func newSummary(inv *Inventory, sel selection, targets []listing.Target, budget listing.Budget) *summary {
+func newSummary(inv *Inventory, sel selection, targets []listing.Target) *summary {
 	n := len(targets)
-	s := &summary{
+	return &summary{
 		inv:     inv,
 		sel:     sel,
 		targets: targets,
-		budget:  budget,
 		out:     make([]listing.TargetSummary, n),
 		own:     make([][]seekparquet.RowSpan, n),
 		under:   make([]seekparquet.RowSpan, n),
-		rows:    rowBudget{max: budget.MaxEntries},
 		known:   make([]bool, n),
 		done:    make([]bool, n),
-		stop:    listing.StopCompleted,
 	}
-	for i := range s.out {
-		s.out[i].Stop = listing.StopCompleted
-	}
-	return s
 }
 
 // outside answers what needs no read: the targets outside the scope, and
@@ -134,7 +107,7 @@ func (s *summary) outside() {
 	for i, t := range s.targets {
 		switch {
 		case !s.inv.inScope(t.Key):
-			s.out[i].Reason, s.out[i].Totals, s.out[i].Stop = errOutOfScope, *zeroTotals(), ""
+			s.out[i].Reason, s.out[i].Totals = errOutOfScope, *zeroTotals()
 			s.known[i], s.done[i] = true, true
 		case len(t.Key) == 0:
 			s.out[i].Reason, s.known[i] = errRoot, true
@@ -201,23 +174,13 @@ func empty(span seekparquet.RowSpan) bool {
 	return lo == hi
 }
 
-// readOwn reads the entries at the targets' keys, admitting each
-// target's in order while the entry budget holds them, and sets the states
-// of those it reads and an exact target's totals. A target it does not
-// admit is unknown and unread.
+// readOwn reads the entries at the targets' keys, and sets the states of
+// those it reads and an exact target's totals.
 func (s *summary) readOwn(ctx context.Context) error {
 	var admitted []int
 	var spans []seekparquet.RowSpan
 	for i := range s.targets {
 		if s.known[i] {
-			continue
-		}
-		fits, err := s.rows.admit(s.own[i])
-		if err != nil {
-			return err
-		}
-		if !fits {
-			s.unreached(i, listing.StopEntryBudget)
 			continue
 		}
 		admitted, spans = append(admitted, i), append(spans, s.own[i]...)
@@ -231,9 +194,6 @@ func (s *summary) readOwn(ctx context.Context) error {
 		t := s.targets[i]
 		s.out[i].State, s.out[i].Self, s.out[i].Reason = s.inv.resolve(t.Key, found)
 		s.known[i] = true
-		if s.out[i].State == listing.LookupUnknown {
-			s.out[i].Stop = "" // not read, and no bound is why: never complete
-		}
 		if !t.Subtree {
 			s.out[i].Totals, s.done[i] = *entryTotals(s.out[i].Self, s.sel), true
 		}
@@ -253,8 +213,7 @@ func (s *summary) read(ctx context.Context, spans []seekparquet.RowSpan) (map[st
 	return s.inv.read(ctx, plan)
 }
 
-// count sets the totals of the subtrees still open: admitted in order
-// while the entry budget holds their rows, then counted in one
+// count sets the totals of the subtrees still open, counted in one
 // aggregation.
 func (s *summary) count(ctx context.Context) error {
 	var subtrees []int
@@ -265,14 +224,6 @@ func (s *summary) count(ctx context.Context) error {
 		case !s.counted(i):
 			s.out[i].Totals, s.done[i] = *zeroTotals(), true
 		default:
-			fits, err := s.rows.admit([]seekparquet.RowSpan{s.under[i]})
-			if err != nil {
-				return err
-			}
-			if !fits {
-				s.unread(i, listing.StopEntryBudget)
-				continue
-			}
 			subtrees, spans = append(subtrees, i), append(spans, s.under[i])
 		}
 	}
@@ -290,53 +241,12 @@ func (s *summary) count(ctx context.Context) error {
 	return nil
 }
 
-// unreached ends target i unknown and unread, by the bound stop: the call
-// did not read its own entry.
-func (s *summary) unreached(i int, stop listing.StopReason) {
-	s.out[i].State, s.out[i].Self, s.out[i].Reason = listing.LookupUnknown, nil, errUnreached
-	s.known[i] = true
-	s.unread(i, stop)
-}
-
-// unread ends target i unread, by the bound stop, which becomes the
-// call's unless a bound applied before it stopped the call too.
-func (s *summary) unread(i int, stop listing.StopReason) {
-	s.out[i].Totals, s.done[i], s.out[i].Stop = *zeroTotals(), true, stop
-	s.out[i].Unread = []listing.Unread{{Scope: listing.UnreadInterval, Class: listing.UnreadBudget}}
-	if stopRank(stop) > stopRank(s.stop) {
-		s.stop = stop
+// complete marks the targets whose totals cover everything at or under
+// them: the inventory proves absence, the target is in its scope, and its
+// state is known, the root's excepted.
+func (s *summary) complete() {
+	for i, t := range s.targets {
+		known := s.out[i].State != listing.LookupUnknown || len(t.Key) == 0
+		s.out[i].Complete = s.inv.provable && s.inv.inScope(t.Key) && known
 	}
-}
-
-// stopRank orders the bounds that stop a Summarize by when they apply:
-// the time budget ends it, the entry budget admits each read.
-func stopRank(stop listing.StopReason) int {
-	switch stop {
-	case listing.StopTimeBudget:
-		return 2
-	case listing.StopEntryBudget:
-		return 1
-	}
-	return 0
-}
-
-// fail ends the call on err: with ctx's error when ctx ended; at the time
-// budget, with every target not yet answered unread, and unknown when its
-// own entry was not read; else with err in its class.
-func (s *summary) fail(ctx, op context.Context, err error) ([]listing.TargetSummary, listing.Evidence, error) {
-	if ctx.Err() != nil {
-		return nil, listing.Evidence{}, ctx.Err()
-	}
-	if !timeUp(ctx, op) {
-		return nil, listing.Evidence{}, failed(ctx, err)
-	}
-	for i := range s.out {
-		switch {
-		case !s.known[i]:
-			s.unreached(i, listing.StopTimeBudget)
-		case !s.done[i]:
-			s.unread(i, listing.StopTimeBudget)
-		}
-	}
-	return s.out, s.inv.evidence(s.stop), nil
 }
