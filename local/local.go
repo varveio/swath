@@ -46,11 +46,11 @@ import (
 //
 // Walk takes "" or a directory key, ending in "/", and refuses anything
 // else as listing.ErrInvalidRequest: no literal prefix matching. It fails
-// where a page of the same prefix fails, then lists what is under the
-// directory, not the directory's own entry, with the parallel walker the
-// swath command lists a tree with, each directory read relative to its
-// parent, following no symbolic link and entering no other device. Its
-// batches come in no key order, and a directory's entries unsorted. A
+// where a page of the same prefix fails, then hands on the directory's own
+// entry, below the root, and lists what is under it with the parallel
+// walker the swath command lists a tree with, each directory read relative
+// to its parent, following no symbolic link and entering no other device.
+// Its batches come in no key order, and a directory's entries unsorted. A
 // directory it cannot open or read, an entry it cannot stat, and a
 // directory on another device, listed and not entered, are handed to emit
 // as an Unread as the walk meets them, and the walk goes on. It changes no

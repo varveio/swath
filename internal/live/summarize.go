@@ -20,11 +20,9 @@ var errRoot = errors.New("swath: the root has no entry")
 // sums their sizes and newest change, one TargetSummary per target, in
 // order, as package listing states. Each target is answered on its own:
 // its State, Self and Reason by a Lookup of its key (the root's, the empty
-// key's, is unknown: no entry); a subtree target's entries at and under
-// its key by one Walk of it, so nested and repeated targets are each
-// walked and counted in full. The entry at the key counts as the walk
-// hands it on, or as Self where the walk does not, as a local walk does
-// not hand on its directory's own entry; an exact target counts its Self.
+// key's, is unknown: no entry), whose Self an exact target counts; a
+// subtree target's entries at and under its key by one Walk of it, so
+// nested and repeated targets are each walked and counted in full.
 //
 // A subtree target's Unread counts what its walk handed on as Unread, and
 // it is Complete when its State is known (the root's excepted) and its
@@ -104,10 +102,8 @@ func (s *Source) target(ctx context.Context, t listing.Target, counted []bool) (
 		return ts, nil
 	}
 
-	own := false // the walk handed on the entry at exactly the key
 	res, err := s.Walk(ctx, listing.WalkRequest{Prefix: t.Key}, func(b listing.WalkBatch) error {
 		for i := range b.Entries {
-			own = own || len(b.Entries[i].Key) == len(t.Key)
 			tl.add(&b.Entries[i], counted)
 		}
 		return nil
@@ -120,9 +116,6 @@ func (s *Source) target(ctx context.Context, t listing.Target, counted []bool) (
 	case ts.State == listing.LookupAbsent && errors.Is(err, listing.ErrNotFound): // nothing there
 	default:
 		return listing.TargetSummary{}, err
-	}
-	if !own && ts.Self != nil { // a local directory's own entry, which its walk does not hold
-		tl.add(ts.Self, counted)
 	}
 	ts.Totals, ts.Unread = tl.totals(), res.Unread
 	ts.Complete = ts.Complete && res.Unread == 0

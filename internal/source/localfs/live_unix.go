@@ -143,12 +143,13 @@ func failed(ctx context.Context, prefix string, err error) error {
 	return fmt.Errorf("%w (prefix %q)", err, prefix)
 }
 
-// Walk lists every entry under w.Prefix for one walk (live.Walker): ""
-// for the held directory, or a directory key below it, whose own entry it
-// does not list. The prefix is opened first as a level is (openLevel), so
-// one that is not there, is no directory or lies past a symbolic link or
-// on another device fails as a page of it does; anything else is
-// listing.ErrInvalidRequest. Then the parallel local walker lists it from
+// Walk lists every entry at or under w.Prefix for one walk (live.Walker):
+// "" for the held directory, or a directory key below it, whose own entry
+// comes first, from the fstat of its descriptor. The prefix is opened
+// first as a level is (openLevel), so one that is not there, is no
+// directory or lies past a symbolic link or on another device fails as a
+// page of it does; anything else is listing.ErrInvalidRequest. Then the
+// parallel local walker lists it from
 // the held directory, as a count does: each directory's entries unsorted,
 // its subdirectories handed to other workers, so batches come in no key
 // order; w.Workers, zero for DefaultWorkers. It changes no process-wide
@@ -161,11 +162,18 @@ func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w", listing.ErrInvalidRequest, err)
 	}
-	fd, _, err := l.o.p.openLevel(ctx, names)
+	fd, st, err := l.o.p.openLevel(ctx, names)
 	if err != nil {
 		return failed(ctx, prefix, err)
 	}
 	unix.Close(fd)
+	if prefix != "" {
+		var e Entry
+		fillStat(&e, &st)
+		if err := sink.Entries(ctx, []listing.Entry{entryOf(prefix, &e)}); err != nil {
+			return err
+		}
+	}
 
 	o, err := OpenDir(l.o.p.heldFile, prefix, l.o.p.opt)
 	if err != nil {

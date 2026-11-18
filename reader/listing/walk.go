@@ -5,11 +5,10 @@ package listing
 
 // WalkRequest asks for every entry at or under a prefix.
 type WalkRequest struct {
-	// Prefix is the walk's scope: the keys that begin with it. On an
-	// object store it is any key prefix, and the object at exactly it is
-	// included when it exists; on a local source it is empty, for the
-	// root, or a directory's key, and the walk holds what is under the
-	// directory, not the directory's own entry, which Lookup answers.
+	// Prefix is the walk's scope: the keys that begin with it, its own
+	// entry included when it exists. On an object store it is any key
+	// prefix; on a local source it is empty, for the root, or a
+	// directory's key.
 	Prefix []byte
 	// Workers is how many requests or directory reads run at once; zero
 	// selects the backend's default. One selects the sequential mode: one

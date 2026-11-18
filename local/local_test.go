@@ -660,7 +660,8 @@ func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
 }
 
 // TestWalk: a walk of the root, and of a directory below it, hands on
-// every entry filepath.WalkDir finds there, the symbolic link as itself,
+// every entry filepath.WalkDir finds there, the directory's own below the
+// root, the symbolic link as itself,
 // and the directory it may not read as an Unread of class ErrAuth. It
 // leaves GOMAXPROCS as it was.
 func TestWalk(t *testing.T) {
@@ -702,7 +703,7 @@ func TestWalk(t *testing.T) {
 			got = append(got, string(e.Key))
 		}
 		return nil
-	}); err != nil || !slices.Equal(slices.Sorted(slices.Values(got)), []string{"d/b.txt", "d/e/", "d/e/c.txt"}) {
+	}); err != nil || !slices.Equal(slices.Sorted(slices.Values(got)), []string{"d/", "d/b.txt", "d/e/", "d/e/c.txt"}) {
 		t.Errorf("walk of d/: %q, %v", got, err)
 	}
 	emit := func(listing.WalkBatch) error { return nil }
