@@ -7,10 +7,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -316,20 +314,7 @@ func (r *rowReader) ReadRows(out []parquet.Row) (int, error) {
 // an application admitting it would, and returns its inventory.
 func open(t testing.TB, dir string) *Inventory {
 	t.Helper()
-	return openWith(t, dir, nil)
-}
-
-// openWith opens the dataset at dir through src, a Source of its files,
-// or OpenDir when src is nil.
-func openWith(t testing.TB, dir string, src seekparquet.Source) *Inventory {
-	t.Helper()
-	var d *reader.Dataset
-	var err error
-	if src == nil {
-		d, err = reader.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
-	} else {
-		d, err = reader.Open(context.Background(), src, seekparquet.OpenOptions{})
-	}
+	d, err := reader.OpenDir(context.Background(), dir, seekparquet.OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,51 +327,6 @@ func openWith(t testing.TB, dir string, src seekparquet.Source) *Inventory {
 		t.Fatal(err)
 	}
 	return inv
-}
-
-// slowSource serves a dataset's files, each read of a part delay late,
-// so that a call's time budget ends while it reads.
-type slowSource struct {
-	root  *os.Root
-	delay time.Duration
-}
-
-func newSlowSource(t testing.TB, dir string, delay time.Duration) *slowSource {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = root.Close() })
-	return &slowSource{root: root, delay: delay}
-}
-
-func (s *slowSource) Open(_ context.Context, name string) (seekparquet.SourceFile, error) {
-	f, err := s.root.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return nil, errors.Join(err, f.Close())
-	}
-	delay := s.delay
-	if name == seekparquet.ManifestName {
-		delay = 0
-	}
-	return slowFile{File: f, size: info.Size(), delay: delay}, nil
-}
-
-type slowFile struct {
-	*os.File
-	size  int64
-	delay time.Duration
-}
-
-func (f slowFile) Size() int64 { return f.size }
-
-func (f slowFile) ReadAt(p []byte, off int64) (int, error) {
-	time.Sleep(f.delay)
-	return f.File.ReadAt(p, off)
 }
 
 // child is an expected child of a level: its key and kind.

@@ -58,9 +58,6 @@ func TestLookup(t *testing.T) {
 		if (r.State == listing.LookupPresent) != (r.Entry != nil) || r.Entry != nil && string(r.Entry.Key) != c.key {
 			t.Errorf("%s: Lookup(%q) entry = %+v", c.inv, c.key, r.Entry)
 		}
-		if r.Evidence.Stop != listing.StopCompleted {
-			t.Errorf("%s: Lookup(%q) evidence = %+v", c.inv, c.key, r.Evidence)
-		}
 	}
 
 	byKey := map[string]rec{}

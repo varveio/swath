@@ -35,7 +35,7 @@ func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit fu
 		err = inv.missingDirectory(ctx, req.Prefix)
 	}
 
-	res := listing.WalkSummary{Entries: w.entries, Evidence: inv.evidence("")}
+	res := listing.WalkSummary{Entries: w.entries, Evidence: inv.evidence()}
 	switch {
 	case w.emitErr != nil:
 		return res, w.emitErr
@@ -44,7 +44,6 @@ func (inv *Inventory) Walk(ctx context.Context, req listing.WalkRequest, emit fu
 	case err != nil:
 		return res, failed(ctx, err)
 	}
-	res.Evidence.Stop = listing.StopCompleted
 	res.Complete = inv.provable
 	return res, nil
 }

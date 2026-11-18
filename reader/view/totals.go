@@ -84,9 +84,9 @@ const (
 var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total unknown")
 
 // aggregate counts and sums the rows of the selection's kinds in each
-// span, in one aggregation that reads every value it needs. checkKeys
-// checks the order of every key it counts.
-func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection, checkKeys bool) ([]*listing.Totals, error) {
+// span, in one aggregation that reads every value it needs and checks the
+// order of every key it counts.
+func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection) ([]*listing.Totals, error) {
 	out := make([]*listing.Totals, len(spans))
 	if len(spans) == 0 {
 		return out, nil
@@ -102,7 +102,7 @@ func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan
 	if inv.rows.local {
 		reductions = localReductions
 	}
-	opt := seekparquet.AggregateOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: checkKeys, Filter: inv.filter(sel)}
+	opt := seekparquet.AggregateOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: true, Filter: inv.filter(sel)}
 	results, err := inv.sp.AggregateRows(ctx, spans, reductions, opt, nil)
 	if err != nil {
 		return nil, err

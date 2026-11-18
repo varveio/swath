@@ -28,7 +28,7 @@ var objectSchemas = []reader.SchemaID{reader.S3ObjectsV1, reader.GCSObjectsV1, r
 // count of unreadable entries.
 func TestEvidenceFromTheManifest(t *testing.T) {
 	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
-	e := inv.evidence(listing.StopCompleted)
+	e := inv.evidence()
 	at := func(s string) time.Time {
 		v, err := time.Parse(time.RFC3339, s)
 		if err != nil {
@@ -37,11 +37,11 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 		return v
 	}
 	if e.Scope != nil || !e.Started.Equal(at("2026-11-12T09:00:00Z")) || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) ||
-		e.Unlocated == nil || *e.Unlocated != 0 || e.Stop != listing.StopCompleted {
+		e.Unlocated == nil || *e.Unlocated != 0 {
 		t.Fatalf("evidence %+v", e)
 	}
 	*e.Unlocated, e.Started = 9, nil
-	if again := inv.evidence(listing.StopCompleted); *again.Unlocated != 0 || again.Started == nil {
+	if again := inv.evidence(); *again.Unlocated != 0 || again.Started == nil {
 		t.Fatal("an answer's evidence shares the inventory's")
 	}
 
@@ -61,7 +61,7 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ext := coverage(extension(reader.S3ObjectsV1), c.set)
 			inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, ext: ext, rows: objects()[:3]}))
-			got := inv.evidence(listing.StopCompleted).Unlocated
+			got := inv.evidence().Unlocated
 			if (got == nil) != (c.want == nil) || got != nil && *got != *c.want {
 				t.Fatalf("Unlocated = %v, want %v", got, c.want)
 			}
@@ -71,7 +71,7 @@ func TestEvidenceFromTheManifest(t *testing.T) {
 	// A manifest that records when its listing finished, not when it
 	// started: the start is unknown, the finish stands.
 	ext := coverage(extension(reader.S3ObjectsV1), map[string]any{"listing_started_at": nil})
-	e = open(t, write(t, fixture{id: reader.S3ObjectsV1, ext: ext, rows: objects()[:3]})).evidence(listing.StopCompleted)
+	e = open(t, write(t, fixture{id: reader.S3ObjectsV1, ext: ext, rows: objects()[:3]})).evidence()
 	if e.Started != nil || e.Finished == nil || !e.Finished.Equal(at("2026-11-12T09:00:01Z")) {
 		t.Errorf("only a finish recorded: Started %v, Finished %v", e.Started, e.Finished)
 	}
@@ -119,7 +119,7 @@ func TestEmptyInventory(t *testing.T) {
 		t.Fatalf("emit %+v", b)
 		return nil
 	})
-	if err != nil || s.Entries != 0 || s.Evidence.Stop != listing.StopCompleted {
+	if err != nil || s.Entries != 0 {
 		t.Fatalf("Walk = %+v, %v", s, err)
 	}
 	sums, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}, {Key: []byte("a")}}, listing.SummaryOptions{})
@@ -255,7 +255,6 @@ func TestRequestChecks(t *testing.T) {
 		"no kind":                 third(objects.Summarize(ctx, nil, listing.SummaryOptions{Kinds: []listing.Kind{0}})),
 		"empty exact target":      third(objects.Summarize(ctx, []listing.Target{{}}, listing.SummaryOptions{})),
 		"local subtree no slash":  third(files.Summarize(ctx, []listing.Target{{Key: []byte("d"), Subtree: true}}, listing.SummaryOptions{})),
-		"negative page duration":  second(objects.Page(ctx, listing.PageRequest{Limit: 1, MaxDuration: -1})),
 		"NUL in a subtree target": third(objects.Summarize(ctx, []listing.Target{{Key: []byte{0}, Subtree: true}}, listing.SummaryOptions{})),
 	} {
 		if !errors.Is(err, listing.ErrInvalidRequest) {

@@ -7,15 +7,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
-
-	seekparquet "github.com/varveio/seekparquet/go"
 
 	"github.com/varveio/swath/reader"
 	"github.com/varveio/swath/reader/listing"
@@ -42,19 +36,15 @@ func scopes(rs []rec, isLocal bool) []string {
 
 // level pages through prefix's level, checking each page's shape, and
 // returns its Self and entries.
-func level(t *testing.T, inv *Inventory, prefix string, limit int, totals *listing.SummaryOptions) (*listing.Entry, []listing.Entry, []*listing.Totals) {
+func level(t *testing.T, inv *Inventory, prefix string, limit int) (*listing.Entry, []listing.Entry) {
 	t.Helper()
 	var self *listing.Entry
 	var entries []listing.Entry
-	var sums []*listing.Totals
 	token := ""
 	for n := 0; ; n++ {
-		p, err := inv.Page(context.Background(), listing.PageRequest{Prefix: []byte(prefix), Token: token, Limit: limit, ChildTotals: totals})
+		p, err := inv.Page(context.Background(), listing.PageRequest{Prefix: []byte(prefix), Token: token, Limit: limit})
 		if err != nil {
 			t.Fatalf("page %d of %q by %d: %v", n, prefix, limit, err)
-		}
-		if p.Evidence.Stop != listing.StopCompleted {
-			t.Fatalf("page %d of %q: evidence %+v", n, prefix, p.Evidence)
 		}
 		if len(p.Entries) > limit || p.Next != "" && len(p.Entries) != limit {
 			t.Fatalf("page %d of %q by %d holds %d entries, next %q", n, prefix, limit, len(p.Entries), p.Next)
@@ -65,13 +55,9 @@ func level(t *testing.T, inv *Inventory, prefix string, limit int, totals *listi
 		if n == 0 {
 			self = p.Self
 		}
-		if totals != nil && len(p.Totals) != len(p.Entries) {
-			t.Fatalf("page %d of %q: %d totals for %d entries", n, prefix, len(p.Totals), len(p.Entries))
-		}
 		entries = append(entries, p.Entries...)
-		sums = append(sums, p.Totals...)
 		if p.Next == "" {
-			return self, entries, sums
+			return self, entries
 		}
 		token = p.Next
 	}
@@ -98,7 +84,7 @@ func TestPageMatchesTheRecordsPageByPage(t *testing.T) {
 			for _, prefix := range scopes(rs, isLocal) {
 				wantSelf, want := children(rs, prefix, isLocal)
 				for _, limit := range []int{1, 2, 7, 1000} {
-					self, got, _ := level(t, inv, prefix, limit, nil)
+					self, got := level(t, inv, prefix, limit)
 					if (self == nil) != (wantSelf == nil) || self != nil && !sameEntry(*self, *wantSelf, isLocal) {
 						t.Fatalf("Self of %q by %d = %+v, want %+v", prefix, limit, self, wantSelf)
 					}
@@ -129,8 +115,8 @@ func TestPageTokens(t *testing.T) {
 	if err != nil || first.Next == "" || !strings.HasPrefix(first.Next, tokenVersion+".") {
 		t.Fatalf("first page = %+v, %v", first, err)
 	}
-	if p, err := inv.Page(ctx, listing.PageRequest{Prefix: []byte("a/"), Token: first.Next, Limit: 1}); err != nil || string(p.Entries[0].Key) != "a/b0" {
-		t.Fatalf("second page = %+v, %v", p, err)
+	if p, err := inv.Page(ctx, listing.PageRequest{Prefix: []byte("a/"), Token: first.Next, Limit: 3}); err != nil || string(p.Entries[0].Key) != "a/b0" {
+		t.Fatalf("second page, another limit = %+v, %v", p, err)
 	}
 	for name, c := range map[string]struct {
 		inv    *Inventory
@@ -148,86 +134,8 @@ func TestPageTokens(t *testing.T) {
 		}
 	}
 	// A cursor outside the level, bound as a real token is: refused.
-	if _, err := decodeToken([]byte("a/"), inv.binding([]byte("a/"), nil), tokenVersion+"."+inv.binding([]byte("a/"), nil)+".spc1.r.Yg.0"); !errors.Is(err, listing.ErrInvalidToken) {
+	if _, err := decodeToken([]byte("a/"), inv.binding([]byte("a/")), tokenVersion+"."+inv.binding([]byte("a/"))+".spc1.r.Yg.0"); !errors.Is(err, listing.ErrInvalidToken) {
 		t.Errorf("cursor outside the level: %v", err)
-	}
-}
-
-// TestPageTokenOptions: a token continues only under the child totals it
-// was issued with, the same kinds however spelt; a page's bounds of work
-// may change.
-func TestPageTokenOptions(t *testing.T) {
-	ctx := context.Background()
-	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: tree()}))
-	files := &listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile}}
-	first, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: files})
-	if err != nil || first.Next == "" {
-		t.Fatalf("first page = %+v, %v", first, err)
-	}
-	for name, totals := range map[string]*listing.SummaryOptions{
-		"no child totals":   nil,
-		"the default kinds": {},
-		"directories":       {Kinds: []listing.Kind{listing.KindDir}},
-		"files and objects": {Kinds: []listing.Kind{listing.KindFile, listing.KindObject}},
-	} {
-		if _, err := inv.Page(ctx, listing.PageRequest{Token: first.Next, Limit: 1, ChildTotals: totals}); !errors.Is(err, listing.ErrInvalidToken) {
-			t.Errorf("%s: %v, want ErrInvalidToken", name, err)
-		}
-	}
-	for name, req := range map[string]listing.PageRequest{
-		"the same kinds spelt twice": {Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: []listing.Kind{listing.KindFile, listing.KindFile}}},
-		"another limit and duration": {Limit: 3, MaxDuration: time.Hour, ChildTotals: &listing.SummaryOptions{Kinds: files.Kinds}},
-	} {
-		req.Token = first.Next
-		if _, err := inv.Page(ctx, req); err != nil {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-
-	defaults, err := inv.Page(ctx, listing.PageRequest{Limit: 1, ChildTotals: &listing.SummaryOptions{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := []listing.Kind{listing.KindObject, listing.KindPrefix, listing.KindFile}
-	if _, err := inv.Page(ctx, listing.PageRequest{Token: defaults.Next, Limit: 1, ChildTotals: &listing.SummaryOptions{Kinds: listed}}); err != nil {
-		t.Errorf("the default kinds, listed: %v", err)
-	}
-}
-
-// TestPageChildTotals: each child prefix or directory gets the totals of
-// its subtree, counted as Summarize counts them, and no other entry any.
-func TestPageChildTotals(t *testing.T) {
-	for _, c := range []struct {
-		id    reader.SchemaID
-		rows  []rec
-		kinds []listing.Kind
-	}{
-		{reader.S3ObjectsV1, objects(), nil},
-		{reader.AzureObjectsV1, objects(), []listing.Kind{listing.KindObject}},
-		{reader.LocalV1, tree(), nil},
-		{reader.LocalV1, tree(), []listing.Kind{listing.KindFile}},
-		{reader.LocalV1, namesOnly(tree()), []listing.Kind{listing.KindFile}},
-	} {
-		isLocal := c.id == reader.LocalV1
-		inv := open(t, write(t, fixture{id: c.id, rows: c.rows}))
-		for _, prefix := range []string{"", "a/", "d/"} {
-			if !isLocal && prefix == "d/" || isLocal && prefix == "a/" {
-				continue
-			}
-			_, entries, totals := level(t, inv, prefix, 3, &listing.SummaryOptions{Kinds: c.kinds})
-			for i, e := range entries {
-				if e.Kind != listing.KindPrefix && e.Kind != listing.KindDir {
-					if totals[i] != nil {
-						t.Errorf("%s %q: %q has totals", c.id, prefix, e.Key)
-					}
-					continue
-				}
-				want := totalsOf(c.rows, isLocal, c.kinds, func(r rec) bool { return strings.HasPrefix(r.key, string(e.Key)) })
-				if totals[i] == nil || !sameTotals(*totals[i], want) {
-					t.Errorf("%s %v %q: totals of %q = %v, want %s", c.id, c.kinds, prefix, e.Key, totals[i], showTotals(want))
-				}
-			}
-		}
 	}
 }
 
@@ -295,88 +203,4 @@ func TestPageMissingDirectory(t *testing.T) {
 	if p, err := page(objects, "missing/"); err != nil || len(p.Entries) != 0 {
 		t.Errorf("object store, empty prefix: %+v, %v", p, err)
 	}
-}
-
-// TestPageTimeBudget: a page its MaxDuration ends holds no entry, says so,
-// and its Next starts it again.
-func TestPageTimeBudget(t *testing.T) {
-	dir := write(t, fixture{id: reader.S3ObjectsV1, rows: objects()})
-	inv := openWith(t, dir, newSlowSource(t, dir, 0))
-	first, err := inv.Page(context.Background(), listing.PageRequest{Limit: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	slow := openWith(t, dir, newSlowSource(t, dir, 50*time.Millisecond))
-	for _, token := range []string{"", first.Next} {
-		p, err := slow.Page(context.Background(), listing.PageRequest{Token: token, Limit: 2, MaxDuration: 5 * time.Millisecond})
-		if err != nil || p.Evidence.Stop != listing.StopTimeBudget || len(p.Entries) != 0 || p.Next != token {
-			t.Errorf("page after %q = %+v, %v", token, p, err)
-		}
-	}
-}
-
-// TestPageChildTotalsTimeBudget: when the page's MaxDuration ends while
-// child totals are counted, the totals already counted stand and only
-// those not yet counted are nil; the page keeps its entries and says the
-// time budget stopped it. A child that fails before then fails the page.
-func TestPageChildTotalsTimeBudget(t *testing.T) {
-	stalledPage := func(t *testing.T, size int64) (listing.Page, error) {
-		rs := []rec{{key: "a/x", size: ptr(size)}}
-		for i := range 3000 {
-			rs = append(rs, rec{key: fmt.Sprintf("m/%05d", i), size: ptr[int64](1)})
-		}
-		dir := write(t, fixture{id: reader.S3ObjectsV1, rows: rs, partBytes: 1 << 10, groupRows: 256})
-		parts, err := filepath.Glob(filepath.Join(dir, "data", "*.parquet"))
-		if err != nil || len(parts) < 3 {
-			t.Fatalf("parts %v, %v", parts, err)
-		}
-		src := &stalledSource{slowSource: newSlowSource(t, dir, 0), part: "data/" + filepath.Base(parts[len(parts)-1])}
-		inv := openWith(t, dir, src)
-
-		req := listing.PageRequest{Limit: 10, ChildTotals: &listing.SummaryOptions{}}
-		inv.Page(context.Background(), req) // reads every part's keys
-		src.stalled.Store(true)             // the last part's reads now outlast the budget
-		req.MaxDuration = 200 * time.Millisecond
-		return inv.Page(context.Background(), req)
-	}
-
-	p, err := stalledPage(t, 1)
-	if err != nil || p.Evidence.Stop != listing.StopTimeBudget || len(p.Entries) != 2 || len(p.Totals) != 2 {
-		t.Fatalf("%+v, %v", p, err)
-	}
-	if p.Totals[0] == nil || p.Totals[0].Entries != 1 || p.Totals[1] != nil {
-		t.Errorf("a/ %v, m/ %v; want a/ counted, m/ nil", p.Totals[0], p.Totals[1])
-	}
-
-	if _, err := stalledPage(t, -1); !errors.Is(err, reader.ErrRow) {
-		t.Errorf("a negative size in a/, m/ late: %v, want %v", err, reader.ErrRow)
-	}
-}
-
-// stalledSource is a slowSource whose reads of one part, once stalled,
-// each take a second.
-type stalledSource struct {
-	*slowSource
-	part    string
-	stalled atomic.Bool
-}
-
-func (s *stalledSource) Open(ctx context.Context, name string) (seekparquet.SourceFile, error) {
-	f, err := s.slowSource.Open(ctx, name)
-	if err != nil || name != s.part {
-		return f, err
-	}
-	return stalledFile{slowFile: f.(slowFile), stalled: &s.stalled}, nil
-}
-
-type stalledFile struct {
-	slowFile
-	stalled *atomic.Bool
-}
-
-func (f stalledFile) ReadAt(p []byte, off int64) (int, error) {
-	if f.stalled.Load() {
-		time.Sleep(time.Second)
-	}
-	return f.slowFile.ReadAt(p, off)
 }

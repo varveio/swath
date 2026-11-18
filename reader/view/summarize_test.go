@@ -47,7 +47,7 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 
 		for _, kinds := range c.kinds {
 			sums, e, err := inv.Summarize(context.Background(), targets, listing.SummaryOptions{Kinds: kinds})
-			if err != nil || len(sums) != len(targets) || e.Stop != listing.StopCompleted {
+			if err != nil || len(sums) != len(targets) {
 				t.Fatalf("%s %v: %d summaries, %+v, %v", c.id, kinds, len(sums), e, err)
 			}
 			for i, target := range targets {
@@ -77,8 +77,8 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 				if target.Subtree {
 					keep = func(r rec) bool { return strings.HasPrefix(r.key, key) }
 				}
-				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || s.Unread != 0 || !s.Complete {
-					t.Fatalf("%s %v: %q subtree %t = %s, unread %d, complete %t; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Unread, s.Complete, showTotals(want))
+				if want := totalsOf(c.rows, isLocal, kinds, keep); !sameTotals(s.Totals, want) || !s.Complete {
+					t.Fatalf("%s %v: %q subtree %t = %s, complete %t; want %s", c.id, kinds, key, target.Subtree, showTotals(s.Totals), s.Complete, showTotals(want))
 				}
 			}
 		}
@@ -161,7 +161,7 @@ func TestSummarizeScopeAndCoverage(t *testing.T) {
 	rs := objects()[1:5]
 	prefixed := open(t, write(t, fixture{id: reader.S3ObjectsV1, ext: ext, rows: rs}))
 	sums, e, err := prefixed.Summarize(ctx, []listing.Target{{Subtree: true}, {Key: []byte("a"), Subtree: true}, {Key: []byte("z")}, {Key: []byte("a/"), Subtree: true}}, listing.SummaryOptions{})
-	if err != nil || e.Stop != listing.StopCompleted || string(e.Scope) != "a/" {
+	if err != nil || string(e.Scope) != "a/" {
 		t.Fatalf("%+v, %v", e, err)
 	}
 	for i := range 3 {
@@ -188,7 +188,7 @@ func TestSummarizeCancelled(t *testing.T) {
 	if _, _, err := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Summarize = %v", err)
 	}
-	if sums, e, err := inv.Summarize(context.Background(), nil, listing.SummaryOptions{}); err != nil || len(sums) != 0 || e.Stop != listing.StopCompleted {
+	if sums, e, err := inv.Summarize(context.Background(), nil, listing.SummaryOptions{}); err != nil || len(sums) != 0 {
 		t.Fatalf("no targets: %v, %+v, %v", sums, e, err)
 	}
 }

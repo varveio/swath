@@ -46,9 +46,9 @@ API. The [Go dataset reader](reader/README.md) and the
 [object-store I/O library](objfile/README.md) document their own interfaces, and the root
 module is importable by released version.
 
-What exists: the reader module holds an experimental contract of the four questions swath
-answers about a listed location (`reader/listing`: Page, Lookup, Walk and Summarize, their
-evidence and error classes) and an inventory view that answers them from a dataset
+What exists: the reader module holds an experimental contract of the questions swath
+answers about a listed location (`reader/listing`: Page, Lookup and Walk, an inventory's
+Summarize, their evidence and error classes) and an inventory view that answers them from a dataset
 (`reader/view`). Both may change in any release.
 
 Still to come: a public live source, one that answers the same contract by listing an

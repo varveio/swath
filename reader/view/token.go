@@ -20,30 +20,15 @@ import (
 const tokenVersion = "inv1"
 
 // binding is the part of a token that ties it to one inventory, by its
-// manifest digest, to one prefix, and to what the request's child totals
-// count: none, or the kinds totals selects. Limit and MaxDuration bound
-// one page's work, not what the level holds, and may change from page to
-// page. Tokens are not signed: the
-// binding detects a token used with another inventory, prefix or count,
-// not a forged one.
-func (inv *Inventory) binding(prefix []byte, totals *selection) string {
+// manifest digest, and to one prefix. Limit bounds one page's work, not
+// what the level holds, and may change from page to page. Tokens are not signed: the binding detects a token used with
+// another inventory or prefix, not a forged one.
+func (inv *Inventory) binding(prefix []byte) string {
 	h := sha256.New()
 	h.Write([]byte("swath view page token\x00"))
 	h.Write(inv.digest[:])
 	h.Write([]byte{0})
 	h.Write(prefix)
-	h.Write([]byte{0})
-	if totals != nil {
-		// One byte per kind, 1 where totals counts it, so that the same
-		// count spelt in two ways binds alike.
-		for k := listing.KindObject; k <= lastKind; k++ {
-			var counted byte
-			if totals.counts(k) {
-				counted = 1
-			}
-			h.Write([]byte{counted})
-		}
-	}
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:16])
 }
 
@@ -69,7 +54,7 @@ func decodeToken(prefix []byte, bind, token string) (*seekparquet.Cursor, error)
 		return nil, badToken("not a token of this version")
 	}
 	if parts[1] != bind {
-		return nil, badToken("issued for another inventory, prefix or count of child totals")
+		return nil, badToken("issued for another inventory or prefix")
 	}
 	c, err := seekparquet.ParseCursor(parts[2])
 	if err != nil {

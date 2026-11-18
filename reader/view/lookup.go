@@ -23,7 +23,7 @@ func (inv *Inventory) Lookup(ctx context.Context, key []byte) (listing.LookupRes
 	if err := inv.checkKey(key); err != nil {
 		return listing.LookupResult{}, err
 	}
-	result := listing.LookupResult{Evidence: inv.evidence(listing.StopCompleted)}
+	result := listing.LookupResult{Evidence: inv.evidence()}
 	if !inv.inScope(key) {
 		result.Reason = errOutOfScope
 		return result, nil

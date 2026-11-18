@@ -140,27 +140,27 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
 
 ## The listing contract
 
-The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the four questions
-swath answers about a listed location, from a live source or from an opened inventory: Page (the next children
-of a prefix), Lookup (what is at exactly one key), Walk (every entry under a prefix) and Summarize (count, bytes,
-space on disk and newest change under each of several targets). It defines their requests and results, the
-common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope, unlocated gaps and
-whether the call completed), the `Unread` places a live walk could not read, and the error classes.
+The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the questions swath
+answers about a listed location, from a live source or from an opened inventory: Page (the next children of a
+prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
+(count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
+common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope and unlocated gaps), the
+`Unread` places a live walk could not read, and the error classes. No call has a time limit of its own: a context
+deadline bounds it.
 It holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
 any release.
 
 ## The inventory view
 
-The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those four questions from an opened
+The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those questions from an opened
 dataset. `view.OpenDir(ctx, dir)` opens a local dataset directory, checks its parts' schemas and returns the
 inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller opened and owns, and reads nothing. Both
 refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with
 `listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque tokens bound to the manifest
-digest, the prefix and the kinds the child totals count, and optional child totals within the page's
-`MaxDuration` (a page it ends while they are counted keeps its entries and the totals counted, nil for the rest,
-and says `time_budget`); `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
+digest and the prefix; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
 `Summarize` reads the entries at its targets' keys, then aggregates its subtree targets' rows in one
-`AggregateRows` call, checking their key order. A walk or summary sets no limit: a caller stops it by cancelling
+`AggregateRows` call, checking their key order: to size a page's child folders, summarize its `KindDir` and
+`KindPrefix` entries as subtree targets. A walk or summary sets no limit: a caller stops it by cancelling
 its context. An object store's prefix may be any key prefix; a local one is empty or a
 directory key, and a local inventory has no row for its root.
 
