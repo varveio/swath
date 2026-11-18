@@ -8,6 +8,7 @@ package local_test
 import (
 	"context"
 	"errors"
+	"syscall"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -140,6 +141,9 @@ func TestPage(t *testing.T) {
 func TestPageByteName(t *testing.T) {
 	root := t.TempDir()
 	name := "n\xff"
+	if err := os.WriteFile(filepath.Join(root, name), nil, 0o644); errors.Is(err, syscall.EILSEQ) {
+		t.Skip("this file system refuses names that are not UTF-8")
+	}
 	write(t, root, name)
 	write(t, root, name+"d/x")
 	src := open(t, hold(t, root))
