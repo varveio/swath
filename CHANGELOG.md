@@ -15,7 +15,8 @@ Notable changes per release. The human summary of the current release is in the
 
 - `swath du` on a local tree leads with the space on disk, as `du`, ncdu, gdu and dust do: the table's and the
   view's figure is `on disk`, `--sort size` orders by it, and the closing line gives it. A directory's own blocks
-  count in it, as `du` counts them, so a tree's total is `du -s`'s less the source directory's own blocks.
+  count in it, as `du` counts them, so a tree's total is `du -s`'s less the source directory's own blocks
+  (not with a size or time filter, which tests a directory by its own size and time).
   `-A`, `--apparent-size`, gives the lengths as before. A listing that reads no blocks (Windows,
   `--metadata names`), an object store, and a saved dataset without allocated bytes lead with the lengths.
   `--allocated` now only requires the space on disk. TSV and JSONL rows keep both figures under the same names;

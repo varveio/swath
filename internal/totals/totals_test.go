@@ -257,6 +257,81 @@ func TestDirBlocks(t *testing.T) {
 	}
 }
 
+// TestNoDirBlocks: with NoDirBlocks (a size or time filter) directories'
+// own blocks count nowhere, neither as bytes nor as missing, in the tally
+// and the view; they still count in Dirs.
+func TestNoDirBlocks(t *testing.T) {
+	rows := []Row{
+		{Key: "a/", Dir: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/", Dir: true}, // without blocks: not missing either
+		{Key: "a/f", Object: true, Size: 5, HasSize: true, Allocated: 8192, HasAllocated: true},
+	}
+	tl := New(Options{Depth: 2, Primary: AllocatedBytes, View: true, NoDirBlocks: true})
+	tl.SetAllocated()
+	r, b := tl.ViewRun(true), tl.Batch()
+	for i := range rows {
+		b.Add(&rows[i])
+		r.Add(&rows[i])
+	}
+	r.Flush()
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	r.End()
+	for _, p := range tl.Result() {
+		want := map[string]int64{"": 8192, "a/": 8192, "a/b/": 0}[p.Prefix]
+		if p.Allocated != want || p.AllocatedMissing != 0 || !p.HasAllocated {
+			t.Errorf("%q: %+v, want %d allocated", p.Prefix, p, want)
+		}
+	}
+	if st := tl.Stats(); st.Dirs != 2 {
+		t.Errorf("dirs %d", st.Dirs)
+	}
+	if v := tl.View(); v.Total.Bytes != 8192 || v.Total.Missing != 0 {
+		t.Errorf("view total %+v", v.Total)
+	}
+}
+
+// TestDirBlocksSharedFold: under a shared line the fold holds the rest of
+// the line's bytes, the joined prefixes' own blocks too: a/ shares its line
+// with a/b/, whose f has a line and whose empty file folds, so the line's
+// children add up to its bytes.
+func TestDirBlocksSharedFold(t *testing.T) {
+	rows := []Row{
+		{Key: "a/", Dir: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/", Dir: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/f", Object: true, Size: 1, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/zero", Object: true, Size: 0, HasSize: true, Allocated: 0, HasAllocated: true},
+	}
+	for _, ordered := range []bool{true, false} {
+		tl := New(Options{Primary: AllocatedBytes, View: true})
+		tl.SetAllocated()
+		r, b := tl.ViewRun(ordered), tl.Batch()
+		for i := range rows {
+			b.Add(&rows[i])
+			r.Add(&rows[i])
+		}
+		r.Flush()
+		if err := b.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		r.End()
+		lines := tl.View().Select(20)
+		var shared, under int64
+		for _, l := range lines {
+			switch {
+			case l.Name == "a/b/":
+				shared = l.Bytes
+			case l.Level == 2:
+				under += l.Bytes
+			}
+		}
+		if shared != 12288 || under != shared {
+			t.Errorf("ordered %v: shared line %d bytes, its lines %d: %+v", ordered, shared, under, lines)
+		}
+	}
+}
+
 // TestShortKeysAndDepth: a key counts in the prefixes it has; a key's own
 // trailing '/' is its deepest prefix; nothing below the depth is held.
 func TestShortKeysAndDepth(t *testing.T) {

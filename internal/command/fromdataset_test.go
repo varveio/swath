@@ -563,9 +563,15 @@ func TestDuFromDatasetWithoutBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, blocks := range map[string]*int64{"none": nil, "mixed": &block} {
+	// late: the first rows have blocks, so the count by them has summed
+	// some before b lacks them; the restart must leave nothing of it.
+	for name, blocks := range map[string]*int64{"none": nil, "mixed": &block, "late": &block} {
+		dirBlocks := blocks
+		if name != "late" {
+			dirBlocks = nil
+		}
 		rows := &parquetRows{rows: []parquet.Row{
-			s.Deconstruct(nil, &unblockedRow{Key: []byte("a/"), Kind: "dir", LastModified: &at}),
+			s.Deconstruct(nil, &unblockedRow{Key: []byte("a/"), Kind: "dir", LastModified: &at, AllocatedBytes: dirBlocks}),
 			s.Deconstruct(nil, &unblockedRow{Key: []byte("a/f"), Kind: "file", Size: &five, LastModified: &at, AllocatedBytes: blocks}),
 			s.Deconstruct(nil, &unblockedRow{Key: []byte("b"), Kind: "file", Size: &three, LastModified: &at}),
 		}}
@@ -581,7 +587,10 @@ func TestDuFromDatasetWithoutBlocks(t *testing.T) {
 				t.Fatalf("%s %q: %v\n%s", name, args, err, out)
 			}
 			for _, r := range rows {
-				if r["primary"] != "size" || r["prefix"] == "" && r["size"] != "8" {
+				if r["primary"] != "size" || r["prefix"] == "" && r["size"] != "8" || r["objects"] != map[string]string{"": "2", "a/": "1"}[r["prefix"]] {
+					t.Fatalf("%s %q: %v", name, args, r)
+				}
+				if name == "late" && r["prefix"] == "" && (r["allocated_bytes"] != "8192" || r["allocated_bytes_missing"] != "1") { // a/'s and a/f's, once
 					t.Fatalf("%s %q: %v", name, args, r)
 				}
 			}
@@ -590,9 +599,10 @@ func TestDuFromDatasetWithoutBlocks(t *testing.T) {
 		if out, err := duRun(t, "--from-dataset", ds, "--allocated", "--format", "tsv"); !errors.As(err, &nb) || out != "" {
 			t.Fatalf("%s --allocated: %v, stdout %q", name, err, out)
 		}
-		// Every file filtered out, its directories still say so: no blocks.
-		if out, err := duRun(t, "--from-dataset", ds, "--exclude", "a/f", "--exclude", "b", "--format", "tsv"); err != nil ||
-			duTSV(t, out)[0]["primary"] != "size" || duTSV(t, out)[0]["dirs"] != "1" {
+		// Every file filtered out, its directories still say so: no blocks
+		// (late's directory has them, and leads with them).
+		if out, err := duRun(t, "--from-dataset", ds, "--exclude", "a/f", "--exclude", "b", "--format", "tsv"); name != "late" && (err != nil ||
+			duTSV(t, out)[0]["primary"] != "size" || duTSV(t, out)[0]["dirs"] != "1") {
 			t.Fatalf("%s, every file filtered out: %v\n%s", name, err, out)
 		}
 	}
@@ -615,7 +625,7 @@ func TestDuFromDatasetStatxLowerBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := &parquetRows{rows: []parquet.Row{
-		s.Deconstruct(nil, &unblockedRow{Key: []byte("a/"), Kind: "dir", LastModified: &at, AllocatedBytes: &block}),
+		s.Deconstruct(nil, &unblockedRow{Key: []byte("a/"), Kind: "dir", LastModified: &at}), // as many entries without blocks as files
 		s.Deconstruct(nil, &unblockedRow{Key: []byte("a/f"), Kind: "file", Size: &five, LastModified: &at, AllocatedBytes: &block}),
 		s.Deconstruct(nil, &unblockedRow{Key: []byte("b"), Kind: "file", Size: &five, LastModified: &at}),
 	}}
@@ -625,11 +635,18 @@ func TestDuFromDatasetStatxLowerBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := duRun(t, "--from-dataset", ds, "--format", "tsv")
-	if r := duTSV(t, out); err != nil || r[0]["primary"] != "allocated_bytes" || r[0]["allocated_bytes"] != "8192" || r[0]["allocated_bytes_missing"] != "1" {
+	if r := duTSV(t, out); err != nil || r[0]["primary"] != "allocated_bytes" || r[0]["allocated_bytes"] != "4096" || r[0]["allocated_bytes_missing"] != "2" {
 		t.Fatalf("default: %v\n%s", err, out)
 	}
 	if out, err := duRun(t, "--from-dataset", ds, "--format", "table"); err != nil || !strings.HasPrefix(tableCells(strings.SplitN(out, "\n", 3)[1])[0], ">= ") {
 		t.Fatalf("table: %v\n%s", err, out)
+	}
+	// On a terminal the view draws the figure some entries had, though as
+	// many lack it as there are files.
+	viewTerminal(t, 100, 20)
+	t.Setenv("NO_COLOR", "1")
+	if out, err := duRun(t, "--from-dataset", ds, "-q"); err != nil || !strings.Contains(strings.SplitN(out, "\n", 2)[0], "share") {
+		t.Fatalf("view: %v\n%s", err, out)
 	}
 	var nb *totals.NoAllocatedError
 	if out, err := duRun(t, "--from-dataset", ds, "--allocated", "--format", "tsv"); !errors.As(err, &nb) || out != "" {

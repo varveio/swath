@@ -196,7 +196,7 @@ $ swath du media --metadata names --format jsonl
 An empty prefix has 0 of each figure its source has: an empty bucket's `size` is 0 and its `allocated_bytes`
 null, and an empty directory's `allocated_bytes` is its own blocks (unknown where they are not read). A local directory that could not be read (the run exits 3) has null `objects`, `dirs`, `size` and
 `allocated_bytes`, where an empty directory has 0; totals read from a saved dataset cannot tell that directory
-apart and give it 0 ([Total a source](totals.md#entries-that-could-not-be-read)). `max_last_modified` is null in
+apart and give it 0 files and bytes, and its own blocks on disk ([Total a source](totals.md#entries-that-could-not-be-read)). `max_last_modified` is null in
 all three cases, since no object under them had a time.
 The byte figures are JSON numbers and can exceed 2^53; parse them as 64-bit integers, not as floating point
 (JavaScript's `JSON.parse` rounds them).

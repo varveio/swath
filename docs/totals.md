@@ -118,7 +118,9 @@ $ swath du -d 1 s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-re
 The rows' fields, their types and when they are null are in [Output](output.md#du-rows).
 
 The [filters](filters.md) apply before counting, to every row: in a directory to its subdirectories too, so
-`--min-size 1M` keeps the large files and drops the directories, whose own size is small.
+`--min-size 1M` keeps the large files and drops the directories, whose own size is small. With a size or time
+filter the space on disk leaves out directories' own blocks: a directory passes such a filter by its own size and
+time, so `--max-size 4K` totals the small files, not every small directory.
 
 The totals take memory for each distinct prefix, never for each object: about 150 bytes a prefix. A run that
 would hold more than `--max-prefixes` (1,000,000 by default) fails rather than print partial totals; raise it
@@ -160,7 +162,8 @@ The space on disk is what the filesystem says, what `du` prints, but not the spa
 
 - A directory's own blocks count in its row and its parents', as `du` counts them, and its size in none.
   The source directory's own blocks are in no total, so a tree's figure is below `du -sB1`'s by that one
-  directory. Directories are counted in `dirs`, never as files.
+  directory; with `--one-file-system` a mount point's own blocks count, where `du -x` leaves the mount point
+  out. Directories are counted in `dirs`, never as files.
 - A symbolic link counts as a file of its own length; swath does not follow it.
 - Sparse files, compression, data stored inline in the metadata and cloud placeholder files can report less
   allocation than their length, down to zero; block rounding and preallocation can report more.
@@ -285,7 +288,7 @@ listing was complete (`complete`, or `partial:` and what is missing), then its f
 silences it, and in JSONL each row carries the same facts in a `dataset` member ([Output](output.md#du-rows)).
 A partial dataset prints its totals and exits 3, its last line saying why. A dataset that missed entries it
 could not read counts them but does not record which directories they were, so it cannot mark them: such a
-directory's row shows 0 where the live `swath du` shows `-` or null. A dataset listed with `--metadata names`
+directory's row shows 0 files and bytes (on disk, its own blocks) where the live `swath du` shows `-` or null. A dataset listed with `--metadata names`
 holds no lengths, blocks or links, so its rows are those of a live `--metadata names` run.
 
 A SOURCE after the directory restricts the totals to part of the dataset: the dataset's source as it was

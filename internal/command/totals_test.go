@@ -305,6 +305,36 @@ func TestDuDefaultFigure(t *testing.T) {
 	}
 }
 
+// TestDuFiltersLeaveOutDirBlocks: a size or time filter passes or drops a
+// directory by its own size and time, so with one the space on disk is the
+// kept files' blocks alone, as swath list's rows give them, never the
+// blocks of the directories the filter happened to keep.
+func TestDuFiltersLeaveOutDirBlocks(t *testing.T) {
+	root, _ := depthTree(t)
+	if err := os.WriteFile(filepath.Join(root, "a", "big"), make([]byte, 100_000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range [][]string{{"--max-size", "4K"}, {"--min-size", "2"}, {"--modified-since", "2026-01-02T03:30:00Z"}, {"--modified-until", "2030-01-01"}} {
+		var list bytes.Buffer
+		if err := run(context.Background(), append([]string{root, "--columns", "kind,allocated_bytes", "--no-stats", "--format", "tsv"}, f...), &list, false); err != nil {
+			t.Fatal(err)
+		}
+		var files int64
+		known := false
+		for i, l := range strings.Split(strings.TrimSpace(list.String()), "\n") {
+			c := strings.Split(l, "\t")
+			if n, err := strconv.ParseInt(c[1], 10, 64); i > 0 && c[0] == "file" && err == nil {
+				files, known = files+n, true
+			}
+		}
+		out, err := duRun(t, append([]string{root, "--format", "tsv"}, f...)...)
+		r := duTSV(t, out)[0]
+		if err != nil || known && r["allocated_bytes"] != strconv.FormatInt(files, 10) || !known && runtime.GOOS != "windows" {
+			t.Fatalf("%q: %v, du %v, the kept files' blocks %d\n%s", f, err, r, files, list.String())
+		}
+	}
+}
+
 // TestDuSortSize: --sort size orders the prefixes below each parent by
 // size, the largest first, each prefix's own below it and the total in its
 // place (last in the table, first in TSV); another order is refused. The

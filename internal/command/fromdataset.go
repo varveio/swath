@@ -173,7 +173,7 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	}
 	view := duView(&o, format, label, stdoutTerminal())
 	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
-		View: view != nil}
+		View: view != nil, NoDirBlocks: dirBlocksFiltered(&o.filter)}
 	// The figure the live run would lead with, from what the dataset
 	// recorded: a local tree's allocated bytes where its listing read them.
 	// A tree listed where blocks are not read (Windows) has the column but

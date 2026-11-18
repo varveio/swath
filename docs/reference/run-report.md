@@ -153,8 +153,9 @@ touched). `totals` is a
 orders by: `allocated_bytes` or `size`) and `primary_reason` (why: `flag`, `--allocated` or `--apparent-size`;
 `default`, a local tree whose listing reads blocks; `object_store`; `names_tier`; `platform`, a listing that
 reads no blocks, as on Windows; `dataset`, a saved dataset whose files have no allocated bytes), the total's `objects` (directories excluded) and
-`dirs`, its `size` and `allocated_bytes` (null when unknown: no object had one, or a source without allocated
-bytes) with `size_missing` and `allocated_bytes_missing` (the objects counted without each), its
+`dirs`, its `size` (null when unknown: no object had one) and `allocated_bytes` (the files' and the directories'
+own; null when unknown: no entry had one, or a source without allocated bytes) with `size_missing` (the objects
+counted without a size) and `allocated_bytes_missing` (the entries, directories too, without allocated bytes), its
 `max_last_modified` (null when no object had a time), `not_objects` (rows counted as no object: directories,
 delete markers), `links_once` (a local tree's hard-linked files counted once: without `--count-links`, on rows
 that identify their links, which `--metadata names` and Windows do not read), `linked_rows` (rows with more

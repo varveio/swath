@@ -98,6 +98,10 @@ type Options struct {
 	Primary string
 	// Reason says why Primary is the one it is (ReasonFlag and the others).
 	Reason string
+	// NoDirBlocks leaves directories' own blocks out of every figure: a
+	// size or time filter passes or drops a directory by its own size and
+	// time, so its blocks would follow the filter, not the files it keeps.
+	NoDirBlocks bool
 	// Lenient counts an entry without allocated bytes as missing rather
 	// than fail the count by them (the registry's binding): a listing whose
 	// platform may leave them out of some entries (statx), led by them by
@@ -456,9 +460,11 @@ func (b *Batch) Add(r *Row) {
 	case r.Dir:
 		b.notObjects++
 		c.dirs = 1
-		if r.HasAllocated {
+		switch {
+		case b.t.opt.NoDirBlocks:
+		case r.HasAllocated:
 			c.alloc, c.allocKnown = r.Allocated, 1
-		} else {
+		default:
 			c.allocMissing = 1
 		}
 	default:

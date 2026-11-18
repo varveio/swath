@@ -563,9 +563,10 @@ type totalsOut struct {
 func (t *totalsOut) write(w io.Writer) error {
 	if t.view != nil {
 		// Without the primary figure (the names metadata tier reads no
-		// sizes) there is nothing to rank: the table's total instead.
-		if v := t.tally.View(); v.Total.Missing == 0 || v.Total.Missing < v.Total.Objects {
-			return t.writeView(w, v)
+		// sizes) there is nothing to rank: the table's total instead. The
+		// tally knows it, directories' own blocks counted.
+		if _, ok := t.tally.Result()[0].Figure(t.tally.Options().Primary); ok {
+			return t.writeView(w, t.tally.View())
 		}
 	}
 	opt := t.tally.Options()

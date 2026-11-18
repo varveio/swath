@@ -613,7 +613,7 @@ func (r *ViewRun) Add(row *Row) {
 		if !leaf && !cut {
 			c.children = 1
 		}
-	} else if row.Dir && r.v.primary == AllocatedBytes {
+	} else if row.Dir && r.v.primary == AllocatedBytes && !r.t.opt.NoDirBlocks {
 		// Its own blocks, in its node and those above it, as the tally
 		// counts them.
 		if row.HasAllocated {
@@ -1150,7 +1150,9 @@ func (v *View) Select(rows int) []ViewRow {
 		}
 		out = append(out, ViewRow{Name: name, Level: level, Bytes: top.n.Bytes, Objects: top.n.Objects, Missing: top.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest,
 			Unreadable: top.n.Unreadable || s.n.Unreadable})
-		f := ViewRow{Level: level + 1, Fold: true, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, More: s.n.Children - shown(s)}
+		// The fold is the rest of the line's sums: the shared line's, its
+		// joined prefixes' own blocks too.
+		f := ViewRow{Level: level + 1, Fold: true, Bytes: top.n.Bytes, Objects: top.n.Objects, Missing: top.n.Missing, More: s.n.Children - shown(s)}
 		if s.n.Children < 0 {
 			f.More = -1
 		}
