@@ -108,6 +108,7 @@ class PolicyTests(unittest.TestCase):
             (['go.mod'], {'go', 'fixtures', 'images', 'platforms'}),
             (['go.sum'], {'go', 'fixtures', 'images', 'platforms'}),
             (['reader/go.sum'], {'go', 'reader', 'fixtures', 'images', 'platforms'}),
+            (['go.work'], {'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms'}),
             (['cmd/swath/foo_windows.go'], {'go', 'fixtures', 'platforms'}),
             (['internal/journal/lock.go'], {'go', 'fixtures', 'platforms'}),
             (['internal/source/localfs/scan.go'], {'go', 'fixtures', 'platforms'}),

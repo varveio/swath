@@ -79,8 +79,11 @@ The contributor reference is
 
 - The module `github.com/varveio/swath` is the repository root: the command in `cmd/swath`,
   the replay server in `cmd/swath-replay`, packages under `internal/`. `objfile/` and `reader/`
-  are nested modules with their own `go.mod`, which the root `go.mod` replaces with the local
-  directories. Its launcher and dataset differ from the Java v0.3.2 release.
+  are nested modules with their own `go.mod`; the root `go.mod` requires their released versions and
+  carries no `replace`, and `go.work` at the root joins the three modules so that local builds and CI
+  use the local directories. They keep their own versions: a release tags one only when its code changed,
+  then points the root at that tag through a pull request ([`RELEASING.md`](RELEASING.md#cutting-a-release)). Its launcher and dataset differ
+  from the Java v0.3.2 release.
 - [`docs/`](docs/README.md) is the source of truth for the code (architecture, the invariants,
   ordering, Parquet output, providers, testing, CLI); a code change is not done until its
   page there is current. Measurements are recorded, dated, in

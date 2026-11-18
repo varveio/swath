@@ -45,10 +45,10 @@ FROM --platform=$BUILDPLATFORM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b53
 ENV GOTOOLCHAIN=local
 WORKDIR /src
 
-# Modules first, so a source change reuses the downloaded module layer.
-COPY go.mod go.sum ./
-# The reader and objfile modules, which go.mod replaces with ./reader and
-# ./objfile, are part of the module graph.
+# Modules first, so a source change reuses the downloaded module layer. go.work joins the
+# root with the reader and objfile modules in ./reader and ./objfile, so the image builds the
+# local copies, as every build in the repository does.
+COPY go.work go.mod go.sum ./
 COPY reader/go.mod reader/go.sum ./reader/
 COPY objfile/go.mod objfile/go.sum ./objfile/
 ARG GOPROXY=https://proxy.golang.org,direct

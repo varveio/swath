@@ -174,10 +174,13 @@ jobs:
         run: go vet ./...
 
       # go.mod and go.sum are what the code imports: a dependency added, dropped or moved
-      # between direct and indirect without `go mod tidy` fails here, with the diff.
-      - name: go mod tidy -diff
+      # between direct and indirect without `go mod tidy` fails here, with the diff. tidy ignores
+      # go.work and reads the published reader and objfile the root requires, so -e lets through
+      # an import of a nested-module package that is not released yet. `just release-prep` and
+      # the release check it without -e, with the workspace off (RELEASING.md).
+      - name: go mod tidy -e -diff
         if: needs.changes.outputs.go == 'true'
-        run: go mod tidy -diff
+        run: go mod tidy -e -diff
 
       - name: Race shard table self-test
         if: needs.changes.outputs.go == 'true'
@@ -501,7 +504,8 @@ jobs:
 
   # The reader module (reader/), a nested module of its own: vet, tidiness, the race tests
   # (the dependency-graph check among them) and the static cross-builds. go-lint's gofmt
-  # covers it; the main module's tests decode its own writer's datasets with it.
+  # covers it; the main module's tests decode its own writer's datasets with it. It requires no
+  # other module of the repository; TestNoCloudSDK reads its module graph with the workspace off.
   go-reader:
     needs: changes
     runs-on: ubuntu-latest

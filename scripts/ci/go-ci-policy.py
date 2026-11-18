@@ -21,7 +21,10 @@ LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/ops/')
 NESTED = ('objfile/', 'reader/')
 MAIN_DIRS = ('cmd/', 'internal/', 'bench/', 'testdata/', 'docs/')
 MAIN_FILES = {'go.mod', 'go.sum', 'verify.py', 'dataset_schema.py', 'test_dataset_readers.py'}
-GO_TREE = (*NESTED, *MAIN_DIRS, *MAIN_FILES)
+# The workspace that joins the three modules for every build in the repository (go.work.sum is
+# not committed: .gitignore).
+WORKSPACE = 'go.work'
+GO_TREE = (*NESTED, *MAIN_DIRS, *MAIN_FILES, WORKSPACE)
 
 
 def in_go_tree(path):
@@ -55,12 +58,15 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
             # Any other page: the tests that read pages (TestDocs*, scripts/ci/go-docs-tests.sh).
             # Other files under docs/ stay the main module's: the docs package, and data tests read.
             out['docs'] = True
+        elif path == WORKSPACE:
+            out['go'] = out['reader'] = out['objfile'] = True
+            out['images'] = out['platforms'] = True
         elif in_go_tree(path):
             # Longest module prefix owns source, tests, embeds and fixtures alike.
             if path.startswith('objfile/'):
                 out['objfile'] = True
             elif path.startswith('reader/'):
-                out['reader'] = out['go'] = True  # main's local replace and reader tests
+                out['reader'] = out['go'] = True  # main builds it through go.work
             else:
                 out['go'] = True
             name = Path(path).name
