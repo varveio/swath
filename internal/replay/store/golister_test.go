@@ -12,15 +12,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
-// The Go lister's own datasets, written in-test by listing.Run against the
+// The Go lister's own datasets, written in-test by inventory.Run against the
 // in-process S3 and GCS fakes and against a local tree: the SeekParquet
 // datasets the replay server serves in production, with the lister's
 // part, row-group, page and index-bound geometry.
@@ -48,11 +51,11 @@ func listerKeys() []string {
 func listInto(t testing.TB, dir, name, uri string, options any) string {
 	t.Helper()
 	out := filepath.Join(dir, name)
-	_, err := listing.Run(context.Background(), listing.Config{
-		Source: listing.SourceConfig{URI: uri, Options: options},
+	_, err := inventory.Run(context.Background(), inventory.Config{
+		Source: inventory.SourceConfig{URI: uri, Options: options},
 		// A dataset is all these tests need: unjournaled where a journaled run is refused (Windows).
-		Output: listing.OutputConfig{Dir: out},
-		Limits: listing.Limits{PartSize: 6 << 10, PartInterval: -1},
+		Output: inventory.OutputConfig{Dir: out},
+		Limits: inventory.Limits{PartSize: 6 << 10, PartInterval: -1},
 	})
 	if err != nil {
 		t.Fatalf("list %s: %v", uri, err)

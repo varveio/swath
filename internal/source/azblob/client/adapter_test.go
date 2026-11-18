@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
 
@@ -501,6 +502,36 @@ func TestRedactedRefusal(t *testing.T) {
 	}
 	if sasLeak(err.Error()) != "" || !strings.Contains(err.Error(), "REDACTED") {
 		t.Fatalf("not redacted: %v", err)
+	}
+}
+
+// TestSDKLogWithheld: with the SDK's log on (as AZURE_SDK_GO_LOGGING
+// turns it on), an error answer whose body quotes the SAS, as sent or as
+// an XML entity, reaches the log without its body.
+func TestSDKLogWithheld(t *testing.T) {
+	var logged strings.Builder
+	azlog.SetListener(func(e azlog.Event, msg string) {
+		if e == azlog.EventResponseError {
+			logged.WriteString(msg)
+		}
+	})
+	t.Cleanup(func() { azlog.SetListener(nil) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(headerErrorCode, codeAuthFailed)
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintf(w, "<Error><Code>AuthenticationFailed</Code><Message>%s sig&#61;UnexpectedSecret</Message></Error>", r.URL.RawQuery)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(context.Background(), Config{Endpoint: srv.URL, Account: "acct", SAS: testSAS, Retry: objhttp.Retry{MaxAttempts: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.List(context.Background(), &ListInput{Container: "c"}); objhttp.Classify(err) != objhttp.ClassAuth {
+		t.Fatalf("class %q: %v", objhttp.Classify(err), err)
+	}
+	if got := logged.String(); !strings.Contains(got, "AuthenticationFailed") || sasLeak(got) != "" || strings.Contains(got, "UnexpectedSecret") {
+		t.Fatalf("SDK log: %q", got)
 	}
 }
 

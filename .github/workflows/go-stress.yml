@@ -2,7 +2,7 @@ name: Go stress
 
 # On-demand repetition of one Go test (or a regex of tests) to hunt flakes on a chosen OS and
 # scheduler width, e.g.
-#   gh workflow run go-stress.yml --ref <branch> -f package=./internal/listing -f run='^TestX$'
+#   gh workflow run go-stress.yml --ref <branch> -f package=./internal/inventory -f run='^TestX$'
 # The dispatch ref is the code under test. Inputs reach the shell only through env, never
 # through ${{ inputs.* }} in a run script, so a crafted regex cannot inject commands.
 
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: Package pattern relative to the repository root (e.g. ./internal/listing)
+        description: Package pattern relative to the repository root (e.g. ./internal/inventory)
         required: true
         default: ./...
       run:
@@ -57,12 +57,12 @@ jobs:
 
       # The ci.yml setup, restored and never saved: the shared module cache, which every runner
       # has, and the build cache of the ci.yml job on the same runner (go-race (rest) on amd64,
-      # go-race (listing-rest) on arm64; on macOS and Windows the go-xos legs', which build without
-      # -race: go-xos-listing-rest for ./internal/listing, else the full leg's go-xos).
+      # go-race (inventory-rest) on arm64; on macOS and Windows the go-xos legs', which build without
+      # -race: go-xos-inventory-rest for ./internal/inventory, else the full leg's go-xos).
       - name: Set up Go (version from go.mod)
         uses: ./.github/actions/setup-go
         with:
-          key: ${{ inputs.os == 'ubuntu-latest' && 'go-race-rest' || inputs.os == 'ubuntu-24.04-arm' && 'go-race-listing-rest' || inputs.package == './internal/listing' && 'go-xos-listing-rest' || 'go-xos' }}
+          key: ${{ inputs.os == 'ubuntu-latest' && 'go-race-rest' || inputs.os == 'ubuntu-24.04-arm' && 'go-race-inventory-rest' || inputs.package == './internal/inventory' && 'go-xos-inventory-rest' || 'go-xos' }}
 
       - name: go test (repeated)
         env:

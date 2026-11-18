@@ -16,8 +16,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 )
 
 type collect struct {
@@ -129,6 +129,12 @@ func list(t *testing.T, root string, opt Options, workers, budget int) ([]Row, S
 	if err != nil {
 		t.Fatal(err)
 	}
+	return walk(t, p, workers, budget)
+}
+
+// walk lists p's tree through the order stage.
+func walk(t *testing.T, p *Provider, workers, budget int) ([]Row, Stats) {
+	t.Helper()
 	c := &collect{}
 	if _, err := order.Run[Range, Entry](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
 		t.Fatal(err)
@@ -303,35 +309,6 @@ func TestSkipDirectory(t *testing.T) {
 	}
 }
 
-func TestOpenCheckedRejectsSymlinkedChild(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need privileges on Windows")
-	}
-	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	link := filepath.Join(base, "link")
-	if err := os.Mkdir(real, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	var st Stats
-	p := &Provider{}
-	if f, ok, _ := p.openChecked(context.Background(), Range{path: link, prefix: "x/"}, &st); ok {
-		f.Close()
-		t.Fatal("symlinked child directory was opened")
-	}
-	if st.Unsafe != 1 {
-		t.Fatalf("unsafe count %d", st.Unsafe)
-	}
-	if f, ok, _ := p.openChecked(context.Background(), Range{path: link}, &st); !ok { // the root may be a symlink
-		t.Fatal("symlinked root refused")
-	} else {
-		f.Close()
-	}
-}
-
 // TestCancelReleasesChunkFDs: a run that fails while large-directory chunks
 // are still queued releases their shared directory descriptor (the order
 // stage disposes ranges it never expands).
@@ -386,7 +363,7 @@ func (f *failAfter) Write(_ context.Context, segs [][]Row) error {
 }
 
 // TestUnsortedCountEqualsSortedListing: a count does not sort a
-// directory's entries (opened.Run sets unsorted and order's Unordered), yet
+// directory's entries (Opened.Begin sets unsorted and order's Unordered), yet
 // it sees the same keys, sizes and counts as a sorted listing, at every
 // tier and with a chunked directory.
 func TestUnsortedCountEqualsSortedListing(t *testing.T) {
@@ -399,12 +376,12 @@ func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 			t.Run(fmt.Sprintf("portable=%v/%s", portable, fields), func(t *testing.T) {
 				opt := Options{Fields: fields, LinkTarget: true, Portable: portable}
 				sorted, want := list(t, root, opt, 4, 7)
-				src, err := open(context.Background(), registry.Request{Root: root, Options: &opt, Workers: 4})
+				src, err := Open(root, opt, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				p := src.(*opened).p
-				st, _, err := src.Run(context.Background(), registry.Env{Count: true, Order: order.Options{Workers: 4}})
+				p := src.p
+				st, err := listOpened(context.Background(), src, nil, true, bind.Env{Order: order.Options{Workers: 4}}, nil)
 				if err != nil {
 					t.Fatal(err)
 				}

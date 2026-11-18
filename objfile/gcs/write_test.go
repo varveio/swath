@@ -179,6 +179,32 @@ func TestAbort(t *testing.T) {
 	})
 }
 
+// TestRetriedCarriesStatus: the error a retry is told to Retried exposes the
+// HTTP status of the failed answer, which the listing's failure classes read.
+func TestRetriedCarriesStatus(t *testing.T) {
+	f, c := client(t, plain)
+	var got atomic.Int64
+	w := gcs.NewWriter(c, bucket, gcs.WriteOptions{ChunkSize: chunk, Retried: func(_ string, err error) {
+		var s interface{ HTTPStatusCode() int }
+		if errors.As(err, &s) {
+			got.Store(int64(s.HTTPStatusCode()))
+		}
+	}})
+	var n atomic.Int32
+	f.SetFault(func(o, _ string, after bool) int {
+		if o == gcsfake.OpCreate && !after && n.Add(1) == 1 {
+			return http.StatusServiceUnavailable
+		}
+		return 0
+	})
+	if _, err := upload(t, w, "obj", objfiletest.Data(100, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if got.Load() != http.StatusServiceUnavailable {
+		t.Fatalf("the retried error carries status %d, want %d", got.Load(), http.StatusServiceUnavailable)
+	}
+}
+
 // TestTransient: a chunk or a creation the service fails transiently is
 // sent again (counted by Retried); a creation whose response was lost
 // completes from its session, which answers with the object. A chunk that

@@ -121,7 +121,7 @@ off; never with `--sequential`) the root is a seed that emits no rows and tiles 
 prior, so the engine can start from it instead of the seed: the root tiles the scope at the prior's cuts and lists
 nothing itself, no delimiter request is sent (`seed.requests` 0, the `seed` feature off, `seed_from` on). The prior
 (`source.Prior`, in `internal/source` so the pipeline fills it without importing a provider package; `source.Seeded` takes it) is source-neutral: ordered byte-exact cut keys, each with an optional count of the keys expected
-in the interval it closes, and the scope they were taken under. Two sources fill it (`internal/listing/prior.go`):
+in the interval it closes, and the scope they were taken under. Two sources fill it (`internal/inventory/prior.go`):
 - *a committed dataset directory* (SeekParquet): its cut file (`cuts.txt`, written at its commit,
   [dataset.md](../dataset.md#the-cut-file)) when it is the dataset's own (`datasetCuts`: counted, ascending from
   the first part's first key, ending at the last key, each count positive and the counts summing to the manifest's
@@ -131,7 +131,7 @@ in the interval it closes, and the scope they were taken under. Two sources fill
   column's page index (column index maxima and offset index row counts, 1,024-row pages; `parquetout.KeyPages`
   reads the footer and those two index sections, never a data page, through `seekparquet.InspectKeyPages`, which
   checks its footer and stamps first) gives cuts a thousand times finer. A run that orders its rows reads every
-  part's page index as it goes, in key order (`Prior.Stream`, `listing.pageStream`: one goroutine, at most two
+  part's page index as it goes, in key order (`Prior.Stream`, `inventory.pageStream`: one goroutine, at most two
   parts ahead of the plan, from the first part ending after a resume key; every key page a cut), for the plan
   below; the cuts offered up front (`invocation.prior.cuts`) are then 0. A dry run (`order.Count`, which takes no
   plan) is offered 4,096 cuts of about equal rows instead (four candidates per tile at the most tiles a run
@@ -433,7 +433,7 @@ resume state in provider options. The registered source exposes it through `keyr
 
 `Restart(K)` makes the scope `(K, ⊤]`: with a prior or the seed it is tiled as above, without them the root
 is one range `(K, ⊤]`, split as on a fresh run. The engine chooses K's longest accepted start bound and drops
-rows through K. Group mode drops every version of K, across pages. `source` `TestRegisteredRestart` checks
+rows through K. Group mode drops every version of K, across pages. `cli` `TestRegisteredRestart` checks
 remaining keys and complete version groups through registry opening; engine resume and crash tests cover
 range tiling and recovery ([durability.md](durability.md)).
 

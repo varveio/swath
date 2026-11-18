@@ -12,8 +12,8 @@ core package uses only the standard library. Provider packages use their officia
 SDKs; all three SDKs appear in the module graph, but a program links only the
 providers it imports. Importing `objfile/remote` links all three.
 
-From swath 0.4.0 the module is released with swath, at the same version, tagged
-`objfile/vX.Y.Z`: `go get github.com/varveio/swath/objfile@v0.4.0`. It is at version 0, with no
+From swath 0.4.0 the module is tagged `objfile/vX.Y.Z`, with a version of its own:
+`go get github.com/varveio/swath/objfile@v0.4.0`. It is at version 0, with no
 API compatibility promise: a minor release may change its API.
 
 objfile handles individual objects. It does not list, rename, or overwrite them, or
@@ -222,6 +222,8 @@ the store's object name (a `Root` prefix included), the range, whether it retrie
 earlier work, the bytes consumed and the error. Each batch reports its plan
 (ranges in, requests out, gap bytes read and discarded) and a byte cache the bytes
 it served. Without an Observer this costs a context lookup and nothing else.
+swath's live source reports its requests to the same Observer: a listing page as a
+`ListRequest`, a lookup's HEAD requests as metadata ([the Go library](../docs/library.md)).
 
 `IOReporter` says whether the observation is complete. A `remote.Store` reports
 true: its clients send through a transport that reports every HTTP attempt, the

@@ -38,9 +38,9 @@
 #
 # The heavy shards race on the arm64 runner only: its weaker memory model makes it the better
 # race target, and the same -race suite took ~30 % less time there than on amd64
-# (internal/listing 490 s against 700 s). The nightly full, unsharded race run on amd64 covers
+# (internal/inventory 490 s against 700 s). The nightly full, unsharded race run on amd64 covers
 # the other side. The `rest*` shards stay on amd64: the arm64 gain was measured on
-# internal/listing only, and some packages record amd64-specific results (parquetout's
+# internal/inventory only, and some packages record amd64-specific results (parquetout's
 # footeronly_test.go).
 set -euo pipefail
 
@@ -49,28 +49,28 @@ amd=ubuntu-latest
 # name, runner, packages (-: every package no row names), -run pattern (-: whole packages, or
 # the remainder of a split package), build cache (-: the shard's own; else the shard whose cache
 # it shares). Rows that compile the same packages with the same flags on the same runner can
-# share one cache instead of each growing its own: the `internal/listing` rows build one test
-# binary and their tests build nothing else; the `cmd/swath` rows' tests both build the swath
+# share one cache instead of each growing its own: the `internal/inventory` rows build one test
+# binary and their tests build nothing else; the `command` rows' tests both build the swath
 # binary with the swathtest tag, and `cmd`'s also without it (a few entries, rebuilt when the
 # kill shard saved the shared cache first).
 table=(
-  "crash        $arm ./internal/listing                         ^TestCrashMatrix\$                       listing-rest"
-  "durable      $arm ./internal/listing                         ^(TestDurable.*|TestDiskFaultMatrix)\$   listing-rest"
-  "remote-crash $arm ./internal/listing                         ^TestRemoteCrashMatrix\$                 listing-rest"
-  "listing-rest $arm ./internal/listing                         -                                        -"
-  "cmd-kill     $arm ./cmd/swath                                ^(TestSIGKILL.*|TestForcedExit.*)\$      cmd"
-  "cmd          $arm ./cmd/swath                                -                                        -"
-  "rest-replay  $amd ./internal/replay/...,./bench/replaydiff   -                                        -"
-  "rest-source  $amd ./internal/source/...                      -                                        -"
-  "rest         $amd -                                         -                                        -"
+  "crash          $arm ./internal/inventory                     ^TestCrashMatrix\$                       inventory-rest"
+  "durable        $arm ./internal/inventory                     ^(TestDurable.*|TestDiskFaultMatrix)\$   inventory-rest"
+  "remote-crash   $arm ./internal/inventory                     ^TestRemoteCrashMatrix\$                 inventory-rest"
+  "inventory-rest $arm ./internal/inventory                     -                                        -"
+  "cmd-kill       $arm ./command                                ^(TestSIGKILL.*|TestForcedExit.*)\$      cmd"
+  "cmd            $arm ./command                                -                                        -"
+  "rest-replay    $amd ./internal/replay/...,./bench/replaydiff -                                        -"
+  "rest-source    $amd ./internal/source/...                    -                                        -"
+  "rest           $amd -                                        -                                        -"
 )
 
 # The Windows legs of ci.yml `go-xos` on a full platform run, one race shard per leg where the
 # shards are long. Windows runs the suite without -race about three times slower than macOS
-# (internal/listing 17 min alone, 28 min beside the other packages, 2026-11-16), and a leg that ran
+# (internal/inventory 17 min alone, 28 min beside the other packages, 2026-11-16), and a leg that ran
 # several long shards one after another came within minutes of its limit, so its run is split
 # along the shards above: a leg names shards, comma-separated, and runs one `go test` per shard in
-# order. Every shard is in exactly one leg. Each `internal/listing` and `cmd/swath` shard is a leg
+# order. Every shard is in exactly one leg. Each `internal/inventory` and `command` shard is a leg
 # (each takes 5 to 9 min there, `remote-crash` 5 of them, 2026-11-17), and the `rest*` shards
 # share one. The leg holding `rest` is the full one: it also vets the module and tests the nested
 # modules.
@@ -78,22 +78,22 @@ windows=(
   "crash           crash"
   "durable         durable"
   "remote-crash    remote-crash"
-  "listing-rest    listing-rest"
+  "inventory-rest  inventory-rest"
   "cmd-kill        cmd-kill"
   "cmd             cmd"
   "rest            rest-replay,rest-source,rest"
 )
 
 # The macOS legs of ci.yml `go-xos` on a full platform run, in the same form. One macOS job ran
-# `internal/listing` and `cmd/swath` side by side on three vCPUs and was the critical job of a full
-# run (14.5 to 15.7 min, 2026-11-17); alone, without -race, `internal/listing` takes about 5.4 min
-# of test time there and `cmd/swath` 9.2. So `internal/listing` is a leg and everything else the
+# `internal/inventory` and `command` side by side on three vCPUs and was the critical job of a full
+# run (14.5 to 15.7 min, 2026-11-17); alone, without -race, `internal/inventory` takes about 5.4 min
+# of test time there and `command` 9.2. So `internal/inventory` is a leg and everything else the
 # full one. Unlike a Windows leg, a macOS leg runs its packages in one `go test`, side by side as
 # the single job did: a split package whose rows are all in the leg runs whole (one process, all
 # its tests), and a row of a split package whose other rows are elsewhere runs in a `go test` of
 # its own after it.
 macos=(
-  "listing         crash,durable,remote-crash,listing-rest"
+  "inventory       crash,durable,remote-crash,inventory-rest"
   "rest            cmd-kill,cmd,rest-replay,rest-source,rest"
 )
 
@@ -158,7 +158,8 @@ leg_cache() {
 # have no cgo, which -race needs).
 load_packages() {
   local module
-  module=$(go list -m)
+  # The root module alone: in the workspace (go.work) `go list -m` lists every module of it.
+  module=$(GOWORK=off go list -m)
   ALL=$(go list ${1:+"$1"} ./... | sed "s#^$module\$#.#; s#^$module/#./#" | sort -u)
   if [ -z "$ALL" ]; then echo "go list $1 ./... lists no package" >&2; return 1; fi
 }

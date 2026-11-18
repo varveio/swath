@@ -1,9 +1,11 @@
 # The list clients
 
 Each object-store provider lists through one client, built on the vendor's SDK service client:
-`internal/source/s3/client` over `service/s3` (ListObjectsV2 and ListObjectVersions),
+`internal/source/s3/client` over `service/s3` (ListObjectsV2 and ListObjectVersions; HeadObject and HeadBucket for
+the library's lookups, [library.md](../library.md)),
 `internal/source/gcs/client` over Google's generated `google.golang.org/api/storage/v1` (`objects.list`), and
-`internal/source/azblob/client` over `sdk/storage/azblob` v1.8.3 (List Blobs and Get Account Information). The SDK
+`internal/source/azblob/client` over `sdk/storage/azblob` v1.8.3 (List Blobs and Get Account Information; Get Blob
+Properties for the library's lookups). The SDK
 sends the request; swath keeps what a listing tool must guarantee and the SDKs do not. The providers above the
 clients are described in [providers.md](providers.md) and the page of each provider.
 
@@ -80,7 +82,8 @@ clients are described in [providers.md](providers.md) and the page of each provi
   calls each hold their own allocations. An Azure body past its cap is a terminal refusal (`ErrBodyCap`),
   with no page-size reduction. Non-2xx bodies are truncated to 64 KiB for diagnostics. A cut non-2xx
   keeps its status and bytes read; a cut 2xx is a retryable connection failure. The original body is
-  closed once on every path. Guard failures are `*GuardError`, recovered through `objhttp.Cause`,
+  closed once on every path. The response goes up with its `Content-Length` set to the bytes read, except a HEAD
+  answer's, which describes the object and goes up unchanged. Guard failures are `*GuardError`, recovered through `objhttp.Cause`,
   so the wrapping `url.Error` is never mistaken for a retryable connection failure.
   Guard validation is only part of page validation: S3 scans its captured listing body after the SDK
   call; GCS decodes in the SDK, then maps and validates rows; Azure checks the XML or Arrow envelope in the
@@ -94,10 +97,10 @@ clients are described in [providers.md](providers.md) and the page of each provi
   GCS and Azure size their pools by workers and rotate their SDK services.
 - **Secret-safe diagnostics.** [Endpoint validation](#endpoint-validation) refuses credential-bearing
   endpoint URLs before they can be recorded. `registry.RedactArgv`, shared by the command and listing,
-  replaces every URL flag declared by the shared flag groups (`source.FlagGroup.URLs`, currently
+  replaces every URL flag declared by the shared flag groups (`registry.FlagGroup.URLs`, currently
   `--endpoint-url`) with `[redacted]` when it cannot parse or contains user information, `?` or `#`,
   in either argument spelling. Clean values are kept for resume. This also protects failure reports
-  and recorded arguments supplied to listing (`cmd/swath` `TestEndpointUserinfoReports`,
+  and recorded arguments supplied to listing (`command` `TestEndpointUserinfoReports`,
   `TestEndpointQuerySecrecy`; `registry` `TestRedactEndpointArgv`). User information, queries and
   fragments in a root authority are refused before provider dispatch and redacted even on refusal. Clean roots, buckets and endpoints
   remain in diagnostics. Provider parse errors use `source.RedactRoot` to hide an unsafe authority;

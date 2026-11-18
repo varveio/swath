@@ -44,7 +44,8 @@ inventory/run.json
 
 The dataset is a [SeekParquet](https://github.com/varveio/seekparquet) dataset
 ([format 1](https://github.com/varveio/seekparquet/blob/go/v0.2.0/spec/format-1.md)), so DuckDB, pandas, Spark or any Parquet reader reads the parts, and a SeekParquet reader can seek by key.
-From Go, the [`reader`](../reader/README.md) module opens a dataset and decodes its rows. The order in which a
+From Go, the [`reader`](../reader/README.md) module opens a dataset and decodes its rows, and its
+[inventory view](../reader/README.md#the-inventory-view) pages, looks up, walks and sums it. The order in which a
 run writes these files is in [Parquet output (internals)](internals/parquet-output.md#publication-gate-and-order).
 
 ## The swath extension

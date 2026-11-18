@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 PLATFORM_FILE = re.compile(r'_(windows|darwin|linux|unix|arm64|amd64)(_|\.)|\.s$')
-PLATFORM_PATHS = ('internal/journal/', 'internal/source/localfs/',
+PLATFORM_PATHS = ('internal/journal/', 'internal/source/localfs/', 'local/',
                   'internal/parquetout/', 'internal/order/')
 PACKAGING = {'Dockerfile', '.dockerignore', 'build.sh', 'notices.sh', 'LICENSE', 'NOTICE'}
 ROOT_PROSE = {'README.md', 'CHANGELOG.md', 'AGENTS.md', 'CONTRIBUTING.md',
@@ -17,15 +17,21 @@ MODULES = {'go': 'go.mod', 'reader': 'reader/go.mod', 'objfile': 'objfile/go.mod
 # Pages under docs/ that no Go test reads: the media, the style guide and the maintainers' pages.
 # Their links are checked by go-lint on every event, like the root prose.
 LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/ops/')
-# The Go tree: the nested modules' directories, and the main module's directories and root files.
+# The Go tree: the nested modules' directories, and the main module's directories and root files
+# (the root package's .go files too: in_go_tree).
 NESTED = ('objfile/', 'reader/')
-MAIN_DIRS = ('cmd/', 'internal/', 'bench/', 'testdata/', 'docs/')
+MAIN_DIRS = ('cmd/', 'command/', 'internal/', 'bench/', 'testdata/', 'docs/',
+             's3/', 'gcs/', 'azblob/', 'local/')
 MAIN_FILES = {'go.mod', 'go.sum', 'verify.py', 'dataset_schema.py', 'test_dataset_readers.py'}
-GO_TREE = (*NESTED, *MAIN_DIRS, *MAIN_FILES)
+# The workspace that joins the three modules for every build in the repository (go.work.sum is
+# not committed: .gitignore).
+WORKSPACE = 'go.work'
+GO_TREE = (*NESTED, *MAIN_DIRS, *MAIN_FILES, WORKSPACE)
 
 
 def in_go_tree(path):
-    return path.startswith(NESTED + MAIN_DIRS) or path in MAIN_FILES
+    return (path.startswith(NESTED + MAIN_DIRS) or path in MAIN_FILES
+            or ('/' not in path and path.endswith('.go')))
 
 
 def fixture_module(path):
@@ -55,12 +61,15 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
             # Any other page: the tests that read pages (TestDocs*, scripts/ci/go-docs-tests.sh).
             # Other files under docs/ stay the main module's: the docs package, and data tests read.
             out['docs'] = True
+        elif path == WORKSPACE:
+            out['go'] = out['reader'] = out['objfile'] = True
+            out['images'] = out['platforms'] = True
         elif in_go_tree(path):
             # Longest module prefix owns source, tests, embeds and fixtures alike.
             if path.startswith('objfile/'):
                 out['objfile'] = True
             elif path.startswith('reader/'):
-                out['reader'] = out['go'] = True  # main's local replace and reader tests
+                out['reader'] = out['go'] = True  # main builds it through go.work
             else:
                 out['go'] = True
             name = Path(path).name

@@ -5,6 +5,7 @@ package client
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/varveio/swath/internal/source/objhttp"
 )
@@ -25,12 +26,23 @@ type Object struct {
 	Key               string
 	ETag              string // as sent, quotes included
 	Size              int64
+	NoSize            bool  // a <Contents> without <Size>: Size is 0, not the object's
 	Mtime             int64 // LastModified in Unix microseconds; 0 when absent
 	StorageClass      string
 	OwnerID           string
 	OwnerDisplayName  string
 	ChecksumAlgorithm string // the first listed
 	ChecksumType      string
+}
+
+// Head is one HeadObject response: what it says of the object. A field
+// the answer did not carry is nil or empty.
+type Head struct {
+	Size         *int64     // Content-Length
+	LastModified *time.Time // Last-Modified, to the second
+	// StorageClass is x-amz-storage-class, which S3 sends for every class
+	// but STANDARD.
+	StorageClass string
 }
 
 // Page is one ListObjectsV2 response.
@@ -97,13 +109,25 @@ type Error struct {
 	Note    string // what swath adds about the answer, or ""
 }
 
-func (e *Error) Error() string {
+// Error is the message for the command's user: a wrong-region answer
+// names the flag that sets the region.
+func (e *Error) Error() string { return e.text("give --s3-region " + e.Region) }
+
+// Library is the message for a library caller, who sets the region with
+// no flag: a wrong-region answer names the bucket's region only.
+func (e *Error) Library() string { return e.text("") }
+
+// text is the message, a wrong-region answer's advice to fix it.
+func (e *Error) text(advice string) string {
 	s := fmt.Sprintf("S3 %d %s", e.Status, e.Code)
 	if e.Message != "" {
 		s += ": " + e.Message
 	}
-	if e.Region != "" {
-		s += " (the bucket is in " + e.Region + ": give --s3-region " + e.Region + ")"
+	switch {
+	case e.Region != "" && advice != "":
+		s += " (the bucket is in " + e.Region + ": " + advice + ")"
+	case e.Region != "":
+		s += " (the bucket is in " + e.Region + ")"
 	}
 	if e.Note != "" {
 		s += " (" + e.Note + ")"

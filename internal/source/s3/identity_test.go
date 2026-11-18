@@ -9,11 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/spf13/pflag"
-
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/registry"
-	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -31,12 +27,8 @@ func TestIdentityRecordsInputs(t *testing.T) {
 		t.Helper()
 		t.Setenv("AWS_REGION", region)
 		opt.Anonymous = true
-		src, err := open(context.Background(), registry.Request{Root: "s3://bkt/p/", Options: &opt, Workers: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
 		m := map[string]string{}
-		for _, f := range src.(source.Identified).Identity().Fields {
+		for _, f := range openRoot(t, "s3://bkt/p/", opt).Identity().Fields {
 			m[f.Name] = f.Canonical
 			if f.Canonical == "" {
 				m[f.Name] = f.Value
@@ -109,12 +101,8 @@ func TestResumeRefusesEndpointPath(t *testing.T) {
 		if opt.Client == nil {
 			opt.Anonymous = true
 		}
-		src, err := open(context.Background(), registry.Request{Root: "s3://bkt/p/", Options: &opt, Workers: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
 		id := journal.Identity{Provider: "s3"}
-		for _, f := range src.(source.Identified).Identity().Fields {
+		for _, f := range openRoot(t, "s3://bkt/p/", opt).Identity().Fields {
 			id.Source = append(id.Source, journal.Field{Name: f.Name, Value: f.Value, Canonical: f.Canonical})
 		}
 		return id
@@ -153,21 +141,14 @@ func (r routedSuffix) Route(bucket string) string { return r.routed.Route(bucket
 // identified by it (in place of the endpoint); one that does not declines resume, so two unrelated
 // clients never share an identity.
 func TestSuppliedClientIdentity(t *testing.T) {
-	anon, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Client: &stub{}}, Workers: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if anon.(source.Capable).Capabilities().Resume {
+	if openRoot(t, "s3://bkt", Options{Client: &stub{}}).Capabilities().Resume {
 		t.Fatal("a supplied client without a route declares resume")
 	}
-	named, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Client: routed{&stub{}, "https://elsewhere/"}}, Workers: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !named.(source.Capable).Capabilities().Resume {
+	named := openRoot(t, "s3://bkt", Options{Client: routed{&stub{}, "https://elsewhere/"}})
+	if !named.Capabilities().Resume {
 		t.Fatal("a supplied client with a route declines resume")
 	}
-	for _, f := range named.(source.Identified).Identity().Fields {
+	for _, f := range named.Identity().Fields {
 		if f.Name == "endpoint" && f.Value != "https://elsewhere/bkt" {
 			t.Fatalf("endpoint %q", f.Value)
 		}
@@ -184,49 +165,28 @@ func (r routed) Route(bucket string) string { return r.base + bucket }
 // TestCappedRunCannotResume: an object-count cap counts what one process
 // listed, so a capped run declares no resume (it keeps no journal).
 func TestCappedRunCannotResume(t *testing.T) {
-	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: &Options{Anonymous: true, Endpoint: "http://127.0.0.1:1", Policy: keyrange.Policy{Sequential: true, MaxKeys: 5}}, Workers: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if src.(source.Capable).Capabilities().Resume {
+	src := openRoot(t, "s3://bkt", Options{Anonymous: true, Endpoint: "http://127.0.0.1:1", Policy: keyrange.Policy{Sequential: true, MaxKeys: 5}})
+	if src.Capabilities().Resume {
 		t.Fatal("a capped run declares resume")
 	}
 }
 
-// factory is the registered S3 factory.
-func factory(t *testing.T) registry.Factory {
+// openRoot opens root's current objects with opt and one worker.
+func openRoot(t *testing.T, root string, opt Options) *Opened[Object] {
 	t.Helper()
-	f, err := registry.Lookup("s3://bkt")
+	opt.Workers = 1
+	src, err := Open(context.Background(), root, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return f
+	return src
 }
 
-// TestEngineFlagsShared: S3 takes the store's and the range engine's flag
-// groups the command registered once and passed to it, and opens with the
-// parsed values.
-func TestEngineFlagsShared(t *testing.T) {
-	s3test.NoCredentials(t)
-	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
-	v := factory(t).RegisterFlags(f, true)
-	if err := f.Parse([]string{"--slow-split", "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--request-timeout", "7s"}); err != nil {
-		t.Fatal(err)
-	}
-	src, err := open(context.Background(), registry.Request{Root: "s3://bkt", Options: v, Workers: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := src.(*opened[Object]).p
-	if !p.opt.Seed || !p.opt.SlowSplit || !p.opt.Anonymous || !p.Options().SlowSplit || p.opt.Endpoint != "http://127.0.0.1:1" || p.opt.Timeout.Seconds() != 7 {
-		t.Fatalf("shared flags not applied: %+v", p.opt)
-	}
-	// Defaults (no flags parsed) hold the engine's defaults. Anonymous is set
-	// so the client builds without credentials (none are configured here).
-	o := defaults().(*flagged)
-	o.store = &source.Store{Anonymous: true}
-	src, err = open(context.Background(), registry.Request{Root: "s3://bkt", Options: o, Workers: 2})
-	if err != nil || src.(*opened[Object]).p.opt.Seed {
-		t.Fatalf("defaults: %v", err)
+// TestPolicyReachesEngine: the range engine's policy in the options is
+// the engine's.
+func TestPolicyReachesEngine(t *testing.T) {
+	src := openRoot(t, "s3://bkt", Options{Anonymous: true, Endpoint: "http://127.0.0.1:1", Policy: keyrange.Policy{Seed: true, SlowSplit: true}})
+	if !src.p.Options().SlowSplit {
+		t.Fatalf("the engine's options %+v", src.p.Options())
 	}
 }

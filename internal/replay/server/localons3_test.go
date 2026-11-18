@@ -14,9 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/replay/store"
 	"github.com/varveio/swath/internal/source/localfs"
+
+	// The command's composition registers the providers by scheme.
+	_ "github.com/varveio/swath/internal/cli"
 )
 
 // recordLocal writes files (relative path to body) under a temporary
@@ -47,9 +50,9 @@ func recordLocal(t *testing.T, files map[string]string, mtime time.Time) string 
 		}
 	}
 	out := filepath.Join(root, "ds")
-	if _, err := listing.Run(context.Background(), listing.Config{
-		Source: listing.SourceConfig{URI: tree, Options: &localfs.Options{}},
-		Output: listing.OutputConfig{Dir: out},
+	if _, err := inventory.Run(context.Background(), inventory.Config{
+		Source: inventory.SourceConfig{URI: tree, Options: &localfs.Options{}},
+		Output: inventory.OutputConfig{Dir: out},
 	}); err != nil {
 		t.Fatal(err)
 	}

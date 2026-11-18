@@ -67,7 +67,7 @@ func TestExcludeResolvesTheParent(t *testing.T) {
 				t.Fatalf("%s: a write landed at %q in the tree; the test wants %q", path, landed, want)
 			}
 			for _, portable := range []bool{false, true} {
-				o := pruneOpen(t, root, Options{Portable: portable}).(*opened)
+				o := pruneOpen(t, root, Options{Portable: portable})
 				if err := o.Exclude(path); err != nil {
 					t.Fatalf("%s: %v", path, err)
 				}
@@ -98,7 +98,7 @@ func TestExcludeStoredSpelling(t *testing.T) {
 			t.Skipf("no hard links here: %v", err)
 		}
 	}
-	o := pruneOpen(t, root, Options{}).(*opened)
+	o := pruneOpen(t, root, Options{})
 	if err := o.Exclude(filepath.Join(root, "ROWS.jsonl")); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestExcludeStoredSpelling(t *testing.T) {
 	}
 	// A name equal without case that does not exist yet is created by the
 	// commit; the existing file of another spelling stays listed.
-	o = pruneOpen(t, root, Options{}).(*opened)
+	o = pruneOpen(t, root, Options{})
 	if err := o.Exclude(filepath.Join(root, "Rows.JSONL.new")); err != nil {
 		t.Fatal(err)
 	}

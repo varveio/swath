@@ -926,7 +926,7 @@ SHA-256 since journal version 9): a 16 GiB, 4-vCPU VM, virtio disk, 1 GiB in 16 
 376 MiB/s with the page cache dropped before each of three repetitions, 511 MiB/s warm, where MD5 on one core
 was the limit. SHA-256 on one core of a Xeon Platinum 8581C (SHA extensions, 2026-11-08): 1,504 MiB/s, against
 692 for MD5; a CPU without the SHA extensions hashes SHA-256 slower than MD5. Not remeasured end to end. 10,000 retained 64 MiB parts take roughly
-30–45 minutes. Reproduce: `SWATH_VERIFY_DIR=DIR go test -run TestVerifyThroughput -v ./internal/listing`.
+30–45 minutes. Reproduce: `SWATH_VERIFY_DIR=DIR go test -run TestVerifyThroughput -v ./internal/inventory`.
 
 **Part-count growth** (synthetic GCS fake, 8 workers, one-row parts, one run each):
 
@@ -1332,6 +1332,29 @@ LOOKUPs, 95 READDIRs. Paired, 6 cold rounds: 5.85 s to 2.42 s, −57.9 % [−64.
 each batch as it reads). Local ext4, the same directory warm, 20 rounds: −6.3 % [−19.0, +1.7], no cost. The box
 was loaded by other builds during these runs; the RPC counts do not depend on load.
 
+### Descriptor-relative opens (2026-11-17)
+
+**Synthetic, local, shared host.** 18 vCPU arm64 Linux 7.0 VM, overlay filesystem, Go 1.27, warm; trees from
+`bench/gen_tree.py` (`deep`: 500,000 files in 16,670 directories; `realistic` as above). Other builds ran on
+the box throughout (load average 5 to 15). Paired and interleaved (the arms' order alternates by round), the
+median of the per-round differences with a 95 % bootstrap interval, `7aa35e7a` (directories opened by their
+path) against the change (every directory below the root opened relative to its parent's descriptor), default
+workers (64):
+
+| | rounds | before | after | change |
+|---|---:|---:|---:|---:|
+| `deep`, `swath diag count` | 40 | 0.142 s | 0.140 s | −0.4 % [−3.6, +4.5] |
+| `realistic`, `swath diag count` | 40 | 0.448 s | 0.446 s | +1.6 % [−5.6, +7.2] |
+| `realistic`, `swath diag count --metadata names` | 60 | 0.294 s | 0.301 s | +1.7 % [−0.5, +5.0] |
+| `realistic`, `swath list -o` (sorted Parquet) | 40 | 1.093 s | 1.111 s | −2.8 % [−5.4, +2.5] |
+
+An open relative to the parent costs no more than one by path. The descriptors kept (`dir_opens.peak_kept`) on
+`realistic`: 228 in the sorted listing; in a count 71 at 16 workers, 489 at 64, 728 at 256, 885 at 512, all
+within the limit of 1,024 with nothing refused. At 1,024 workers the limit binds: 16,457 directories refused,
+14,592 opened from an ancestor, the listing whole. With a hard descriptor limit of 256 (a limit of 64 kept), a
+count refuses 75,417 directories and opens 70,679 from an ancestor, every one of the 99,892 opened, and takes
++19.7 % [+9.9, +28.6] (15 rounds, the earlier build first in each; 0.406 to 0.467 s).
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake
@@ -1630,7 +1653,7 @@ command to reproduce:
 
 So an upload of one 64 MiB part takes about 43 ms of wall time on this host with a server that drops the bytes (client and server together), one chunk buffer per open
 upload, against the seconds of CPU a part's encoding takes. `TestMeasureRemoteOverhead`
-(`SWATH_MEASURE_REMOTE=1`, `internal/listing`) runs one listing of 400,000 keys (gofakes3) with 4 encoders and
+(`SWATH_MEASURE_REMOTE=1`, `internal/inventory`) runs one listing of 400,000 keys (gofakes3) with 4 encoders and
 256 KiB parts (28 parts, 7.8 MB) to a local directory and to the fake, three times each: wall time 0.97 to
 1.15 s either way, process CPU (the fakes' included) 3.1 to 3.4 s local and 3.2 to 3.7 s remote after the first
 run, and the remote runs' `upload_wait_ns` 0.48 to 0.60 s summed over the encoders (each part one request to
@@ -2623,7 +2646,7 @@ and Linux arm64 on pull requests, macOS on `main`), job wall times in minutes, o
 | `go-race (cmd-kill)` | 4.3 | 4.6 | 4.6 |
 | `go-race (rest-replay)` | 4.1 | 3.4 | 3.2 |
 | `go-race (rest-source)` | 3.4 | 4.8 | 2.7 |
-| `go-race (listing-rest)` | 2.8 | 2.9 | 3.0 |
+| `go-race (inventory-rest)` | 2.8 | 2.9 | 3.0 |
 | `go-race (crash)`, `(durable)`, `(cmd)` | 2.4–2.5 | 2.5–2.9 | 2.4–2.5 |
 | `go-race (rest)` | 2.2 | 1.7 | 1.6 |
 | `go-xos (windows-latest)` | 5.0 | 5.8 | 5.4 |
@@ -2642,7 +2665,7 @@ Cache sizes as `gh cache list` reports them (zstd-compressed) after the warm run
 MiB on each of Linux amd64, Linux arm64, Windows and macOS (2.0 GB); the build caches `go-objfile` 628,
 `go-build` 357, `go-lint` 206, `go-reader` 204, `go-race (cmd)` 161, `go-race (rest)` 157, `go-xos` 146–155
 per OS, `go-race (cmd-kill)` 140, `rest-source` 122, `rest-replay` 111, `go-fixtures` 106, `go-nonrace` 87,
-`crash`/`durable`/`listing-rest` 78 each (2.9 GB). One generation is about 4.9 GB; a second exists while
+`crash`/`durable`/`inventory-rest` 78 each (2.9 GB). One generation is about 4.9 GB; a second exists while
 two `main` runs overlap, and `go-cache-prune` deleted 6, 2 and 3 superseded entries in the three runs. The
 13 legacy combined entries (6.7 GB) were deleted by hand after #355 merged.
 
@@ -2659,8 +2682,8 @@ caches from `main` only; its own pull-request run left no `buildkit-blob` entry 
 Before, with #605's journaled, crash and kill matrices on Windows
 ([run 43869241395](https://github.com/varveio/swath/actions/runs/43869241395), `151f3d71`): the single
 `go-xos (windows-latest)` job took 31.8 min, 2.1 of them setup and 29.1 the main module's tests, where
-`internal/listing` took 1680 s and `cmd/swath` 869 s side by side with every other package on the four
-vCPUs. Alone in `go-stress.yml` on the same commit, without `-race`, `internal/listing` took 1041 s
+`internal/inventory` took 1680 s and `cmd/swath` 869 s side by side with every other package on the four
+vCPUs. Alone in `go-stress.yml` on the same commit, without `-race`, `internal/inventory` took 1041 s
 (`TestCrashMatrix` 233 s, `TestDurable*` and `TestDiskFaultMatrix` 233 s, the remainder 576 s,
 [run 43879478559](https://github.com/varveio/swath/actions/runs/43879478559)) and `cmd/swath` 592 s
 (`TestSIGKILL*` and `TestForcedExit*` 587 s of test time, run in parallel; the remainder 313 s,
@@ -2670,14 +2693,14 @@ After (#608, three legs along the race shards), job wall time in minutes:
 
 | job | [43883096460](https://github.com/varveio/swath/actions/runs/43883096460) | [43886553653](https://github.com/varveio/swath/actions/runs/43886553653) | [43894962300](https://github.com/varveio/swath/actions/runs/43894962300) |
 |---|---:|---:|---:|
-| `go-xos (windows-latest, listing-rest)` | 16.8 | 13.8 | 13.6 |
+| `go-xos (windows-latest, inventory-rest)` | 16.8 | 13.8 | 13.6 |
 | `go-xos (windows-latest, cmd)` | 14.1 | 14.3 | 14.1 |
 | `go-xos (windows-latest, matrices-rest)` | 18.6 | 12.1 | 15.2 |
 | `go-xos (macos-latest)`, for comparison | 15.6 | 15.6 | 12.5 |
 
 The third run is the change rebased onto `main` after #605 merged. No leg restored a build cache in the
 first run; in the second and third, `matrices-rest` restored the `go-xos` cache
-a `main` push had saved meanwhile (its `go vet ./...` took 29 s against 2.5 min). `listing-rest` and `cmd`
+a `main` push had saved meanwhile (its `go vet ./...` took 29 s against 2.5 min). `inventory-rest` and `cmd`
 use new keys that only a `main` push saves, so every run built them cold. Setup, mostly the 500 MB module
 cache's restore, took 1.3–1.6 min per leg.
 
@@ -2690,7 +2713,7 @@ nothing and was dropped.
 Before, over the main pushes and full-scope pull requests after #608: a full-scope pull request took a
 median 17.1 min from trigger to `ci-gate` (12.7–26.8, n=13) and a `main` push 17.9 (n=5), the slowest
 Windows leg, `matrices-rest`, a median 17.6 (once 26.5 of its 30-minute limit). On an ordinary pull
-request `go-race (listing-rest)` was the critical job at 7.9–8.1 min, its `internal/listing` binary 430 s,
+request `go-race (inventory-rest)` was the critical job at 7.9–8.1 min, its `internal/inventory` binary 430 s,
 of which `TestRemoteCrashMatrix` 122 s. The Actions cache held 10.9 GB with one generation kept, and
 56 % of the Go jobs on 8 `main` runs missed the module cache.
 
@@ -2703,9 +2726,9 @@ Windows legs, `durable` and `remote-crash` in one, then
 |---|---:|---:|---:|
 | trigger to `ci-gate` | 15.7 | 15.5, red | 15.3 |
 | critical job | `go-xos (macos-latest)` 15.1 | `go-xos (macos-latest)` 14.5 | `go-xos (macos-latest)` 14.8 |
-| Windows legs, slowest | 12.2 (`durable` with `remote-crash`) | 8.2 (`listing-rest`) | 11.0 (`listing-rest`) |
+| Windows legs, slowest | 12.2 (`durable` with `remote-crash`) | 8.2 (`inventory-rest`) | 11.0 (`inventory-rest`) |
 | Windows legs, the others | 5.7–11.8 | 5.5–8.1 | 3.9–6.5 |
-| `go-race (listing-rest)` | 6.1 (binary 297–313 s) | 6.1 | 6.0 |
+| `go-race (inventory-rest)` | 6.1 (binary 297–313 s) | 6.1 | 6.0 |
 | `go-race (remote-crash)` | 3.0 (binary 124–127 s) | 3.2 | 3.1 |
 | `go-race (crash)`, now the slowest race shard | 7.5 | 6.9 | 6.5 |
 
@@ -2715,10 +2738,10 @@ counted a request an earlier listing had abandoned; #626 fixed it.
 
 On Windows `TestRemoteCrashMatrix` took 298 and 216 s and `durable` 319 and 264 s, so the two do not
 share a leg. The Windows legs printed the same package results as the three legs of `main` run
-44046353331: the same packages, `internal/listing` run by four `go test` commands instead of three.
+44046353331: the same packages, `internal/inventory` run by four `go test` commands instead of three.
 
 The trim, on disk in MiB (Actions stores the caches zstd-compressed, at 0.16–0.20 of the on-disk size as
-the restored caches showed): the arm64 `internal/listing` shards restored 7,416 and kept 937, each of the
+the restored caches showed): the arm64 `internal/inventory` shards restored 7,416 and kept 937, each of the
 four the same 5,703 entries; `cmd-kill` and `cmd` kept 7,803 and 7,807 entries (1,705 and 1,711 MiB); arm64
 `go-xos` 10,394 to 1,397; macOS `go-xos` 4,832 to 1,591; `go-build` 6,562 to 4,615; the Windows legs
 1,089–2,976 to 855–1,364. Summed over the 17 build-cache families a `main` push now saves, the kept sizes
@@ -2745,13 +2768,13 @@ legs' pull request), first attempt:
 | Windows legs, slowest | 9.2 (`cmd-kill`) |
 | `go-race`, slowest shard | 6.1 (`crash`) |
 
-The `listing` leg had no cache of its own to restore: its family, `go-xos-listing-rest` on macOS, is new,
+The `inventory` leg had no cache of its own to restore: its family, `go-xos-inventory-rest` on macOS, is new,
 and a pull request saves nothing, so its warm time is measured only after the merge. The two legs printed
-the same 80 package results as the single job, compared as a multiset of status and package: `listing` 1
-(`internal/listing`), `rest` 79 (66 of the main module, 1 of `reader`, 12 of `objfile`), none missing, added
+the same 80 package results as the single job, compared as a multiset of status and package: `inventory` 1
+(`internal/inventory`), `rest` 79 (66 of the main module, 1 of `reader`, 12 of `objfile`), none missing, added
 or duplicated.
 
-On disk `listing` kept 974 MiB of build cache (5,688 entries) and `rest` 1,591 MiB, as the single job did
+On disk `inventory` kept 974 MiB of build cache (5,688 entries) and `rest` 1,591 MiB, as the single job did
 (1,592). The new family adds those 974 MiB, about 0.16–0.20 GB compressed at the ratio above: 18 build-cache
 families of 28,111 MiB on disk (29.5 GB), about 5.3 GB compressed (4.7–5.9), and one generation about 8.2 GB
 (7.6–8.7) of the 10 GB.
@@ -2768,7 +2791,7 @@ releases. Its matrix replacement ran as
 | `crash` | 5:55 | 254 s |
 | `durable` | 5:24 | 181 s |
 | `remote-crash` | 3:14 | 94 s |
-| `listing-rest` | 5:42 | 246 s |
+| `inventory-rest` | 5:42 | 246 s |
 | `cmd-kill` | 6:34 | 273 s |
 | `cmd` | 9:46 | 444 s |
 | `rest-replay` | 4:36 | 144 s, its slowest package |
@@ -2778,7 +2801,7 @@ releases. Its matrix replacement ran as
 
 The slowest leg, `cmd` (the `cmd/swath` remainder), sets the wait: with `source` (about 12 s) and beside
 `build` (6.5 to 8.2 min over the same three releases), a tag should reach the approval prompt in about
-10 minutes. `--check` in `vet-reader` counted 194 `internal/listing` tests over four shards and 258
+10 minutes. `--check` in `vet-reader` counted 194 `internal/inventory` tests over four shards and 258
 `cmd/swath` tests over two, and the shard legs printed 67 distinct packages.
 
 What the rehearsal does not prove: the tag-triggered path itself (the `source` job's qualification, the
@@ -2824,7 +2847,7 @@ multiarchitecture image build, and **4 seconds** in the offline image smoke. The
 conditional packaging saves runner capacity but was not this run's critical path.
 
 The [main run 42828142577](https://github.com/varveio/swath/actions/runs/42828142577), `c3b93d33`,
-spent 197.289s in `cmd/swath` and 188.071s in `internal/listing` inside the 4m05s non-race arm64 job.
+spent 197.289s in `cmd/swath` and 188.071s in `internal/inventory` inside the 4m05s non-race arm64 job.
 Those package times overlap; they must not be added. Both packages also ran in arm64 race shards.
 Ordinary PRs now omit that second execution and derive the remaining arm64 packages from the shard
 table. Full platform runs retain it. No test cases or race shards were removed.

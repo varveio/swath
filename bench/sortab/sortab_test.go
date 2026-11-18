@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // small is a trace the unit tests list in well under a second per arm.
@@ -71,7 +71,7 @@ func TestArmsProduceTheDataset(t *testing.T) {
 			}
 			var runs int
 			if arm == "A" {
-				if _, err := runA(context.Background(), p, out, smallLimits, false, &listing.Progress{}); err != nil {
+				if _, err := runA(context.Background(), p, out, smallLimits, false, &inventory.Progress{}); err != nil {
 					t.Fatal(err)
 				}
 			} else {

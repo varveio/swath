@@ -229,7 +229,7 @@ type FilesystemSpace struct {
 type Coverage struct {
 	Target     string          // the canonical listed target (s3://bucket[/prefix], or the root path)
 	Prefix     string          // the scope: "" for the whole source, else the listed prefix
-	Filters    []reader.Filter // the row filters applied beyond listing.Config.Filter (a local tree kept to one filesystem)
+	Filters    []reader.Filter // the row filters applied beyond inventory.Config.Filter (a local tree kept to one filesystem)
 	Exclusions []string        // left out by design (an output directory inside a listed tree)
 	Unreadable int64           // entries missing from the listing because they could not be read
 	Complete   bool            // the listing reached the end of its scope and read every entry (Unreadable 0)

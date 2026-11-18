@@ -3,7 +3,8 @@
 ## Support and differences
 
 `az://account/container[/prefix]` lists current blobs in flat namespaces, and with `--all-versions` every
-entry (versions, snapshots, soft-deleted blobs; `NewVersions`, below). Hierarchical namespaces are unsupported. Namespace admission is
+entry (versions, snapshots, soft-deleted blobs; `NewVersions`, below). Hierarchical namespaces are unsupported (the library's
+[live source](#the-live-source) pages them where it can). Namespace admission is
 required even for a public container; `--azure-assume-flat` only overrides an unknown result, never
 an account reported as hierarchical.
 [Shared object-store controls](../../sources/README.md#object-store-requests) cover authentication,
@@ -30,7 +31,9 @@ Root parse errors keep clean roots, redact SAS queries and hide credential-beari
 ## Provider implementation
 
 **Client** (`internal/source/azblob/client`): List Blobs and Get Account Information, described with the list
-clients ([clients.md](../clients.md)). Both are sent through the Azure
+clients ([clients.md](../clients.md)), and Get Blob Properties for the [live source](#the-live-source)'s lookups. Every
+attempt of List Blobs and Get Blob Properties, retries included, is reported to the `objfile.Observer` on its context, as
+a list request of the prefix or a metadata request of the name; the command puts none there. Both are sent through the Azure
 SDK's service and container clients (`sdk/storage/azblob` v1.8.3), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
 decodes it, in the format its `Content-Type` names. A per-call policy pins `x-ms-version` to `2026-06-06`, the oldest version with the Arrow format, which the live service, swath-replay and Azurite all answer. Every
@@ -99,7 +102,8 @@ the SAS names, found by name wherever the SDK sorted it into the query and howev
 decoded, escaped again), its value replaced and the rest of the text kept; a 400's parsed query drops the SAS's
 parameters and keeps the request's (`TestSASRedacted`, `TestScrubSASParameters`). The Azure SDK's own
 log, which quotes request URLs, is off in swath: the command clears azcore's log listener at startup, so
-`AZURE_SDK_GO_LOGGING=all` prints nothing. The root is redacted where the command parses
+`AZURE_SDK_GO_LOGGING=all` prints nothing. A library host that leaves that log on gets each failed answer without its
+body: the client keeps the body from the SDK and reads the code itself (`TestSDKLogWithheld`). The root is redacted where the command parses
 it (`registry.Factory.Redact`, `registry.Redact`), before the `-v` start line, the recorded command and the
 report's `invocation.source` see it, so an admission refusal records no SAS either; the identity, the manifest
 and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is accepted and listed
@@ -229,7 +233,7 @@ snapshot nor soft-deleted and is the current version, or lists no version id (a 
 was enabled, or an account without versioning). `TestVersionsListing` and `TestVersionsRestart` list names with
 up to five entries at page sizes that put seams inside names, with splits, and resume after names;
 `order`'s `TestGroupedProperty` walks random grouped queries. swath-replay refuses `include=` (its conformance
-profile); `cmd/swath`'s `TestAzblobAllVersions` runs `--all-versions` end to end through a proxy that answers
+profile); `command`'s `TestAzblobAllVersions` runs `--all-versions` end to end through a proxy that answers
 it as Azure answers it over a container of current blobs only: the plain listing (identical bytes, live).
 
 **Schema** `swath/azure-objects/v1`: [the schema binding](../parquet-output.md#schemas) takes its descriptor
@@ -266,3 +270,48 @@ service and HTTP-client slices (`TestServicePool`, `TestServicePoolRoundRobin`).
 The code takes precedence over the status. A generic 500 or 501 is terminal; 500 is retried only for
 `OperationTimedOut` or `InternalError`. [Request admission](../clients.md#request-admission) owns the shared
 controller and the limits of its tuning evidence. Namespace admission above remains provider-owned.
+
+## The live source
+
+`OpenLive` builds the client as `New` does and sends nothing: no namespace admission, no range engine. `Live` is the
+`live.Store` of the library's `github.com/varveio/swath/azblob` ([library](../../library.md#azure-blob-storage)); its
+location is the account, the container and the canonical route.
+
+**Pages.** `List` is one List Blobs with the delimiter `/` and `include=metadata`, its names held to no order
+(`ListInput.AnyOrder`: a hierarchical namespace lists in its own order, `/` below every other character), and it
+serves the level in byte order. A blob whose metadata says `hdi_isfolder=true` (`client.Directory`), as a
+hierarchical namespace's directory's blob does, and whose name does not end in `/`, is the directory's prefix in a
+hierarchical namespace only, so a directory listed both as that blob and as its prefix in one answer is one prefix;
+any other key listed twice is served twice, which `swath.Source`'s page check refuses (`listing.ErrInvalidPage`).
+User metadata can mark a flat namespace's blob the same way, so the first answer or Get Blob Properties holding a
+marked blob makes `Live` ask the namespace with admission's calls (`namespaceOf`: Get Account Information, then the
+Data Lake host), once per source. A flat namespace's marked blob is an object. Credentials refused or not had and a
+failing or unreachable service keep their class; a namespace those calls cannot tell is `listing.ErrUnsupported` for
+a page and unknown for a lookup. The first page of a level asks for 5,000 entries (`client.MaxPageSize`). When that
+answer holds the whole level, the level is sorted, unless it is in byte order already and holds no directory's blob; a sorted level's later pages read it whole again
+(the cursor `s`, its last key), and one that no longer fits one answer is `listing.ErrUnsupported`. Otherwise the level
+is paged as a chain in Azure's order (the cursor `c`: its `startFrom`, next marker and last key): from the marker once
+an answer is served whole, else from a new chain whose `startFrom` is the last key served, whose answer lists that key
+again and drops it. Each answer must ascend in byte order after the last key; one that does not, or that holds a
+directory's blob, is `listing.ErrUnsupported`. The pages served before it stand, and may have missed that key: the
+refusal says the level cannot be had in byte order, not where it went wrong. A chain is sound while every answer
+ascends because the merge of an answer's blobs and prefixes (UTF-16) is then Azure's own sequence, so a new chain at
+the last key misses nothing listed after it. In a hierarchical namespace that merge is not the namespace's sequence
+(`a/` comes before `a-b` there), so a new chain could skip a key while every answer still ascends: a directory's blob,
+which such a level lists beside every directory, ends the chain.
+`TestPageOrderAtLimitOne`, `TestUnorderedLevel` and `TestHierarchicalDirectories` (package `azblob`) cover the three
+paths over `azblobtest.Handler`, the `azblobtest.Store` served over HTTP; `TestFlatDirectoryMetadata` the flat and
+unknown namespaces, and `TestInvalidPages` a key repeated in an answer and across answers.
+
+**Lookups.** `Lookup` is Get Blob Properties of the key: present with its size, last-modified time and access tier, or,
+for a hierarchical namespace's directory's blob, as the directory's prefix. A 404 whose code is `BlobNotFound` (or
+absent) is absent only once the probe, a List Blobs of the key's prefix for one entry, succeeds. Any other failure of
+either request leaves the key unknown with its class (`objhttp.Classed`, Azure's code before its status): a 403 is
+`listing.ErrAuth`, `ContainerNotFound` `listing.ErrNotFound`, and an authentication code that comes with a 404
+`listing.ErrAuth`. `TestLookupUnknown` covers each.
+
+**Walks.** `Live.Walk` (`walk.go`) builds a provider of its own over the live client (`New` with it as
+`Options.Client`, 64 workers unless the walk sets them, `Sequential` at one), so each walk runs admission: a
+hierarchical namespace, or one admission cannot establish as flat, is `listing.ErrUnsupported` before any List
+Blobs (`TestWalkHierarchicalRefused`). The byte-order adapter serves each range ascending, so `live.Count` checks
+each range's keys ascending and apart from the others' (`TestWalkEachEntryOnce`, over `azblobtest.Keys`).

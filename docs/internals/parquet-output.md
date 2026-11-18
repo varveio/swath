@@ -109,10 +109,10 @@ runs on one path.
 
 ## Run reports
 
-Every dataset carries one run report, `run.json` (`listing.Report`, `report_version` 1); `--report -`
+Every dataset carries one run report, `run.json` (`inventory.Report`, `report_version` 1); `--report -`
 prints the same type, also for `swath du`, `swath diag count` or a failure, and `--report FILE` writes it to FILE when the attempt
 ends (also for a resume refused before it runs). Its schema has one owner, "Run report" in
-[../reference/run-report.md](../reference/run-report.md) (pinned by `internal/listing/testdata/report-schema.golden`). It is
+[../reference/run-report.md](../reference/run-report.md) (pinned by `internal/inventory/testdata/report-schema.golden`). It is
 operational: written after the commit (a failure to write it is a warning, the dataset stands) and never part of
 the dataset, whose coverage the manifest records ([../dataset.md](../dataset.md#the-swath-extension)).
 
@@ -163,7 +163,7 @@ abort closes every segment's queue unpublished.
 journal's last record is part 99,999; the command exits 1, `cause` `part_limit`, not resumable
 (`TestRouterRefusesPartPastLimit`); a segment refused there stops waiting for that publication when the run is canceled, and gives its encoder slot back (`TestSegmentPastLimitCancels`). `dataset.PartOrdinal` refuses a six-digit name.
 
-**The part interval** (`listing.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) is a
+**The part interval** (`inventory.Limits.PartInterval`, default 30 s; `parquetout.Options.Interval`) is a
 rotation target: a part open that long with rows is closed although not full (the router's ticker cuts only an
 existing part whose boundary no resume fixed), and a journaled run publishes it in ordinal order behind the parts
 before it. It bounds how long rows wait in an open part, not the age of the recovery point: the closed part
@@ -278,7 +278,7 @@ and readers keep reading the previous dataset. Its commit installs it, in the sa
 first, and both directories are synced before any other entry moves; `retiring/` is then renamed `retired/`;
 the new `data/` moves into the output, synced, and its manifest last, which is the installation. Every step is
 a synced rename, so a crash anywhere leaves a state the next `swath resume DIR` or `--overwrite` finishes
-first (`listing.InstallReplacement`, `TestInstallNextFinishesAPartialRetirement`), and the leftovers of an installed one
+first (`inventory.InstallReplacement`, `TestInstallNextFinishesAPartialRetirement`), and the leftovers of an installed one
 (a crash before their removal) are removed the same way. The path holds no committed dataset between the first
 and the last of those renames. The part paths are reused, so a reader that read the old manifest before the
 installation can find its parts missing or replaced by the new dataset's: nothing is promised to a reader
@@ -350,7 +350,7 @@ producer defines its schema beside its code. All producers bind their accessors 
 types, nullability and key settings. This includes Azure's `reader.AzureObjectsV1` binding in
 `internal/source/azblob/schema.go`; Azure keeps its accessors, `Delta` preferences, logical and heap accounting,
 and codec beside the provider. `azblob` `TestSchemaBinding` checks its reader contract and field behavior.
-`listing` `TestProducerSchemasGolden` pins the five S3, GCS and local schemas. The Parquet node is built from the bound
+`inventory` `TestProducerSchemasGolden` pins the five S3, GCS and local schemas. The Parquet node is built from the bound
 columns; `parquetout` `TestFooterMatchesSchema` checks the footer against a test schema with one column of
 every type. `schema.NonEmpty` adapts a string accessor so the empty string is null; providers choose where
 that interpretation applies.
@@ -380,13 +380,14 @@ columns the totals and the filters need, in parallel scans, once every part's fo
 against the dataset's schema (a dataset that breaks it is refused, exit 1).
 `Info.Groups` is the ordering property; grouped rows need not be versions.
 
-`registry.Bind` resolves these accessors once when the provider opens, and panics on a malformed producer
-declaration before the listing creates a journal, dataset or text file. Generic lister consumers—text
+`bind.Provider` resolves these accessors once when the provider opens, and refuses a malformed producer
+declaration (`registry.Bind`, a test provider's, panics on it) before the listing creates a journal, dataset
+or text file. Generic lister consumers—text
 output, version counts and per-prefix totals—share this interpretation. They do not infer roles from names
 such as `is_latest`, `generation` or `deleted_at`. The reader module's typed decoders still bind named
-columns for their specific row contracts. `registry` `TestVersionRolesFollowDeclaration` and `listing`
+columns for their specific row contracts. `registry` `TestVersionRolesFollowDeclaration` and `inventory`
 `TestVersionReportFollowsDeclaration` place contradictory conventional columns beside declared roles;
-`TestVersionRolesRefusedBeforeOutput` in `listing` checks refusal before output creation.
+`TestVersionRolesRefusedBeforeOutput` in `inventory` checks refusal before output creation.
 
 The Parquet schema name is `swath_listing` for every schema. The schema ids, their grammar
 (`swath/<row-contract>/vN`) and their row contracts (columns, types, nullability, key encoding) are in

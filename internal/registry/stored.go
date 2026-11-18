@@ -16,6 +16,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
+	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/schema"
@@ -38,7 +39,7 @@ type DatasetRead struct {
 // rows are summed; relative sums them as a listing of the directory prefix
 // names would have keyed them, prefix trimmed and its own row left out, or,
 // a prefix without a final '/' (a file), that key's row alone, keyed by its
-// name, as a listing of the file: the same binding to the schema (bindTotals,
+// name, as a listing of the file: the same binding to the schema (bind.Totals,
 // filter.Compile, the version roles and the containers the producer
 // declares, SchemaInfo) over a payload that reads the dataset's columns.
 // It seeks to prefix and reads the key and only the columns the totals and
@@ -77,7 +78,7 @@ func DatasetTotals(ctx context.Context, d *reader.Dataset, prefix string, relati
 	if err != nil {
 		return read, err
 	}
-	sink, err := bindTotals(t, &s, vers, nil, true)
+	sink, err := bind.Totals(t, &s, vers, nil, true)
 	if err != nil {
 		return read, err
 	}

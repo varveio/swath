@@ -267,7 +267,7 @@ class VerifierSchema(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.base = Path(cls.temp.name)
         env = dict(os.environ, SWATH_VERIFIER_FIXTURES=str(cls.base), GOTOOLCHAIN="auto")
-        subprocess.run(["go", "test", "./internal/listing", "-run", "^TestVerifierFixtures$", "-count=1"],
+        subprocess.run(["go", "test", "./internal/inventory", "-run", "^TestVerifierFixtures$", "-count=1"],
                        cwd=Path(__file__).parent, env=env, check=True, text=True)
 
     def verify(self, path):

@@ -22,7 +22,7 @@ for the full suite, as described in [testing](docs/internals/testing.md). For a 
 [provider checklist](docs/internals/providers.md#adding-a-provider), including reader, verifier
 and conformance integration outside its directory. Regenerate the generated documentation blocks
 (synopses, options, log events, counters) with
-`UPDATE=1 go test -run '^TestDocs' ./cmd/swath ./internal/source/s3`; do not edit them by hand. A test
+`UPDATE=1 go test -run '^TestDocs' ./command ./internal/source/s3`; do not edit them by hand. A test
 that reads a page under `docs/` is named `TestDocs...` and opens it with `docs.Path`, so that a
 documentation-only pull request runs it ([docs tier](docs/internals/testing.md#docs-tier)).
 

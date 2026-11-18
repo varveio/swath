@@ -6,7 +6,6 @@
 package localfs
 
 import (
-	"context"
 	"io/fs"
 	"os"
 )
@@ -28,8 +27,6 @@ func readlinkIn(_ *os.File, path, _ string) (string, error) { return os.Readlink
 // tooLong: no path is refused by its length here (Go gives Windows the
 // extended-length form of a long path), so nothing below is reached.
 func tooLong(error) bool { return false }
-
-func (p *Provider) openLong(context.Context, Range, *Stats) (int, bool, error) { return -1, false, nil }
 
 func statLong(string, Fields, *Entry, *Stats) error { return nil }
 

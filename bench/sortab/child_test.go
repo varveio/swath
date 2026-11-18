@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // The test binary is also the harness: SORTAB_CHILD=<config.json> runs one
@@ -92,12 +92,12 @@ const sampleEvery = 50 * time.Millisecond
 
 // childResult is a completed attempt.
 type childResult struct {
-	Arm    string          `json:"arm"`
-	Error  string          `json:"error,omitempty"`
-	WallMs int64           `json:"wall_ms"`
-	A      *listing.Report `json:"a,omitempty"`
-	B      *BStats         `json:"b,omitempty"`
-	Last   sample          `json:"last"`
+	Arm    string            `json:"arm"`
+	Error  string            `json:"error,omitempty"`
+	WallMs int64             `json:"wall_ms"`
+	A      *inventory.Report `json:"a,omitempty"`
+	B      *BStats           `json:"b,omitempty"`
+	Last   sample            `json:"last"`
 }
 
 func child(path string) error {
@@ -120,7 +120,7 @@ func child(path string) error {
 	var encoded, parts atomic.Int64 // B's
 	var firstRun atomic.Int64       // B's first durable run, ms (-1: none)
 	firstRun.Store(-1)
-	pr := &listing.Progress{}
+	pr := &inventory.Progress{}
 	read := func() {
 		now := time.Since(start).Milliseconds()
 		smp.Ms, smp.Listed, smp.Requests, smp.Samples = now, p.Listed(), p.Requests(), smp.Samples+1

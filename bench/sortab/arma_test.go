@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/s3"
 )
 
-// Arm A is the product's pipeline as the command runs it (listing.Run:
+// Arm A is the product's pipeline as the command runs it (inventory.Run:
 // order stage, part router and writer, journal, resume), over the trace
 // registered as the scheme "sortab". Its recovery is the product's: a
 // resume keeps the journaled parts and relists after the last one's key.
@@ -94,19 +94,19 @@ type Limits struct {
 
 // runA lists p into out with the product's pipeline (a resume when
 // resume is set) and returns its report.
-func runA(ctx context.Context, p *Provider, out string, lim Limits, resume bool, pr *listing.Progress) (listing.Report, error) {
+func runA(ctx context.Context, p *Provider, out string, lim Limits, resume bool, pr *inventory.Progress) (inventory.Report, error) {
 	armMu.Lock()
 	armNext = p
 	armMu.Unlock()
-	cfg := listing.Config{Source: listing.SourceConfig{URI: "sortab://" + p.l.Name}, Output: listing.OutputConfig{Dir: out, Resume: resume},
-		Limits: listing.Limits{Workers: lim.Workers, RowBudget: lim.Memory / 2, Encoders: lim.Encoders, PartSize: lim.PartSize,
-			Spill: listing.SpillLimits{Max: lim.SpillMax, Reserve: lim.SpillReserve}},
+	cfg := inventory.Config{Source: inventory.SourceConfig{URI: "sortab://" + p.l.Name}, Output: inventory.OutputConfig{Dir: out, Resume: resume},
+		Limits: inventory.Limits{Workers: lim.Workers, RowBudget: lim.Memory / 2, Encoders: lim.Encoders, PartSize: lim.PartSize,
+			Spill: inventory.SpillLimits{Max: lim.SpillMax, Reserve: lim.SpillReserve}},
 		Argv: []string{"sortab", "A", strconv.FormatBool(resume)}, Progress: pr}
 	switch {
 	case lim.PartIntervalMs > 0:
 		cfg.Limits.PartInterval = msDuration(lim.PartIntervalMs)
 	case lim.PartIntervalMs == 0:
-		cfg.Limits.PartInterval = listing.DefaultPartInterval
+		cfg.Limits.PartInterval = inventory.DefaultPartInterval
 	}
-	return listing.Run(ctx, cfg)
+	return inventory.Run(ctx, cfg)
 }

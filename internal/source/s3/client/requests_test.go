@@ -83,7 +83,7 @@ func routeOf(u *url.URL) string { return u.Scheme + "://" + u.Host + u.EscapedPa
 
 // TestRequestURLs: the endpoint options swath maps reach the SDK, and the
 // request goes where the provider's recorded identity says it does
-// (register.go endpointCanonical): spellings that share one identity send
+// (open.go endpointCanonical): spellings that share one identity send
 // to one URL, and spellings it keeps apart send to different ones. A
 // virtual-host endpoint keeps its path byte for byte (/s3 and /s3/ are two
 // request paths); path-style and a pathless endpoint fold one trailing

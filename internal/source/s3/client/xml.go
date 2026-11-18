@@ -38,7 +38,7 @@ type span struct{ off, n uint32 }
 type objSpan struct {
 	key, etag, class, ownerID, ownerName, algo, ctype span
 	size, mtime                                       int64
-	hasAlgo                                           bool
+	hasAlgo, sized                                    bool
 	// ListObjectVersions only.
 	vid                  span
 	latest, deleteMarker bool
@@ -321,6 +321,7 @@ func (p *parser) contents(self []byte, i int) error {
 			if o.size, err = parseInt(t); err != nil {
 				return err
 			}
+			o.sized = true
 		case "LastModified":
 			t, err := p.scalar(name, empty)
 			if err != nil {
@@ -471,7 +472,7 @@ func (p *parser) own() (release func()) {
 func (p *parser) object(s *objSpan) Object {
 	return Object{Key: p.text(s.key), ETag: p.text(s.etag), StorageClass: p.text(s.class),
 		OwnerID: p.text(s.ownerID), OwnerDisplayName: p.text(s.ownerName),
-		ChecksumAlgorithm: p.text(s.algo), ChecksumType: p.text(s.ctype), Size: s.size, Mtime: s.mtime}
+		ChecksumAlgorithm: p.text(s.algo), ChecksumType: p.text(s.ctype), Size: s.size, NoSize: !s.sized && !p.versions, Mtime: s.mtime}
 }
 
 // prefixStrings is the page's common prefixes, or nil.

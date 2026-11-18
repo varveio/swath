@@ -1,0 +1,34 @@
+// Copyright 2026 Varve Systems Ltd
+// SPDX-License-Identifier: Apache-2.0
+
+package inventory
+
+import (
+	"testing"
+
+	"github.com/varveio/swath/internal/dataset"
+)
+
+// TestCommittedOutcome: the run.json a resume writes for a dataset an
+// earlier attempt committed agrees with the command's --report for the same
+// manifest: ok with exit 0 when the coverage is complete, incomplete
+// with exit 3 when it is partial (a key limit, unreadable entries), never
+// ok with 0.
+func TestCommittedOutcome(t *testing.T) {
+	for _, c := range []struct {
+		cov   dataset.Coverage
+		class string
+		code  int
+	}{
+		{dataset.Coverage{Complete: true, StopReason: "end_of_scope"}, ClassOK, 0},
+		{dataset.Coverage{Complete: false, StopReason: "max_keys"}, ClassIncomplete, 3},
+		{dataset.Coverage{Complete: false, StopReason: "unreported"}, ClassIncomplete, 3},
+		{dataset.Coverage{Complete: false, StopReason: "end_of_scope", Unreadable: 2}, ClassIncomplete, 3},
+	} {
+		o := Outcome{Status: StatusCommitted, Class: ClassOK, Complete: true, StopReason: "end_of_scope"}
+		committedOutcome(&o, c.cov)
+		if o.Class != c.class || o.ExitCode != c.code || o.Complete != c.cov.Complete || o.StopReason != c.cov.StopReason || o.Unreadables() != c.cov.Unreadable || o.Status != StatusCommitted {
+			t.Fatalf("%+v: outcome %+v", c.cov, o)
+		}
+	}
+}

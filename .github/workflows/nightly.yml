@@ -92,8 +92,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # The Go race tests in one unsharded run on amd64. Per push, ci.yml races internal/listing and
-  # cmd/swath on arm64 only (go-race, scripts/ci/go-race-shards.sh): this is their amd64 race
+  # The Go race tests in one unsharded run on amd64. Per push, ci.yml races internal/inventory and
+  # command on arm64 only (go-race, scripts/ci/go-race-shards.sh): this is their amd64 race
   # coverage, and a check that the shards' union still equals `go test -race ./...`. The -json
   # stream is kept as an artifact for flakes and per-test times.
   go-race-nightly:

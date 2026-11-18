@@ -12,8 +12,8 @@ schemas to this module's registry (`internal/schema.Bind`), so writers and decod
 share the column names, types, nullability and version roles. The
 [swath dataset profile](../docs/dataset.md) owns the data contract.
 
-From swath 0.4.0 the module is released with swath, at the same version, tagged
-`reader/vX.Y.Z`: `go get github.com/varveio/swath/reader@v0.4.0`. It is at version 0, with no
+From swath 0.4.0 the module is tagged `reader/vX.Y.Z`, with a version of its own:
+`go get github.com/varveio/swath/reader@v0.4.0`. It is at version 0, with no
 API compatibility promise: a minor release may change its API.
 
 ## Opening and metadata
@@ -137,3 +137,43 @@ versions (every current-object schema). Otherwise the schema's keys repeat (`Uni
 not a delete marker, noncurrent when neither. `swath/azure-versions/v1` declares `{ID: "version_id", Latest:
 "is_latest"}` and includes versions, snapshots and soft-deleted blobs; interpret its additional fields with the
 Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registry).
+
+## The listing contract
+
+The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the questions swath
+answers about a listed location, from a live source or from an opened inventory: Page (the next children of a
+prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
+(count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
+common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope and unlocated gaps), the
+`Unread` places a live walk could not read, and the error classes. No call has a time limit of its own: a context
+deadline bounds it.
+It holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
+any release.
+
+## The inventory view
+
+The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those questions from an opened
+dataset. `view.OpenDir(ctx, dir)` opens a local dataset directory, checks its parts' schemas and returns the
+inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller opened and owns, and reads nothing. Both
+refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with
+`listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque tokens bound to the manifest
+digest and the prefix; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
+`Summarize` reads the entries at its targets' keys, then aggregates its subtree targets' rows in one
+`AggregateRows` call, checking their key order: to size a page's child folders, summarize its `KindDir` and
+`KindPrefix` entries as subtree targets. A walk or summary sets no limit: a caller stops it by cancelling
+its context. An object store's prefix may be any key prefix; a local one is empty or a
+directory key, and a local inventory has no row for its root.
+
+Every answer's `Evidence` comes from the manifest and never widens it: the listing's interval, its scope, and its
+count of unreadable entries as `Unlocated` only when
+the listing reached the end of its scope with no filter and no exclusion. A key is absent only inside the scope
+and when `Unlocated` is 0, never at or under a local entry of unknown kind (`listing.KindUnknown`, which may be a
+directory the listing did not read), and never below a symbolic link, which no listing follows (unknown, with
+`ErrNotDirectory`); a question outside the scope is unknown (`ErrOutOfScope`). The listing's own gaps stay
+unlocated: a walk hands on no `Unread`, and a summary target is `Complete` only when `Unlocated` is 0 and its
+key's state is known. The view checks every value it reads (a missing column, a negative size, a local kind swath
+does not write), not every part's schema: an application admitting an inventory runs `Dataset.CheckSchema` first.
+A call that fails returns an error of one of the contract's classes with its cause wrapped: data the reader refuses
+is `ErrInvalidPage`, a refused access `ErrAuth`, and any other failure to read the dataset, a missing file of it
+included, `ErrUnavailable`.
+[view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.

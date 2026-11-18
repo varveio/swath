@@ -19,10 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/pflag"
-
 	"github.com/varveio/swath/internal/order"
-	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
@@ -403,7 +400,7 @@ func TestAdmission(t *testing.T) {
 	// --all-versions is admitted as any listing: a hierarchical namespace
 	// refuses it before any listing request.
 	c = &pages{hns: true}
-	src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: c, AllVersions: true}, Workers: 1})
+	src, err := openView("az://acct/c", Options{Client: c, AllVersions: true}, 1)
 	if src != nil || !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" || c.lists.Load() != 0 {
 		t.Fatalf("all versions on a hierarchical namespace: %v", err)
 	}
@@ -553,8 +550,7 @@ func TestAdmissionFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 		var warned []string
-		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: cl, Flat: c.flat}, Workers: 1,
-			Warn: func(_, s string) { warned = append(warned, s) }})
+		src, err := openView("az://acct/c", Options{Client: cl, Flat: c.flat, Warn: func(_, s string) { warned = append(warned, s) }}, 1)
 		switch {
 		case c.admitted == "":
 			if !errors.Is(err, source.ErrUnsupported) || objhttp.Label(err) != "unsupported" ||
@@ -564,7 +560,7 @@ func TestAdmissionFallback(t *testing.T) {
 		case err != nil:
 			t.Fatalf("%s: %v", c.name, err)
 		default:
-			o := src.(*opened[Object])
+			o := src.(*Opened[Object])
 			if n := o.p.Stats().Namespace; n != c.admitted {
 				t.Fatalf("%s: admitted by %q, want %q", c.name, n, c.admitted)
 			}
@@ -693,7 +689,7 @@ func TestIdentity(t *testing.T) {
 	r := azblobtest.Serve(t, []string{"a", "b"})
 	ident := func(root, ep, sas string) (source.Identity, source.Locator) {
 		t.Helper()
-		src, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Endpoint: ep, SAS: sas, Anonymous: sas == "" && !strings.Contains(root, "sig=")}, Workers: 1, Warn: func(string, string) {}})
+		src, err := openView(root, Options{Endpoint: ep, SAS: sas, Anonymous: sas == "" && !strings.Contains(root, "sig="), Warn: func(string, string) {}}, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -732,14 +728,14 @@ func TestIdentity(t *testing.T) {
 	}
 	// The default endpoint: the account's host.
 	c := &routed{pages: &pages{}}
-	src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: c}, Workers: 1})
+	src, err := openView("az://acct/c", Options{Client: c}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if f := src.(source.Identified).Identity().Fields[1]; f.Canonical != "https://acct.blob.core.windows.net" {
 		t.Fatalf("default endpoint %+v", f)
 	}
-	src, err = open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: &pages{}}, Workers: 1})
+	src, err = openView("az://acct/c", Options{Client: &pages{}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +750,7 @@ func identFields(t *testing.T, root, ep string) []source.IdentityField {
 	t.Helper()
 	acct, _, _, _, _ := ParseURL(root)
 	c := &routed{pages: &pages{}, base: ep + "/" + acct + "/"}
-	src, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Client: c}, Workers: 1})
+	src, err := openView(root, Options{Client: c}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,42 +775,52 @@ func (r *routed) Route(container string) string {
 func TestRedactedSASResume(t *testing.T) {
 	t.Setenv(EnvSAS, "")
 	root := "az://acct/c?" + RedactedSAS
-	if _, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Client: &pages{}}, Workers: 1}); !errors.Is(err, errSASNotRecorded) {
+	if _, err := openView(root, Options{Client: &pages{}}, 1); !errors.Is(err, errSASNotRecorded) {
 		t.Fatalf("no SAS given again: %v", err)
 	}
 	for _, o := range []*Options{{Client: &pages{}, SAS: "sig=again"}, {Client: &pages{}, Anonymous: true}} {
-		if _, err := open(context.Background(), registry.Request{Root: root, Options: o, Workers: 1}); err != nil {
+		if _, err := openView(root, *o, 1); err != nil {
 			t.Fatalf("%+v: %v", o, err)
 		}
 	}
 	t.Setenv(EnvSAS, "sig=env")
-	if _, err := open(context.Background(), registry.Request{Root: root, Options: &Options{Client: &pages{}}, Workers: 1}); err != nil {
+	if _, err := openView(root, Options{Client: &pages{}}, 1); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestEngineFlagsShared: the provider takes the store's and the range
-// engine's flag groups the command registered once, and its own prefixed
-// flags.
-func TestEngineFlagsShared(t *testing.T) {
+// TestPolicyReachesEngine: the range engine's policy in the options is
+// the engine's.
+func TestPolicyReachesEngine(t *testing.T) {
 	r := azblobtest.Serve(t, []string{"a"})
-	pf, err := registry.Lookup("az://replay/corpus")
+	src, err := openView("az://replay/corpus", Options{Anonymous: true, Endpoint: base(r), Policy: keyrange.Policy{PageSize: 7}}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := pflag.NewFlagSet("t", pflag.ContinueOnError)
-	v := pf.RegisterFlags(f, true)
-	if err := f.Parse([]string{"--structure", "--page-size", "7", "--anonymous", "--endpoint-url", base(r), "--request-timeout", "7s", "--azure-assume-flat"}); err != nil {
-		t.Fatal(err)
+	if p := src.(*Opened[Object]).p; p.Options().PageSize != 7 {
+		t.Fatalf("the engine's options %+v", p.Options())
 	}
-	src, err := open(context.Background(), registry.Request{Root: "az://replay/corpus", Options: v, Workers: 2})
+}
+
+// view is an opened Azure listing, *Opened[Object] or *Opened[Version].
+type view interface{ Locator() source.Locator }
+
+// openView opens root with opt and workers as the command opens a library
+// caller's options: every entry of each name with opt.AllVersions.
+func openView(root string, opt Options, workers int) (view, error) {
+	opt.Workers = workers
+	if opt.AllVersions {
+		o, err := OpenVersions(context.Background(), root, opt)
+		if err != nil {
+			return nil, err
+		}
+		return o, nil
+	}
+	o, err := Open(context.Background(), root, opt)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	p := src.(*opened[Object]).p
-	if !p.opt.Seed || p.opt.Structure != keyrange.StructureOn || !p.opt.Anonymous || p.opt.Timeout.Seconds() != 7 || p.Options().PageSize != 7 || !p.opt.Flat {
-		t.Fatalf("flags not applied: %+v", p.opt)
-	}
+	return o, nil
 }
 
 // TestInvalidPageClass: a page out of order is the client's invalid page,
@@ -968,12 +974,12 @@ func TestAdmissionBlockedEndpointSigned(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		src, err := open(context.Background(), registry.Request{Root: "az://acct/c", Options: &Options{Client: cl}, Workers: 1})
+		src, err := openView("az://acct/c", Options{Client: cl}, 1)
 		switch {
 		case c.admitted && err != nil:
 			t.Fatalf("%s: %v", c.name, err)
 		case c.admitted:
-			if n := src.(*opened[Object]).p.Stats().Namespace; n != "filesystem endpoint blocked" {
+			if n := src.(*Opened[Object]).p.Stats().Namespace; n != "filesystem endpoint blocked" {
 				t.Fatalf("%s: admitted by %q", c.name, n)
 			}
 		case err == nil || objhttp.Classify(err) != objhttp.ClassAuth:
