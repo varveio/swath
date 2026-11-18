@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/varveio/swath/internal/live"
+	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
 )
@@ -36,6 +37,7 @@ type Live struct {
 var (
 	_ live.Store    = (*Live)(nil)
 	_ live.ByteKeys = (*Live)(nil)
+	_ live.Walker   = (*Live)(nil)
 )
 
 // OpenLive opens root, a directory the caller opened (O_DIRECTORY, not
@@ -139,6 +141,52 @@ func failed(ctx context.Context, prefix string, err error) error {
 		return ctx.Err()
 	}
 	return fmt.Errorf("%w (prefix %q)", err, prefix)
+}
+
+// Walk lists every entry under w.Prefix for one walk (live.Walker): ""
+// for the held directory, or a directory key below it, whose own entry it
+// does not list. The prefix is opened first as a level is (openLevel), so
+// one that is not there, is no directory or lies past a symbolic link or
+// on another device fails as a page of it does; anything else is
+// listing.ErrInvalidRequest. Then the parallel local walker lists it from
+// the held directory, as a count does: each directory's entries unsorted,
+// its subdirectories handed to other workers, so batches come in no key
+// order; w.Workers, zero for DefaultWorkers. It changes no process-wide
+// setting (it does not Begin). A directory it cannot open or read, an
+// entry it cannot stat, and a directory on another device, which it lists
+// and does not enter, reach sink.Unread as the walk meets them (unread).
+func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
+	prefix := string(w.Prefix)
+	names, err := keyNames(prefix, true)
+	if err != nil {
+		return fmt.Errorf("%w: %w", listing.ErrInvalidRequest, err)
+	}
+	fd, _, err := l.o.p.openLevel(ctx, names)
+	if err != nil {
+		return failed(ctx, prefix, err)
+	}
+	unix.Close(fd)
+
+	o, err := OpenDir(l.o.p.heldFile, prefix, l.o.p.opt)
+	if err != nil {
+		return fmt.Errorf("%w: %w", listing.ErrUnavailable, err)
+	}
+	o.p.unsorted = true // nothing orders a walk's rows
+	workers := w.Workers
+	if workers == 0 {
+		workers = DefaultWorkers()
+	}
+	return live.Count(ctx, o.bound, order.Options{Workers: workers, Unordered: true}, walkEntries, sink)
+}
+
+// walkEntries are a walk's rows as the contract's entries, which share the
+// rows' values until the walk hands the batch back.
+func walkEntries(rows []Row) []listing.Entry {
+	out := make([]listing.Entry, len(rows))
+	for i := range rows {
+		out[i] = entryOf(rows[i].Key, &rows[i].Data)
+	}
+	return out
 }
 
 // openLevel opens the directory names name below the held root to read

@@ -280,6 +280,10 @@ func TestLookup(t *testing.T) {
 			t.Errorf("%q: %v %v, want %v", c.key, r.State, err, c.state)
 			continue
 		}
+		// An unknown answer's evidence must not read as complete.
+		if complete := r.Evidence.Stop == listing.StopCompleted && r.Evidence.Unlocated != nil && *r.Evidence.Unlocated == 0; complete == (r.State == listing.LookupUnknown) {
+			t.Errorf("%q: %v with evidence %+v", c.key, r.State, r.Evidence)
+		}
 		switch r.State {
 		case listing.LookupPresent:
 			if got := fmt.Sprintf("%v %s", r.Entry.Kind, r.Entry.Key); got != c.want || r.Entry.Size == nil || r.Entry.Inode == nil {
@@ -598,5 +602,167 @@ func TestObserved(t *testing.T) {
 	want := []string{`list "d/" failed=false`, `list "nope/" failed=true`, `metadata "d/f" failed=false`}
 	if !slices.Equal(obs.seen, want) {
 		t.Errorf("observed %q, want %q", obs.seen, want)
+	}
+}
+
+// tree makes a small tree below a new root: files, a nested and an empty
+// directory, a symbolic link to a directory, and, unless the test runs as
+// root, a directory it may not read holding a file.
+func tree(t *testing.T) (root string, locked bool) {
+	t.Helper()
+	root = t.TempDir()
+	write(t, root, "a.txt")
+	write(t, root, "d/b.txt")
+	write(t, root, "d/e/c.txt")
+	write(t, root, "locked/x.txt")
+	if err := os.Mkdir(filepath.Join(root, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlink(t, root, "d", "link")
+	if os.Getuid() == 0 {
+		return root, false
+	}
+	if err := os.Chmod(filepath.Join(root, "locked"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(root, "locked"), 0o755) })
+	return root, true
+}
+
+// walkDir is what filepath.WalkDir finds below root: every key, a
+// directory's ending in "/", and the files' count and bytes.
+func walkDir(t *testing.T, root string) (keys []string, files, bytes int64) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || p == root {
+			return nil // a directory it cannot read is reported again, after its own entry
+		}
+		key := filepath.ToSlash(p[len(root)+1:])
+		if d.IsDir() {
+			key += "/"
+		}
+		keys = append(keys, key)
+		if d.Type().IsRegular() {
+			info, err := d.Info()
+			if err != nil {
+				t.Fatal(err)
+			}
+			files++
+			bytes += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(keys)
+	return keys, files, bytes
+}
+
+// TestWalk: a walk of the root, and of a directory below it, hands on
+// every entry filepath.WalkDir finds there, the symbolic link as itself,
+// and the directory it may not read as an Unread of class ErrAuth. It
+// leaves GOMAXPROCS as it was.
+func TestWalk(t *testing.T) {
+	root, locked := tree(t)
+	src := open(t, hold(t, root))
+	want, _, _ := walkDir(t, root)
+	procs := runtime.GOMAXPROCS(0)
+	defer func() {
+		if now := runtime.GOMAXPROCS(0); now != procs {
+			t.Errorf("GOMAXPROCS %d after walks, %d before", now, procs)
+		}
+	}()
+	for _, workers := range []int{0, 1} {
+		var got, unread []string
+		sum, err := src.Walk(context.Background(), listing.WalkRequest{Workers: workers}, func(b listing.WalkBatch) error {
+			for _, e := range b.Entries {
+				got = append(got, string(e.Key))
+			}
+			for _, u := range b.Unread {
+				if !errors.Is(u.Reason, listing.ErrAuth) {
+					t.Errorf("%q: reason %v", u.Key, u.Reason)
+				}
+				unread = append(unread, string(u.Key))
+			}
+			return nil
+		})
+		slices.Sort(got)
+		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Evidence.Stop != listing.StopCompleted {
+			t.Fatalf("workers %d: %q, %+v, %v; want %q", workers, got, sum, err, want)
+		}
+		if wantUnread := map[bool]int{true: 1}[locked]; len(unread) != wantUnread || sum.Unread != int64(wantUnread) || locked && unread[0] != "locked/" {
+			t.Errorf("workers %d: unread %q, counted %d", workers, unread, sum.Unread)
+		}
+	}
+
+	var got []string
+	if _, err := src.Walk(context.Background(), listing.WalkRequest{Prefix: []byte("d/")}, func(b listing.WalkBatch) error {
+		for _, e := range b.Entries {
+			got = append(got, string(e.Key))
+		}
+		return nil
+	}); err != nil || !slices.Equal(slices.Sorted(slices.Values(got)), []string{"d/b.txt", "d/e/", "d/e/c.txt"}) {
+		t.Errorf("walk of d/: %q, %v", got, err)
+	}
+	emit := func(listing.WalkBatch) error { return nil }
+	for prefix, class := range map[string]error{"d": listing.ErrInvalidRequest, "nope/": listing.ErrNotFound, "a.txt/": listing.ErrNotDirectory, "link/": listing.ErrNotDirectory} {
+		if _, err := src.Walk(context.Background(), listing.WalkRequest{Prefix: []byte(prefix)}, emit); !errors.Is(err, class) {
+			t.Errorf("walk of %q: %v, want %v", prefix, err, class)
+		}
+	}
+}
+
+// TestWalkCancelled: a walk whose context ends returns the context's
+// error, and its summary says it did not finish.
+func TestWalkCancelled(t *testing.T) {
+	root := t.TempDir()
+	for i := range 200 {
+		write(t, root, fmt.Sprintf("d%03d/f", i))
+	}
+	src := open(t, hold(t, root))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sum, err := src.Walk(ctx, listing.WalkRequest{Workers: 2}, func(listing.WalkBatch) error {
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Entries == 0 {
+		t.Fatalf("%+v, %v", sum, err)
+	}
+}
+
+// TestSummarize: a target's totals are what filepath.WalkDir counts
+// under it; one with a directory it may not read under it is not
+// complete and counts it, one without is complete; a subtree's state is a
+// lookup of its directory.
+func TestSummarize(t *testing.T) {
+	root, locked := tree(t)
+	src := open(t, hold(t, root))
+	_, files, bytes := walkDir(t, root)
+	targets := []listing.Target{{Subtree: true}, {Key: []byte("d/"), Subtree: true}, {Key: []byte("empty/"), Subtree: true}, {Key: []byte("nope/"), Subtree: true}, {Key: []byte("a.txt")}}
+	sums, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
+	if err != nil || ev.Stop != listing.StopCompleted {
+		t.Fatalf("%+v, %v", ev, err)
+	}
+
+	if s := sums[0]; s.Entries != files || s.Bytes == nil || *s.Bytes != bytes || s.Complete == locked || s.Unread != map[bool]int64{true: 1}[locked] {
+		t.Errorf("the root: %d files, bytes %v, complete %t, unread %d; want %d, %d", s.Entries, s.Bytes, s.Complete, s.Unread, files, bytes)
+	}
+	for i, want := range []struct {
+		state   listing.LookupState
+		entries int64
+	}{{}, {listing.LookupPresent, 2}, {listing.LookupPresent, 0}, {listing.LookupAbsent, 0}, {listing.LookupPresent, 1}} {
+		if s := sums[i]; i > 0 && (s.State != want.state || s.Entries != want.entries || !s.Complete || s.Unread != 0) {
+			t.Errorf("%q: %v, %d entries, complete %t, unread %d; want %v, %d", targets[i].Key, s.State, s.Entries, s.Complete, s.Unread, want.state, want.entries)
+		}
+	}
+	if s := sums[1]; s.Self == nil || string(s.Self.Key) != "d/" || s.Self.Kind != listing.KindDir {
+		t.Errorf("d/: self %+v", s.Self)
+	}
+
+	dirs, _, err := src.Summarize(context.Background(), targets[1:2], listing.SummaryOptions{Kinds: []listing.Kind{listing.KindDir}})
+	if err != nil || dirs[0].Entries != 2 { // d/ itself and d/e/
+		t.Errorf("d/, counting directories: %+v, %v", dirs, err)
 	}
 }
