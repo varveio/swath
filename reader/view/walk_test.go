@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/reader"
 	"github.com/varveio/swath/reader/listing"
@@ -206,6 +207,29 @@ func TestWalkLargeParallel(t *testing.T) {
 	for k, n := range seen {
 		if n != 1 {
 			t.Fatalf("%q handed %d times", k, n)
+		}
+	}
+}
+
+// TestWalkAllocations: a walk allocates per batch, not per entry or value
+// (an entry's values are valid only until emit returns), sequentially and
+// in parallel shards.
+func TestWalkAllocations(t *testing.T) {
+	rs := make([]rec, 4096)
+	for i := range rs {
+		at := base.Add(time.Duration(i) * time.Second)
+		rs[i] = rec{key: fmt.Sprintf("f%05d", i), kind: "file", size: ptr(int64(i)), alloc: ptr(int64(4096)), modified: &at,
+			links: ptr[uint32](1), inode: ptr(uint64(i)), dev: ptr[uint64](64)}
+	}
+	inv := open(t, write(t, fixture{id: reader.LocalV1, rows: rs, pageRows: 1024, partBytes: 1 << 20}))
+	for _, req := range []listing.WalkRequest{{Workers: 1}, {Workers: 4}} {
+		allocs := testing.AllocsPerRun(5, func() {
+			if _, err := inv.Walk(context.Background(), req, func(listing.WalkBatch) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if perEntry := allocs / float64(len(rs)); perEntry > 1 {
+			t.Errorf("%+v: %.2f allocations an entry, want at most 1", req, perEntry)
 		}
 	}
 }

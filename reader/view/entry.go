@@ -267,7 +267,7 @@ func room[T any](s []T, n int) []T {
 
 func (s *slab) int64(v int64) *int64 {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.ints = append(s.ints, v)
 	return &s.ints[len(s.ints)-1]
@@ -275,7 +275,7 @@ func (s *slab) int64(v int64) *int64 {
 
 func (s *slab) uint64(v uint64) *uint64 {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.words = append(s.words, v)
 	return &s.words[len(s.words)-1]
@@ -283,7 +283,7 @@ func (s *slab) uint64(v uint64) *uint64 {
 
 func (s *slab) uint32(v uint32) *uint32 {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.links = append(s.links, v)
 	return &s.links[len(s.links)-1]
@@ -291,7 +291,7 @@ func (s *slab) uint32(v uint32) *uint32 {
 
 func (s *slab) time(v time.Time) *time.Time {
 	if s == nil {
-		return &v
+		return new(v)
 	}
 	s.times = append(s.times, v)
 	return &s.times[len(s.times)-1]
