@@ -27,7 +27,7 @@ import (
 // leased a miss opens past the target: the descriptors open are at most
 // the larger of maxHandles and the concurrent readers, which the readers
 // themselves bound (the drainer's maxReaders, the read-ahead's aheadReads,
-// the segment workers listing.segmentWorkers admits, which may exceed 16
+// the segment workers inventory.segmentWorkers admits, which may exceed 16
 // when the descriptor limit allows). That is the bound descriptor
 // admission already priced before the cache; it adds none. A spill open
 // that fails for want of descriptors (EMFILE, ENFILE), a read miss's or a
