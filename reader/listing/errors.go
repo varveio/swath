@@ -6,16 +6,15 @@ package listing
 import "errors"
 
 // The error classes. A call that fails returns an error that matches its
-// class with errors.Is, and may wrap a cause beside it. A page's
-// MaxDuration stop is not an error; an answer's unknown key is a
-// LookupUnknown with its class as the Reason, and a place a walk could not
-// read an Unread with its class as the Reason. The errors of a cancelled
-// ctx are returned as they are, matching no class.
+// class with errors.Is, and may wrap a cause beside it. An answer's
+// unknown key is a LookupUnknown with its class as the Reason, and a place
+// a walk could not read an Unread with its class as the Reason. The errors
+// of an ended ctx are returned as they are, matching no class.
 var (
 	// ErrInvalidRequest is a request that breaks this contract: a key or
 	// prefix of the wrong form, a NUL in a key, a Limit that is not
-	// positive, a negative MaxDuration or number of workers. It is
-	// refused before any request.
+	// positive, a negative number of workers. It is refused before any
+	// request.
 	ErrInvalidRequest = errors.New("listing: invalid request")
 	// ErrInvalidToken is a page token issued for another source,
 	// inventory or prefix, or of a version the backend does not read. It is refused before any request.

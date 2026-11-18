@@ -91,7 +91,7 @@ func TestWalkEachEntryOnce(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Fatalf("%q at %d: %d keys, want %d", c.prefix, c.workers, len(got), len(want))
 		}
-		if ev := sum.Evidence; sum.Entries != int64(len(got)) || unread != 0 || ev.Stop != listing.StopCompleted || ev.Unlocated == nil || *ev.Unlocated != 0 {
+		if ev := sum.Evidence; sum.Entries != int64(len(got)) || unread != 0 || ev.Unlocated == nil || *ev.Unlocated != 0 {
 			t.Errorf("%q at %d: %+v, unread %d", c.prefix, c.workers, sum, unread)
 		}
 

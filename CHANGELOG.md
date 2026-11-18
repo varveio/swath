@@ -49,9 +49,9 @@ Notable changes per release. The human summary of the current release is in the
   whose lookups answer present, absent or unknown, every answer with live `Evidence` and every error in a
   `reader/listing` class. It links no flag parser, Parquet writer or run pipeline
   ([library guide](docs/library.md)).
-- A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them, and its
-  `MaxDuration` bounds its time. A lookup left unknown
-  carries evidence that is not completed.
+- A page's `Limit` bounds its children; the entry at exactly its prefix comes as `Self` beside them. No call has a
+  time limit of its own: a context deadline bounds it. A lookup left unknown carries evidence whose `Unlocated` is
+  nil.
 - The root package's `Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
   only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
   parallel; it sets no limit, and a caller stops it by cancelling its context, when it returns the context's error

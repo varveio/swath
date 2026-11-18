@@ -131,7 +131,7 @@ func TestPage(t *testing.T) {
 	if self.Kind != listing.KindDir || *self.Device != *f.Device || self.Inode == nil || self.LastModified == nil {
 		t.Errorf("self of a/: %+v", self)
 	}
-	if page.Evidence.Stop != listing.StopCompleted {
+	if page.Evidence.Unlocated == nil || *page.Evidence.Unlocated != 0 {
 		t.Errorf("a/: evidence %+v", page.Evidence)
 	}
 }
@@ -285,7 +285,7 @@ func TestLookup(t *testing.T) {
 			continue
 		}
 		// An unknown answer's evidence must not read as complete.
-		if complete := r.Evidence.Stop == listing.StopCompleted && r.Evidence.Unlocated != nil && *r.Evidence.Unlocated == 0; complete == (r.State == listing.LookupUnknown) {
+		if complete := r.Evidence.Unlocated != nil && *r.Evidence.Unlocated == 0; complete == (r.State == listing.LookupUnknown) {
 			t.Errorf("%q: %v with evidence %+v", c.key, r.State, r.Evidence)
 		}
 		switch r.State {
@@ -686,7 +686,7 @@ func TestWalk(t *testing.T) {
 			return nil
 		})
 		slices.Sort(got)
-		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Evidence.Stop != listing.StopCompleted || sum.Complete == locked {
+		if err != nil || !slices.Equal(got, want) || sum.Entries != int64(len(want)) || sum.Complete == locked {
 			t.Fatalf("workers %d: %q, %+v, %v; want %q", workers, got, sum, err, want)
 		}
 		if wantUnread := map[bool]int{true: 1}[locked]; len(unread) != wantUnread || sum.Unread != int64(wantUnread) || locked && unread[0] != "locked/" {
@@ -725,7 +725,7 @@ func TestWalkCancelled(t *testing.T) {
 		cancel()
 		return nil
 	})
-	if !errors.Is(err, context.Canceled) || sum.Evidence.Stop == listing.StopCompleted || sum.Complete || sum.Entries == 0 {
+	if !errors.Is(err, context.Canceled) || sum.Evidence.Unlocated != nil || sum.Complete || sum.Entries == 0 {
 		t.Fatalf("%+v, %v", sum, err)
 	}
 }

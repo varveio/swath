@@ -41,7 +41,7 @@ func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, o
 		return nil, listing.Evidence{}, failed(ctx, err)
 	}
 	s.complete()
-	return s.out, inv.evidence(listing.StopCompleted), nil
+	return s.out, inv.evidence(), nil
 }
 
 // checkSummary refuses targets of the wrong form, and returns the kinds

@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/varveio/swath/reader"
 	"github.com/varveio/swath/reader/listing"
@@ -46,9 +45,6 @@ func level(t *testing.T, inv *Inventory, prefix string, limit int) (*listing.Ent
 		p, err := inv.Page(context.Background(), listing.PageRequest{Prefix: []byte(prefix), Token: token, Limit: limit})
 		if err != nil {
 			t.Fatalf("page %d of %q by %d: %v", n, prefix, limit, err)
-		}
-		if p.Evidence.Stop != listing.StopCompleted {
-			t.Fatalf("page %d of %q: evidence %+v", n, prefix, p.Evidence)
 		}
 		if len(p.Entries) > limit || p.Next != "" && len(p.Entries) != limit {
 			t.Fatalf("page %d of %q by %d holds %d entries, next %q", n, prefix, limit, len(p.Entries), p.Next)
@@ -206,23 +202,5 @@ func TestPageMissingDirectory(t *testing.T) {
 	objects := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects()}))
 	if p, err := page(objects, "missing/"); err != nil || len(p.Entries) != 0 {
 		t.Errorf("object store, empty prefix: %+v, %v", p, err)
-	}
-}
-
-// TestPageTimeBudget: a page its MaxDuration ends holds no entry, says so,
-// and its Next starts it again.
-func TestPageTimeBudget(t *testing.T) {
-	dir := write(t, fixture{id: reader.S3ObjectsV1, rows: objects()})
-	inv := openWith(t, dir, newSlowSource(t, dir, 0))
-	first, err := inv.Page(context.Background(), listing.PageRequest{Limit: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	slow := openWith(t, dir, newSlowSource(t, dir, 50*time.Millisecond))
-	for _, token := range []string{"", first.Next} {
-		p, err := slow.Page(context.Background(), listing.PageRequest{Token: token, Limit: 2, MaxDuration: 5 * time.Millisecond})
-		if err != nil || p.Evidence.Stop != listing.StopTimeBudget || len(p.Entries) != 0 || p.Next != token {
-			t.Errorf("page after %q = %+v, %v", token, p, err)
-		}
 	}
 }

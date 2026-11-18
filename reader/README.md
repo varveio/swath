@@ -144,8 +144,9 @@ The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds th
 answers about a listed location, from a live source or from an opened inventory: Page (the next children of a
 prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
 (count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
-common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope, unlocated gaps and
-whether the call completed), the `Unread` places a live walk could not read, and the error classes.
+common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope and unlocated gaps), the
+`Unread` places a live walk could not read, and the error classes. No call has a time limit of its own: a context
+deadline bounds it.
 It holds types only, imports nothing beyond the standard library, and its API is experimental: it may change in
 any release.
 

@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -29,15 +28,10 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 		return listing.Page{}, err
 	}
 
-	op, cancel := withBudget(ctx, req.MaxDuration)
-	defer cancel()
 	started := time.Now()
-	lvl, err := s.store.List(op, req.Prefix, cur.store, req.Limit)
+	lvl, err := s.store.List(ctx, req.Prefix, cur.store, req.Limit)
 	finished := time.Now()
 	if err != nil {
-		if timeUp(ctx, op) {
-			return listing.Page{Next: req.Token, Evidence: evidence(started, finished, listing.StopTimeBudget)}, nil
-		}
 		return listing.Page{}, failure(ctx, err)
 	}
 
@@ -51,7 +45,7 @@ func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Pag
 		}
 		page.Next = encodeToken(bind, cursor{last: last, store: lvl.Next})
 	}
-	page.Evidence = evidence(started, finished, listing.StopCompleted)
+	page.Evidence = evidence(started, finished, true)
 	return page, nil
 }
 
@@ -60,11 +54,8 @@ func (s *Source) checkPage(req listing.PageRequest) error {
 	if err := s.checkName("prefix", req.Prefix); err != nil {
 		return err
 	}
-	switch {
-	case req.Limit < 1:
+	if req.Limit < 1 {
 		return invalid("a page's Limit is positive")
-	case req.MaxDuration < 0:
-		return invalid("a negative bound")
 	}
 	return nil
 }
@@ -158,10 +149,9 @@ type cursor struct {
 	store string
 }
 
-// binding ties a token to one location and one prefix. Limit and the
-// bounds of a page's work may change from page to page. Tokens are not
-// signed: the binding detects a token used with another source or prefix,
-// not a forged one.
+// binding ties a token to one location and one prefix. Limit may change
+// from page to page. Tokens are not signed: the binding detects a token
+// used with another source or prefix, not a forged one.
 func binding(location string, prefix []byte) string {
 	h := sha256.New()
 	h.Write([]byte("swath live page token\x00"))
@@ -210,22 +200,4 @@ func decodeToken(prefix []byte, bind, token string) (cursor, error) {
 
 func badToken(reason string) error {
 	return fmt.Errorf("%w: %s", listing.ErrInvalidToken, reason)
-}
-
-// errTimeBudget is the cause of a page's context ending at its
-// MaxDuration.
-var errTimeBudget = errors.New("swath: the page's time budget ended")
-
-// withBudget bounds ctx by a page's MaxDuration, when it sets one.
-func withBudget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	if d <= 0 {
-		return context.WithCancel(ctx)
-	}
-	return context.WithTimeoutCause(ctx, d, errTimeBudget)
-}
-
-// timeUp reports whether op, derived from ctx by withBudget, ended at its
-// time budget while ctx itself goes on.
-func timeUp(ctx, op context.Context) bool {
-	return ctx.Err() == nil && errors.Is(context.Cause(op), errTimeBudget)
 }

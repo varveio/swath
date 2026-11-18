@@ -125,8 +125,8 @@ func TestPageOrderAtLimitOne(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%q, limit %d: %v", prefix, limit, err)
 				}
-				if len(page.Entries) > limit || page.Evidence.Stop != listing.StopCompleted {
-					t.Fatalf("%q, limit %d: %d entries, stop %q", prefix, limit, len(page.Entries), page.Evidence.Stop)
+				if len(page.Entries) > limit {
+					t.Fatalf("%q, limit %d: %d entries", prefix, limit, len(page.Entries))
 				}
 				if page.Self != nil {
 					if self != "" || page.Self.Kind != listing.KindObject {
@@ -318,7 +318,7 @@ func TestLookup(t *testing.T) {
 	}
 	ev := found.Evidence
 	if ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
-		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Stop != listing.StopCompleted {
+		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 {
 		t.Errorf("evidence %+v", ev)
 	}
 
@@ -387,24 +387,13 @@ func TestLookupUnknown(t *testing.T) {
 			if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrAuth) || r.Entry != nil {
 				t.Errorf("%+v, %v; want unknown, ErrAuth", r, err)
 			}
-			if r.Evidence.Stop == listing.StopCompleted {
+			if r.Evidence.Unlocated != nil {
 				t.Errorf("evidence %+v", r.Evidence)
 			}
 			if got := sent.list(); !slices.Equal(got, c.want) {
 				t.Errorf("requests %q, want %q", got, c.want)
 			}
 		})
-	}
-}
-
-// TestPageTimeBudget: a page MaxDuration ends holds nothing, says so, and
-// asks again with the token it was given.
-func TestPageTimeBudget(t *testing.T) {
-	s3test.NoCredentials(t)
-	endpoint := s3test.Serve(t, s3test.Delayed(s3test.Handler(s3test.Backend(t, []string{"a"})), time.Second))
-	page, err := open(t, endpoint, s3test.Name).Page(context.Background(), listing.PageRequest{Limit: 10, MaxDuration: 50 * time.Millisecond})
-	if err != nil || len(page.Entries) != 0 || page.Next != "" || page.Evidence.Stop != listing.StopTimeBudget {
-		t.Fatalf("%+v, %v", page, err)
 	}
 }
 
@@ -415,10 +404,9 @@ func TestInvalidRequests(t *testing.T) {
 	src := open(t, endpoint, s3test.Name)
 	ctx := context.Background()
 	for name, req := range map[string]listing.PageRequest{
-		"no limit":   {},
-		"a NUL":      {Prefix: []byte("a\x00"), Limit: 1},
-		"not UTF-8":  {Prefix: []byte{0xff}, Limit: 1},
-		"a negative": {Limit: 1, MaxDuration: -1},
+		"no limit":  {},
+		"a NUL":     {Prefix: []byte("a\x00"), Limit: 1},
+		"not UTF-8": {Prefix: []byte{0xff}, Limit: 1},
 	} {
 		if _, err := src.Page(ctx, req); !errors.Is(err, listing.ErrInvalidRequest) {
 			t.Errorf("page, %s: %v", name, err)

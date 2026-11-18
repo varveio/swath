@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
@@ -29,7 +28,7 @@ type Inventory struct {
 	dataset *reader.Dataset
 	// rows says how a row of the dataset's schema becomes an Entry.
 	rows rowShape
-	// base is every answer's Evidence, without its Stop.
+	// base is every answer's Evidence.
 	base listing.Evidence
 	// digest is the SHA-256 of the manifest's bytes, which binds tokens.
 	digest [sha256.Size]byte
@@ -133,14 +132,12 @@ func unlocated(c *reader.Coverage) *int64 {
 	return &n
 }
 
-// evidence is a copy of the inventory's evidence, the caller's to keep,
-// with stop.
-func (inv *Inventory) evidence(stop listing.StopReason) listing.Evidence {
+// evidence is a copy of the inventory's evidence, the caller's to keep.
+func (inv *Inventory) evidence() listing.Evidence {
 	e := inv.base
 	e.Started, e.Finished = clone(e.Started), clone(e.Finished)
 	e.Scope = bytes.Clone(e.Scope)
 	e.Unlocated = clone(e.Unlocated)
-	e.Stop = stop
 	return e
 }
 
@@ -231,24 +228,6 @@ func (inv *Inventory) checkKey(key []byte) error {
 		return invalid("a local key is relative to the root")
 	}
 	return nil
-}
-
-// errTimeBudget is the cause of a call's context ending at its
-// MaxDuration.
-var errTimeBudget = errors.New("view: the call's time budget ended")
-
-// withBudget bounds ctx by a call's MaxDuration, when it sets one.
-func withBudget(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	if d <= 0 {
-		return context.WithCancel(ctx)
-	}
-	return context.WithTimeoutCause(ctx, d, errTimeBudget)
-}
-
-// timeUp reports whether op, derived from ctx by withBudget, ended at its
-// time budget while ctx itself goes on.
-func timeUp(ctx, op context.Context) bool {
-	return ctx.Err() == nil && errors.Is(context.Cause(op), errTimeBudget)
 }
 
 func clone[T any](p *T) *T {

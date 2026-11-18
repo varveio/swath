@@ -20,9 +20,8 @@ import (
 const tokenVersion = "inv1"
 
 // binding is the part of a token that ties it to one inventory, by its
-// manifest digest, and to one prefix. Limit and MaxDuration bound one
-// page's work, not what the level holds, and may change from page to
-// page. Tokens are not signed: the binding detects a token used with
+// manifest digest, and to one prefix. Limit bounds one page's work, not
+// what the level holds, and may change from page to page. Tokens are not signed: the binding detects a token used with
 // another inventory or prefix, not a forged one.
 func (inv *Inventory) binding(prefix []byte) string {
 	h := sha256.New()

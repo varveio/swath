@@ -95,7 +95,7 @@ func TestWalkEveryEntryOnce(t *testing.T) {
 					if got := keysOf(w.entries); !slices.Equal(got, want) {
 						t.Fatalf("walk %q workers %d:\n got %q\nwant %q", prefix, req.Workers, got, want)
 					}
-					if s.Entries != int64(len(w.entries)) || len(w.unread) != 0 || s.Evidence.Stop != listing.StopCompleted || !s.Complete {
+					if s.Entries != int64(len(w.entries)) || len(w.unread) != 0 || !s.Complete {
 						t.Fatalf("walk %+v: summary %+v, unread %v", req, s, w.unread)
 					}
 					for _, e := range w.entries {
@@ -146,7 +146,7 @@ func TestWalkScopeAndDirectories(t *testing.T) {
 		t.Errorf("walk inside the scope: %+v, %+v, %v", w, s, err)
 	}
 	partial := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: objects(), ext: coverage(extension(reader.S3ObjectsV1), map[string]any{"complete": false})}))
-	if _, s, err := walk(t, partial, listing.WalkRequest{}); err != nil || s.Evidence.Stop != listing.StopCompleted || s.Complete {
+	if _, s, err := walk(t, partial, listing.WalkRequest{}); err != nil || s.Complete {
 		t.Errorf("walk of an inventory whose coverage is not complete: %+v, %v", s, err)
 	}
 
@@ -178,7 +178,7 @@ func TestWalkCancelled(t *testing.T) {
 			cancel()
 			return nil
 		})
-		if !errors.Is(err, context.Canceled) || s.Evidence.Stop == listing.StopCompleted || s.Complete || s.Entries != handed || handed == 0 {
+		if !errors.Is(err, context.Canceled) || s.Complete || s.Entries != handed || handed == 0 {
 			t.Errorf("%+v: %+v, %v; want the context's error, unfinished, %d entries", req, s, err, handed)
 		}
 		cancel()

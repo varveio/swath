@@ -144,8 +144,8 @@ func page(t *testing.T, src *swath.Source, prefix string, limit int) (self strin
 		if err != nil {
 			return self, children, err
 		}
-		if len(p.Entries) > limit || p.Evidence.Stop != listing.StopCompleted {
-			t.Fatalf("%q, limit %d: %d entries, stop %q", prefix, limit, len(p.Entries), p.Evidence.Stop)
+		if len(p.Entries) > limit {
+			t.Fatalf("%q, limit %d: %d entries", prefix, limit, len(p.Entries))
 		}
 		if p.Self != nil {
 			if self != "" || p.Self.Kind != listing.KindObject {
@@ -446,7 +446,7 @@ func TestLookup(t *testing.T) {
 	}
 	ev := found.Evidence
 	if ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
-		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Stop != listing.StopCompleted {
+		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 {
 		t.Errorf("evidence %+v", ev)
 	}
 

@@ -65,19 +65,19 @@
 //
 // # Evidence
 //
-// Every answer carries an Evidence: which backend answered, over what
-// interval its entries were acquired, the scope it covers, the entries its
-// source may lack without recording their keys, and whether the call itself
-// completed. Source coverage (Unread, Evidence.Unlocated) and the call's
-// completeness (Evidence.Stop) are separate: an exact sum over an
-// inventory's rows says nothing about what its listing missed. Nothing is
-// proven absent from a source with unlocated gaps, and nothing outside an
-// answer's scope is absent: it is unknown.
+// Every answer carries an Evidence: over what interval its entries were
+// acquired, the scope it covers, and the entries its source may lack
+// without recording their keys. Source coverage (Unread,
+// Evidence.Unlocated) is not the call's completeness, which is its
+// returning no error: an exact sum over an inventory's rows says nothing
+// about what its listing missed. Nothing is proven absent from a source
+// with unlocated gaps, and nothing outside an answer's scope is absent: it
+// is unknown.
 //
 // # Errors
 //
-// A page that reaches its MaxDuration stops without an error and says so in
-// Evidence.Stop; Walk and Summarize have no bound but ctx. A call that
+// No call sets a bound of its own: a caller bounds any call with a ctx
+// deadline, and the call then returns context.DeadlineExceeded. A call that
 // fails returns an error matching one of the classes ErrInvalidRequest to
 // ErrUnavailable with errors.Is. Error messages carry no credential. Every
 // storage request a call makes, retries included, is reported to the storage

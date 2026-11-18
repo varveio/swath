@@ -119,8 +119,8 @@ no NUL byte in its key, and a size (an object S3 lists without one is `listing.E
 zero). The ranges are checked too: no key range overlaps another, so no key reaches the function twice.
 
 A walk sets no limit of its own. To stop one, cancel its context: `Walk` then returns the context's error, even
-if the function took every batch, together with a `WalkSummary` that counts what the function took and whose
-`Evidence.Stop` is not `completed`. A walk that returns no error finished: its `Evidence.Stop` is `completed`.
+if the function took every batch, together with a `WalkSummary` that counts what the function took. A walk that
+returns no error finished.
 
 A walk that cannot read a place goes on past it and hands the function an `Unread` for it as it meets it, in a
 batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
@@ -156,8 +156,9 @@ bucket.
 ## Evidence and errors
 
 Every answer carries its evidence: it is live, and was read between the call's start and finish, which it gives.
-`Evidence.Stop` says whether the call completed: `completed`, or `time_budget` for a page its `MaxDuration` ended,
-or empty for a walk that did not finish and a lookup left unknown, whose evidence never reads as complete.
+A walk that did not finish and a lookup left unknown have a nil `Evidence.Unlocated`, so their evidence never reads
+as complete. No call has a time limit of its own: bound any call with a context deadline, and it returns
+`context.DeadlineExceeded`.
 
 A call that fails returns an error that `errors.Is` matches to one of the contract's classes, read from the failure
 as swath's command reads it for its outcome: `ErrAuth` for credentials that do not load or a refusal,
@@ -301,7 +302,7 @@ library guarantees:
   after the last key read comes in a later page, one removed does not. It is bound to the directory's device
   and inode and to the prefix. A page reads its whole directory, again for each page, but holds only the names
   that may still be on it, so its memory follows the request's `Limit`, not the directory's size; its time
-  follows the directory's size. The request's `MaxDuration` bounds the reading.
+  follows the directory's size. A context deadline bounds the reading.
 - **Failures in their class.** A prefix that is not there is `listing.ErrNotFound`; one naming something other
   than a directory, a symbolic link included, `listing.ErrNotDirectory`, and so is one with a symbolic link on
   the way, which is not followed: not reached, never absent. A refusal is `listing.ErrAuth`, a name too long for

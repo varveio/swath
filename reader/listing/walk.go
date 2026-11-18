@@ -40,7 +40,7 @@ type WalkBatch struct {
 // WalkSummary is how a walk ended. Walk returns it with its error too: a
 // walk that failed, or whose ctx ended, did not finish, and its Entries
 // and Unread count what it handed to emit before it stopped. A walk
-// finished when Evidence.Stop is StopCompleted.
+// finished when it returned no error.
 type WalkSummary struct {
 	// Entries counts the entries handed to emit.
 	Entries int64
@@ -51,7 +51,6 @@ type WalkSummary struct {
 	// (Evidence.Unlocated is 0), which over an inventory is the
 	// inventory's coverage being complete.
 	Complete bool
-	// Evidence says where the entries came from and whether the walk
-	// finished.
+	// Evidence says where the entries came from.
 	Evidence Evidence
 }

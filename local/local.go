@@ -30,8 +30,8 @@ import (
 // The source answers as package listing states for a local source. A
 // prefix's own directory comes back as the Self of its level's first page.
 // A page's memory follows the request's Limit, not the directory's size,
-// though each page reads its whole directory: a request's MaxDuration
-// bounds that work. A token resumes after the last key a page read, so a
+// though each page reads its whole directory: a ctx deadline bounds that
+// work. A token resumes after the last key a page read, so a
 // directory that changes between pages repeats no key and skips no name
 // that stayed. A prefix that names a symbolic link, or has one on the way,
 // is listing.ErrNotDirectory: a link is never followed, so what lies past

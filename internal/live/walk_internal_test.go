@@ -71,7 +71,7 @@ func TestWalkStreamsUnread(t *testing.T) {
 				got += len(b.Unread)
 				return nil
 			})
-			if err != nil || got != n || sum.Unread != int64(n) || sum.Evidence.Stop != listing.StopCompleted {
+			if err != nil || got != n || sum.Unread != int64(n) || sum.Evidence.Unlocated == nil {
 				t.Fatalf("%d places: %d emitted, %+v, %v", n, got, sum, err)
 			}
 			least = min(least, heap)
@@ -97,7 +97,7 @@ func TestWalkCancelled(t *testing.T) {
 		cancel()
 		return nil
 	})
-	if !errors.Is(err, context.Canceled) || calls != 1 || sum.Unread != 1 || sum.Evidence.Stop == listing.StopCompleted || sum.Evidence.Unlocated != nil {
+	if !errors.Is(err, context.Canceled) || calls != 1 || sum.Unread != 1 || sum.Evidence.Unlocated != nil {
 		t.Fatalf("err %v after %d batches, %+v", err, calls, sum)
 	}
 }

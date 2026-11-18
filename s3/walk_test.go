@@ -121,7 +121,7 @@ func TestWalkEachEntryOnce(t *testing.T) {
 			t.Fatalf("%q at %d: %d keys, want %d", c.prefix, c.workers, len(w.keys), len(want))
 		}
 		ev := sum.Evidence
-		if sum.Entries != int64(len(w.keys)) || w.unread != 0 || ev.Stop != listing.StopCompleted ||
+		if sum.Entries != int64(len(w.keys)) || w.unread != 0 ||
 			ev.Unlocated == nil || *ev.Unlocated != 0 || ev.Started == nil || ev.Finished == nil {
 			t.Errorf("%q at %d: %+v, unread %v, evidence %+v", c.prefix, c.workers, sum, w.unread, ev)
 		}
@@ -190,7 +190,7 @@ func TestWalkCancelled(t *testing.T) {
 	})
 	returned.Store(true)
 	time.Sleep(20 * time.Millisecond)
-	if !errors.Is(err, context.Canceled) || after.Load() != 0 || sum.Entries != took || sum.Evidence.Stop == listing.StopCompleted {
+	if !errors.Is(err, context.Canceled) || after.Load() != 0 || sum.Entries != took || sum.Evidence.Unlocated != nil {
 		t.Fatalf("err %v, %d batches after Walk returned, %+v", err, after.Load(), sum)
 	}
 }

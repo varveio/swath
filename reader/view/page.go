@@ -35,15 +35,13 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		return listing.Page{}, err
 	}
 
-	op, cancel := withBudget(ctx, req.MaxDuration)
-	defer cancel()
 	first := req.Token == ""
 	limit := req.Limit
 	if first && len(req.Prefix) > 0 {
 		// One more, which is Self when the prefix has an entry.
 		limit++
 	}
-	listed, err := inv.sp.Page(op, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{
+	listed, err := inv.sp.Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{
 		Prefix:    req.Prefix,
 		Delimiter: '/',
 		Cursor:    cursor,
@@ -51,10 +49,10 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		Columns:   inv.rows.columns,
 	}}, nil)
 	if err != nil {
-		return inv.stopped(ctx, op, req.Token, err)
+		return listing.Page{}, failed(ctx, err)
 	}
 
-	page := listing.Page{Evidence: inv.evidence(listing.StopCompleted)}
+	page := listing.Page{Evidence: inv.evidence()}
 	entries, next := listed.Entries, listed.Next
 	if limit > req.Limit {
 		if page.Self, entries, next, err = inv.self(req.Prefix, req.Limit, entries, next); err != nil {
@@ -71,8 +69,8 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	}
 
 	if first && len(page.Entries) == 0 && page.Self == nil && inv.rows.local && len(req.Prefix) > 0 {
-		if err := inv.missingDirectory(op, req.Prefix); err != nil {
-			return inv.stopped(ctx, op, req.Token, err)
+		if err := inv.missingDirectory(ctx, req.Prefix); err != nil {
+			return listing.Page{}, failed(ctx, err)
 		}
 	}
 	if next != nil {
@@ -81,16 +79,6 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		}
 	}
 	return page, nil
-}
-
-// stopped is the page err ended: at the page's time budget, a page with
-// no entry whose Next is token, which starts it again; else the error in
-// its class, or ctx's once ctx has ended.
-func (inv *Inventory) stopped(ctx, op context.Context, token string, err error) (listing.Page, error) {
-	if timeUp(ctx, op) {
-		return listing.Page{Next: token, Evidence: inv.evidence(listing.StopTimeBudget)}, nil
-	}
-	return listing.Page{}, failed(ctx, err)
 }
 
 // self takes the entry at exactly prefix from the first page of its
@@ -114,11 +102,8 @@ func (inv *Inventory) checkPage(req listing.PageRequest) error {
 	if err := inv.checkPrefix(req.Prefix); err != nil {
 		return err
 	}
-	switch {
-	case req.Limit < 1 || req.Limit >= math.MaxInt-1:
+	if req.Limit < 1 || req.Limit >= math.MaxInt-1 {
 		return invalid("a page's Limit is positive")
-	case req.MaxDuration < 0:
-		return invalid("a negative bound")
 	}
 	return nil
 }

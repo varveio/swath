@@ -132,8 +132,8 @@ func TestPageOrderAtLimitOne(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%q, limit %d: %v", prefix, limit, err)
 				}
-				if len(page.Entries) > limit || page.Evidence.Stop != listing.StopCompleted {
-					t.Fatalf("%q, limit %d: %d entries, stop %q", prefix, limit, len(page.Entries), page.Evidence.Stop)
+				if len(page.Entries) > limit {
+					t.Fatalf("%q, limit %d: %d entries", prefix, limit, len(page.Entries))
 				}
 				if page.Self != nil {
 					if self != "" || page.Self.Kind != listing.KindObject || page.Self.Size == nil || *page.Self.Size != int64(len(page.Self.Key)) {
@@ -307,7 +307,7 @@ func TestLookup(t *testing.T) {
 	}
 	ev := found.Evidence
 	if ev.Started == nil || ev.Finished == nil || ev.Started.Before(before) ||
-		ev.Finished.Before(*ev.Started) || ev.Stop != listing.StopCompleted {
+		ev.Finished.Before(*ev.Started) || ev.Unlocated == nil || *ev.Unlocated != 0 {
 		t.Errorf("evidence %+v", ev)
 	}
 
@@ -356,7 +356,7 @@ func TestLookupUnknown(t *testing.T) {
 			if err != nil || r.State != listing.LookupUnknown || !errors.Is(r.Reason, listing.ErrAuth) || r.Entry != nil {
 				t.Errorf("%+v, %v; want unknown, ErrAuth", r, err)
 			}
-			if r.Evidence.Stop == listing.StopCompleted {
+			if r.Evidence.Unlocated != nil {
 				t.Errorf("evidence %+v", r.Evidence)
 			}
 			if got := sent.list(); !slices.Equal(got, c.want) {

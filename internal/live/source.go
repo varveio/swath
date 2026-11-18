@@ -48,11 +48,7 @@ func (s *Source) Lookup(ctx context.Context, key []byte) (listing.LookupResult, 
 	if r.Reason != nil {
 		r.Reason = objfile.RedactError(r.Reason)
 	}
-	stop := listing.StopCompleted
-	if r.State == listing.LookupUnknown {
-		stop = "" // not answered: nothing reads as complete
-	}
-	r.Evidence = evidence(started, finished, stop)
+	r.Evidence = evidence(started, finished, r.State != listing.LookupUnknown)
 	return r, nil
 }
 
@@ -62,11 +58,11 @@ func (s *Source) Close() error {
 }
 
 // evidence is a live answer's: read from the store between started and
-// finished, with stop. A completed answer has every gap located
-// (Unlocated 0); any other has an unknown count (nil).
-func evidence(started, finished time.Time, stop listing.StopReason) listing.Evidence {
-	e := listing.Evidence{Started: &started, Finished: &finished, Stop: stop}
-	if stop == listing.StopCompleted {
+// finished. A complete answer has every gap located (Unlocated 0); any
+// other has an unknown count (nil).
+func evidence(started, finished time.Time, complete bool) listing.Evidence {
+	e := listing.Evidence{Started: &started, Finished: &finished}
+	if complete {
 		var unlocated int64
 		e.Unlocated = &unlocated
 	}

@@ -33,7 +33,7 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 	err := w.run(s.store, Walk{Prefix: req.Prefix, Workers: req.Workers})
 	finished := time.Now()
 
-	res := listing.WalkSummary{Entries: w.entries, Unread: w.unread, Evidence: evidence(started, finished, "")}
+	res := listing.WalkSummary{Entries: w.entries, Unread: w.unread, Evidence: evidence(started, finished, false)}
 	switch {
 	case w.emitErr != nil:
 		return res, w.emitErr
@@ -44,7 +44,7 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 	case err != nil:
 		return res, failure(ctx, err)
 	}
-	res.Evidence = evidence(started, finished, listing.StopCompleted)
+	res.Evidence = evidence(started, finished, true)
 	res.Complete = res.Unread == 0
 	return res, nil
 }

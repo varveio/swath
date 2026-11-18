@@ -3,8 +3,6 @@
 
 package listing
 
-import "time"
-
 // PageRequest asks for the next children of a prefix: one level, with "/"
 // as the only delimiter.
 type PageRequest struct {
@@ -17,9 +15,8 @@ type PageRequest struct {
 	// it carries the backend's resume state, the last key returned, and a
 	// fingerprint of the source (an inventory's manifest digest) and of
 	// Prefix. A token that does not match them is ErrInvalidToken, refused
-	// before any request. Limit and MaxDuration may change from page to
-	// page. Tokens are not signed; a caller that hands them to others signs
-	// its own.
+	// before any request. Limit may change from page to page. Tokens are
+	// not signed; a caller that hands them to others signs its own.
 	Token string
 	// Limit is the most children the page returns. It must be positive.
 	// The page's Self, the entry at exactly Prefix, is not a child and
@@ -27,10 +24,6 @@ type PageRequest struct {
 	// short, and on an object store the page that holds Self may hold one
 	// child fewer, since the store's page size counts it.
 	Limit int
-	// MaxDuration bounds the time of a page. Reaching it stops the page
-	// with StopTimeBudget: it holds no entry, and its Next is the
-	// request's Token, which asks again. Zero sets no bound.
-	MaxDuration time.Duration
 }
 
 // Page is one page of a prefix's children. Entries are sorted by Key in
@@ -55,9 +48,8 @@ type Page struct {
 	Self *Entry
 	// Next continues the level: pass it as the next request's Token. A
 	// page may be short or empty and still carry one. An empty Next ends
-	// the level only when Evidence.Stop is StopCompleted or the page holds
-	// entries.
+	// the level.
 	Next string
-	// Evidence says where the page came from and whether it completed.
+	// Evidence says where the page came from.
 	Evidence Evidence
 }
