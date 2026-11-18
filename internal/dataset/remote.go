@@ -22,6 +22,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
+	"github.com/varveio/swath/internal/buildinfo"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader"
@@ -260,11 +261,11 @@ type ClaimReceipt struct {
 }
 
 // newManifest is the manifest of parts (already gated), part i at
-// path(i, part), published now.
+// path(i, part), published now by this build.
 func newManifest(meta Meta, parts []Part, path func(i int, p Part) string) Manifest {
 	m := Manifest{Format: seekparquet.Format, FormatVersion: int(seekparquet.FormatVersion), DraftRevision: int(seekparquet.DraftRevision), SchemaID: meta.SchemaID,
 		Key: seekparquet.Key{Column: KeyColumn, Unique: !meta.Groups}, Source: meta.Source, Scope: meta.Scope, Coverage: meta.Coverage, Collected: meta.Collected, CommittedObjectBytes: meta.CommittedObjectBytes,
-		Filesystem: meta.Filesystem, Parts: []ManifestPart{}}
+		Filesystem: meta.Filesystem, WrittenBy: buildinfo.Read(), Parts: []ManifestPart{}}
 	if m.Coverage.Exclusions == nil {
 		m.Coverage.Exclusions = []string{}
 	}

@@ -19,6 +19,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
+	"github.com/varveio/swath/internal/buildinfo"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/reader"
@@ -318,7 +319,7 @@ func TestManifestShape(t *testing.T) {
 		if err := json.Unmarshal(raw["extensions"], &ext); err != nil {
 			t.Fatal(err)
 		}
-		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"collected", "coverage", "published_at", "scope", "source", "version"}) {
+		if got := slices.Sorted(maps.Keys(ext["swath"])); len(ext) != 1 || !slices.Equal(got, []string{"collected", "coverage", "published_at", "scope", "source", "version", "written_by"}) {
 			t.Fatalf("extensions %s", raw["extensions"])
 		}
 		if !bytes.HasPrefix(raw["extensions"], []byte(`{"swath":{"version":1,`)) {
@@ -331,6 +332,9 @@ func TestManifestShape(t *testing.T) {
 		if !m.Current() || m.MetadataVersion != reader.MetadataVersion || m.Key != (seekparquet.Key{Column: "key", Unique: !groups}) || m.Coverage.StopReason != "end_of_scope" || m.Source.Container != "b" ||
 			len(m.Parts) != 1 || m.Parts[0].SHA256 != part.SHA256 || m.Parts[0].MaxKey != part.MaxKey || m.Parts[0].Path != "data/part-00000.parquet" {
 			t.Fatalf("read back %+v", m)
+		}
+		if m.WrittenBy != buildinfo.Read() || m.WrittenBy.Tool != "swath" || m.WrittenBy.Version == "" {
+			t.Fatalf("written_by %+v, want this build's %+v", m.WrittenBy, buildinfo.Read())
 		}
 	}
 	legacy := `{"format":"swath-dataset","format_version":2,"schema_id":"x/v1","published_at":"2026-11-05T18:00:00Z",

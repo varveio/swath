@@ -17,7 +17,7 @@ first, then labelled lines for the source, when it was listed (local time, the z
 holds (its rows, the bytes of the objects they list when every size is known, and the key range, clipped to
 a terminal's width and left out where it cannot fit), the
 coverage, and last how it is stored (the Parquet parts, their bytes and the swath schema; `-v` adds the
-SeekParquet format id before the schema):
+SeekParquet format id before the schema and the build that wrote the dataset after it):
 
 ```text
 $ swath show media-inventory
