@@ -1332,6 +1332,29 @@ LOOKUPs, 95 READDIRs. Paired, 6 cold rounds: 5.85 s to 2.42 s, −57.9 % [−64.
 each batch as it reads). Local ext4, the same directory warm, 20 rounds: −6.3 % [−19.0, +1.7], no cost. The box
 was loaded by other builds during these runs; the RPC counts do not depend on load.
 
+### Descriptor-relative opens (2026-11-17)
+
+**Synthetic, local, shared host.** 18 vCPU arm64 Linux 7.0 VM, overlay filesystem, Go 1.27, warm; trees from
+`bench/gen_tree.py` (`deep`: 500,000 files in 16,670 directories; `realistic` as above). Other builds ran on
+the box throughout (load average 5 to 15). Paired and interleaved (the arms' order alternates by round), the
+median of the per-round differences with a 95 % bootstrap interval, `7aa35e7a` (directories opened by their
+path) against the change (every directory below the root opened relative to its parent's descriptor), default
+workers (64):
+
+| | rounds | before | after | change |
+|---|---:|---:|---:|---:|
+| `deep`, `swath diag count` | 40 | 0.142 s | 0.140 s | −0.4 % [−3.6, +4.5] |
+| `realistic`, `swath diag count` | 40 | 0.448 s | 0.446 s | +1.6 % [−5.6, +7.2] |
+| `realistic`, `swath diag count --metadata names` | 60 | 0.294 s | 0.301 s | +1.7 % [−0.5, +5.0] |
+| `realistic`, `swath list -o` (sorted Parquet) | 40 | 1.093 s | 1.111 s | −2.8 % [−5.4, +2.5] |
+
+An open relative to the parent costs no more than one by path. The descriptors kept (`dir_opens.peak_kept`) on
+`realistic`: 228 in the sorted listing; in a count 71 at 16 workers, 489 at 64, 728 at 256, 885 at 512, all
+within the limit of 1,024 with nothing refused. At 1,024 workers the limit binds: 16,457 directories refused,
+14,592 opened from an ancestor, the listing whole. With a hard descriptor limit of 256 (a limit of 64 kept), a
+count refuses 75,417 directories and opens 70,679 from an ancestor, every one of the 99,892 opened, and takes
++19.7 % [+9.9, +28.6] (15 rounds, the earlier build first in each; 0.406 to 0.467 s).
+
 ## Memory behind a held-up frontier
 
 **Synthetic** (fixture: 3,000,000 goes-like keys of about 100 bytes served as ListObjectsV2 XML by a keyfake

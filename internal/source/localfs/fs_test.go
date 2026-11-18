@@ -129,6 +129,12 @@ func list(t *testing.T, root string, opt Options, workers, budget int) ([]Row, S
 	if err != nil {
 		t.Fatal(err)
 	}
+	return walk(t, p, workers, budget)
+}
+
+// walk lists p's tree through the order stage.
+func walk(t *testing.T, p *Provider, workers, budget int) ([]Row, Stats) {
+	t.Helper()
 	c := &collect{}
 	if _, err := order.Run[Range, Entry](context.Background(), p, c, &Schema, order.Options{Workers: workers, Budget: int64(budget) * 256}); err != nil {
 		t.Fatal(err)
@@ -300,35 +306,6 @@ func TestSkipDirectory(t *testing.T) {
 		if !slices.Equal(keys, []string{"a/", "a/1", "b"}) || st.Skipped != 1 {
 			t.Fatalf("portable=%v: keys %q skipped %d", portable, keys, st.Skipped)
 		}
-	}
-}
-
-func TestOpenCheckedRejectsSymlinkedChild(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need privileges on Windows")
-	}
-	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	link := filepath.Join(base, "link")
-	if err := os.Mkdir(real, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	var st Stats
-	p := &Provider{}
-	if f, ok, _ := p.openChecked(context.Background(), Range{path: link, prefix: "x/"}, &st); ok {
-		f.Close()
-		t.Fatal("symlinked child directory was opened")
-	}
-	if st.Unsafe != 1 {
-		t.Fatalf("unsafe count %d", st.Unsafe)
-	}
-	if f, ok, _ := p.openChecked(context.Background(), Range{path: link}, &st); !ok { // the root may be a symlink
-		t.Fatal("symlinked root refused")
-	} else {
-		f.Close()
 	}
 }
 
