@@ -95,7 +95,7 @@ are unprefixed, the Java tool's names). Each provider's `Open` reads the group v
 or a benchmark registers one provider with its groups on a flag set of its own (`Factory.RegisterFlags`).
 
 The command imports providers only for that registration and passes the options value for the root's scheme as
-`listing.Config.Source.Options`, opaque to the pipeline; it names no provider, scheme or provider flag
+`inventory.Config.Source.Options`, opaque to the pipeline; it names no provider, scheme or provider flag
 (`TestImportBoundary`; `TestCommandNamesNoProvider` in `cmd/swath` is a tripwire on such spellings in its source: each constant string expression the type checker evaluates there, not values built at run time, [testing.md](testing.md)). `Open` validates the root without
 touching the output. An object store's factory also gives `KeyPrefix(root)`, the key prefix the root names
 (each provider's `ParseURL`): `swath du` counts its depth from it up to its last `/` (`logs/2026/0` from
@@ -119,7 +119,7 @@ against the rows ordered). Optional interfaces, each found by a type assertion:
 | `Resumable` | `Restart(after)` before `Root` | Promoted from the engine ([resume](range-engine.md#resume)) | – |
 | `Capable` | Per-instance capabilities; an instance may decline resume despite implementing it | S3, GCS and Azure | – |
 | `Excluder` | Leaves an output directory inside its root out after output preparation | – | yes |
-| `Reporter` | Named stats, text line, errors, metadata tier, coverage and run-summary activity | `s3`, `gcs`, `azblob` | `listing` |
+| `Reporter` | Named stats, text line, errors, metadata tier, coverage and run-summary activity | `s3`, `gcs`, `azblob` | `inventory` |
 
 The other optional interfaces are the live run's: `Live` (`Answered`), `Advancing` (`Frontier`), `Requested`
 (`Requests`), `SeedTimed`, `Faulted` (`Faults`), `Contended`, and beside `Resumable` the resume's `Seeded`
@@ -169,8 +169,8 @@ These integrations still require work outside the provider directory:
 | `dataset_schema.py`, `verify.py` | Independent schema and verifier support. |
 | `cmd/swath/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
 | `internal/source/registered_test.go` | Central registration, interface, restart, locator and client-reporting coverage. |
-| `internal/listing/producerschema_test.go` | Producer schema golden coverage (`testdata/producer-schema-*.golden`). |
-| `internal/listing/reader_fixtures_test.go`, `scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py` | When adding conformance support: produce the schema's fixture in `TestSeekParquetFixtures`, select it in the shell runner and declare projected columns in Python's `COLUMNS`. The scripts live at the repository root. |
+| `internal/inventory/producerschema_test.go` | Producer schema golden coverage (`testdata/producer-schema-*.golden`). |
+| `internal/inventory/reader_fixtures_test.go`, `scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py` | When adding conformance support: produce the schema's fixture in `TestSeekParquetFixtures`, select it in the shell runner and declare projected columns in Python's `COLUMNS`. The scripts live at the repository root. |
 | `internal/replay/store/sorted.go` | When adding replay support: register the schema projection in `objectProjections`; unknown schema IDs currently replay keys only. |
 | `go.mod`, `go.sum` | Additional SDK dependencies, if needed. |
 

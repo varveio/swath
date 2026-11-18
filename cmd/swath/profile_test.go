@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // profileSpan reads a pprof profile's start (time_nanos, field 9) and
@@ -159,7 +159,7 @@ func TestProfilerPhases(t *testing.T) {
 }
 
 // statuses lists a's files as "name status".
-func statuses(a *listing.Profiles) []string {
+func statuses(a *inventory.Profiles) []string {
 	got := []string{}
 	for _, f := range a.Files {
 		got = append(got, filepath.Base(f.Path)+" "+f.Status)
@@ -253,12 +253,12 @@ func TestPhaseProfilesRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	readReport := func(path string) (listing.Report, map[string]any) {
+	readReport := func(path string) (inventory.Report, map[string]any) {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var r listing.Report
+		var r inventory.Report
 		var raw map[string]any
 		if err := json.Unmarshal(b, &r); err != nil {
 			t.Fatal(err)

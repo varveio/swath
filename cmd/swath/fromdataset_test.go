@@ -25,7 +25,7 @@ import (
 	"github.com/varveio/seekparquet/go/write"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/reader"
 )
@@ -399,7 +399,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	stderr.Reset()
 	got, err := duRun(t, "--from-dataset", ds, "--format", "tsv")
 	var ee *exitError
-	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != listing.ClassIncomplete || !strings.Contains(err.Error(), "the dataset is a partial listing: its listing did not complete (max_keys)") {
+	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != inventory.ClassIncomplete || !strings.Contains(err.Error(), "the dataset is a partial listing: its listing did not complete (max_keys)") {
 		t.Fatalf("exit: %v", err)
 	}
 	if !strings.HasPrefix(got, "row_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\ntotal\t0\t10\t") {
@@ -435,7 +435,7 @@ func TestDuFromDatasetIncomplete(t *testing.T) {
 	}
 	stderr.Reset()
 	got, err = duRun(t, "--from-dataset", local, "--format", "tsv")
-	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != listing.ClassIncomplete ||
+	if !errors.As(err, &ee) || ee.code != exitIncomplete || ee.out.Class != inventory.ClassIncomplete ||
 		err.Error() != "2 entries could not be read when the dataset was listed: the totals leave them out" || !strings.HasPrefix(got, "row_type\t") {
 		t.Fatalf("unreadable: %v, stdout %q", err, got)
 	}

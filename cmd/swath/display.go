@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 )
@@ -307,7 +307,7 @@ func (n nouns) of(rows int64) string { return count(rows) + " " + plural(rows, n
 // dataset, then the requests in flight and sent, and the estimate, for a
 // source that makes requests. No percentage or ETA: a listing has no
 // honest denominator. No key text.
-func progressParts(s listing.ProgressSnapshot, session time.Duration, live float64, n nouns, dataset bool, failing string) []string {
+func progressParts(s inventory.ProgressSnapshot, session time.Duration, live float64, n nouns, dataset bool, failing string) []string {
 	phase := "listing"
 	switch {
 	case s.StartedAt.IsZero():
@@ -367,7 +367,7 @@ type display struct {
 	// (failureWatch.retrying), shown in place of the rate; nil: none.
 	failing func(time.Time) string
 
-	samples chan listing.ProgressSnapshot
+	samples chan inventory.ProgressSnapshot
 	stopped chan struct{}
 	done    sync.WaitGroup
 	once    sync.Once
@@ -423,7 +423,7 @@ func progressInterval(t termOptions, redraw bool) time.Duration {
 
 func newDisplay(out *stderrCoord, redraw bool, width func() int, pal palette, interval time.Duration, started time.Time, noun nouns, dataset bool, failing func(time.Time) string) *display {
 	d := &display{out: out, redraw: redraw, width: width, pal: pal, interval: interval, started: started, noun: noun, dataset: dataset, failing: failing,
-		samples: make(chan listing.ProgressSnapshot, 1), stopped: make(chan struct{})}
+		samples: make(chan inventory.ProgressSnapshot, 1), stopped: make(chan struct{})}
 	d.done.Add(1)
 	go d.loop()
 	return d
@@ -438,7 +438,7 @@ func (d *display) retrying(now time.Time) string {
 }
 
 // offer hands the display a sample; it never blocks.
-func (d *display) offer(s listing.ProgressSnapshot) {
+func (d *display) offer(s inventory.ProgressSnapshot) {
 	if d == nil {
 		return
 	}
@@ -468,7 +468,7 @@ func (d *display) loop() {
 }
 
 // render writes a record if one is due at now.
-func (d *display) render(s listing.ProgressSnapshot, now time.Time) {
+func (d *display) render(s inventory.ProgressSnapshot, now time.Time) {
 	d.renderMu.Lock()
 	defer d.renderMu.Unlock()
 	if !d.last.IsZero() && now.Sub(d.last) < d.interval-d.interval/20 {
@@ -592,7 +592,7 @@ const autoStatsMin = 1500 * time.Millisecond
 // showStats is Java's gating: --stats/--no-stats decide; otherwise not with
 // -q nor after a closed downstream pipe, and on for a run over 1.5 s, one
 // that wrote output, or one that did not complete.
-func showStats(t termOptions, r *listing.Report, brokenPipe bool) bool {
+func showStats(t termOptions, r *inventory.Report, brokenPipe bool) bool {
 	switch {
 	case t.stats.set:
 		return t.stats.on
@@ -621,7 +621,7 @@ func coverageVerdict(complete bool, stopReason string, unreadable int64) string 
 	switch stopReason {
 	case source.StopMaxKeys:
 		return "partial: --max-keys reached"
-	case listing.StopDownstreamClosed:
+	case inventory.StopDownstreamClosed:
 		return "partial: the reader closed the output"
 	case "", source.StopEndOfScope:
 		return "partial: the listing did not reach the end of its scope"
@@ -631,29 +631,29 @@ func coverageVerdict(complete bool, stopReason string, unreadable int64) string 
 
 // runVerdict is a run's verdict line: its coverage when it wrote its
 // output, else how it stopped, with the cause.
-func runVerdict(o listing.Outcome) string {
+func runVerdict(o inventory.Outcome) string {
 	switch o.Class {
-	case listing.ClassOK, listing.ClassIncomplete:
+	case inventory.ClassOK, inventory.ClassIncomplete:
 		return coverageVerdict(o.Complete, o.StopReason, o.Unreadables())
-	case listing.ClassDeadline:
+	case inventory.ClassDeadline:
 		return "stopped: --max-duration reached"
-	case listing.ClassStuck:
+	case inventory.ClassStuck:
 		if o.Cause == source.CauseUnreachable {
 			return "stopped: the endpoint cannot be reached"
 		}
 		return "stopped: no progress within --stall-timeout"
-	case listing.ClassUnresolved:
+	case inventory.ClassUnresolved:
 		return "stopped: the bucket commit is unresolved"
-	case listing.ClassDiskFull:
+	case inventory.ClassDiskFull:
 		if o.Cause == causeSpillBudget {
 			return "stopped: --spill-wait-timeout reached"
 		}
 		return "stopped: the disk is full"
-	case listing.ClassInterrupted:
+	case inventory.ClassInterrupted:
 		return "interrupted"
-	case listing.ClassTerminated:
+	case inventory.ClassTerminated:
 		return "interrupted: " + strings.ToUpper(strings.TrimSuffix(o.StopSource, "+forced_exit"))
-	case listing.ClassRefused, listing.ClassUsage:
+	case inventory.ClassRefused, inventory.ClassUsage:
 		return "refused"
 	}
 	return "failed"
@@ -669,17 +669,17 @@ const rateMin = 2 * time.Second
 // (closingCount) and the bytes listed when known, the time the
 // invocation took and, from rateMin on, the rate over that time, and
 // where the output went (closingDest).
-func statsLines(r *listing.Report, brokenPipe bool, n nouns, detail bool) []string {
+func statsLines(r *inventory.Report, brokenPipe bool, n nouns, detail bool) []string {
 	o := r.Outcome
 	verdict := ""
 	switch {
 	case brokenPipe:
-		verdict = coverageVerdict(false, listing.StopDownstreamClosed, 0)
-	case o.ExitCode == exitOK && (o.Class == "" || o.Class == listing.ClassOK):
+		verdict = coverageVerdict(false, inventory.StopDownstreamClosed, 0)
+	case o.ExitCode == exitOK && (o.Class == "" || o.Class == inventory.ClassOK):
 		verdict = coverageVerdict(o.Complete, o.StopReason, o.Unreadables())
 	default:
 		verdict = runVerdict(o)
-		if o.Class == listing.ClassRefused || o.Class == listing.ClassUsage {
+		if o.Class == inventory.ClassRefused || o.Class == inventory.ClassUsage {
 			// Refused before it ran: the verdict is the whole record.
 			return []string{verdict}
 		}
@@ -707,9 +707,9 @@ func statsLines(r *listing.Report, brokenPipe bool, n nouns, detail bool) []stri
 }
 
 // saved says a dataset run stopped with parts kept for swath resume.
-func saved(r *listing.Report) bool {
+func saved(r *inventory.Report) bool {
 	o := r.Outcome
-	return r.Output.Text == nil && r.Invocation.Out != "" && o.Status != listing.StatusCommitted && o.Resumable && resumableStops[o.Class]
+	return r.Output.Text == nil && r.Invocation.Out != "" && o.Status != inventory.StatusCommitted && o.Resumable && resumableStops[o.Class]
 }
 
 // closingCount is what a run counted, for the result line: under swath du
@@ -719,7 +719,7 @@ func saved(r *listing.Report) bool {
 // otherwise the rows listed. The rows the filters dropped follow the ones
 // kept, and the bytes listed (a dataset's, or the total row's size) when
 // they are known.
-func closingCount(r *listing.Report, n nouns) string {
+func closingCount(r *inventory.Report, n nouns) string {
 	out := &r.Output
 	if saved(r) {
 		return count(out.RowsDurable) + " saved, " + count(out.RowsFetched+out.RowsRetained) + " listed"
@@ -746,7 +746,7 @@ func closingCount(r *listing.Report, n nouns) string {
 		if t.Size != nil && t.SizeMissing == 0 {
 			bytes = t.Size
 		}
-	case r.Outcome.Status == listing.StatusCommitted:
+	case r.Outcome.Status == inventory.StatusCommitted:
 		bytes = out.CommittedObjectBytes
 	case out.RowsRetained == 0:
 		bytes = out.ObjectBytes
@@ -771,22 +771,22 @@ func closingCount(r *listing.Report, n nouns) string {
 // closingDest is where the output went: " → " a dataset with its parts and
 // their bytes, or a text file with its bytes; nothing for stdout, swath
 // du's rows and a count. A text file that a stopped run discarded says so.
-func closingDest(r *listing.Report) string {
+func closingDest(r *inventory.Report) string {
 	out, o := &r.Output, r.Outcome
 	if t := out.Text; t != nil {
 		switch {
 		case t.Destination == "-":
 			return ""
-		case o.Status == listing.StatusWritten:
+		case o.Status == inventory.StatusWritten:
 			return " → " + escapeControl(t.Destination) + " (" + textout.Size(t.Bytes) + ")"
 		}
 		return ", no file written"
 	}
 	dir := r.Invocation.Out
-	if dir == "" || o.Status != listing.StatusCommitted && !saved(r) {
+	if dir == "" || o.Status != inventory.StatusCommitted && !saved(r) {
 		return ""
 	}
-	if rem := out.Remote; rem != nil && o.Status == listing.StatusCommitted {
+	if rem := out.Remote; rem != nil && o.Status == inventory.StatusCommitted {
 		dir = rem.Destination
 	}
 	parts := int64(out.PartsWritten + out.PartsRetained)
@@ -800,14 +800,14 @@ func closingDest(r *listing.Report) string {
 // stopped run that can resume, swath show and swath du --from-dataset
 // for a committed dataset (swath show alone for one in a bucket, given
 // its work directory); "" otherwise.
-func closingNext(r *listing.Report) string {
+func closingNext(r *inventory.Report) string {
 	o, dir := r.Outcome, r.Invocation.Out
 	switch {
 	case dir == "" || r.Output.Text != nil:
 		return ""
 	case o.Resumable && resumableStops[o.Class]:
 		return "swath resume " + shellOperand(dir)
-	case o.Status != listing.StatusCommitted:
+	case o.Status != inventory.StatusCommitted:
 		return ""
 	case r.Output.Remote != nil:
 		return "swath show " + shellOperand(dir)
@@ -818,7 +818,7 @@ func closingNext(r *listing.Report) string {
 // closingDetail is the run's statistics (--stats): the requests and the
 // mean and peak in flight, the throttles and retries when any, the
 // estimate, and the peak RSS.
-func closingDetail(r *listing.Report) []string {
+func closingDetail(r *inventory.Report) []string {
 	var lines []string
 	q := r.Live()
 	if r.Requests != nil && r.Requests.HTTPAttempts > 0 {
@@ -890,7 +890,7 @@ type termUI struct {
 // rows says stdout is a terminal that carries the run's rows
 // (progressPrefs). Under --log-format json nothing is redrawn or coloured:
 // progress records are appended events.
-func startTerminal(t termOptions, att *listing.Attempt, start startFields, dataset bool, noun nouns, rows bool, failing func(time.Time) string) *termUI {
+func startTerminal(t termOptions, att *inventory.Attempt, start startFields, dataset bool, noun nouns, rows bool, failing func(time.Time) string) *termUI {
 	tty, width := stderrTerminal()
 	json := t.logFormat == logJSON
 	if json {
@@ -917,12 +917,12 @@ func startTerminal(t termOptions, att *listing.Attempt, start startFields, datas
 // stats prints the end-of-run block when the preferences call for it, and
 // reports whether it did; under --log-format json the outcome event stands
 // for it.
-func (tt *termUI) stats(r *listing.Report, brokenPipe bool) bool {
+func (tt *termUI) stats(r *inventory.Report, brokenPipe bool) bool {
 	if tt == nil || elog().json || !showStats(tt.opt, r, brokenPipe) {
 		return false
 	}
 	lines := statsLines(r, brokenPipe, tt.noun, tt.opt.stats.set && tt.opt.stats.on)
-	failed := brokenPipe || r.Outcome.ExitCode != exitOK || r.Outcome.Class == listing.ClassIncomplete
+	failed := brokenPipe || r.Outcome.ExitCode != exitOK || r.Outcome.Class == inventory.ClassIncomplete
 	writeStats(errOut, lines, tt.pal, failed && !brokenPipe)
 	if n := r.Output.RowsEmitted; tt.saveHint != nil && tt.tty && tt.opt.quiet == 0 && !failed && n >= hintRows {
 		var b strings.Builder
@@ -953,7 +953,7 @@ func approx(n int64) string {
 
 // status prints one progress record of s now, whatever the display's
 // gating, in the log's format (SIGUSR1, SIGINFO).
-func (tt *termUI) status(s listing.ProgressSnapshot) {
+func (tt *termUI) status(s inventory.ProgressSnapshot) {
 	avg := 0.0
 	if s.DurationMs > 0 {
 		avg = float64(s.Rows) * 1000 / float64(s.DurationMs)

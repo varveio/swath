@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
@@ -224,7 +224,7 @@ func TestDuViewFromDataset(t *testing.T) {
 		if err := runDu(context.Background(), append(append(slices.Clone(src), tc.du...), "--no-stats", "-q", "--report", report), &live); err != nil {
 			t.Fatal(err)
 		}
-		var r listing.Report
+		var r inventory.Report
 		readJSON(t, report, &r)
 		if v := r.TotalsView; v == nil || v.Runs < 1 || v.Completed == 0 || v.DepthKept != -1 {
 			t.Fatalf("%s: report view %+v", src[0], v)

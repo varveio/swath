@@ -25,7 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/dataset"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/textout"
 )
 
@@ -411,9 +411,9 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 		!strings.HasSuffix(stderr.String(), warning+end) {
 		t.Fatalf("du: exit %d, stdout %q stderr %q", code, out.String(), stderr.String())
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Class != listing.ClassIncomplete || o.Resumable {
+	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Class != inventory.ClassIncomplete || o.Resumable {
 		t.Fatalf("report outcome %+v", o)
 	}
 	// A listing, text or a dataset, ends the same way.
@@ -450,7 +450,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	if code := conclude(err); code != exitIncomplete || err.Error() != want {
 		t.Fatalf("resume: exit %d (%v)", code, err)
 	}
-	rep = listing.Report{}
+	rep = inventory.Report{}
 	readJSON(t, resumed, &rep)
 	if o := rep.Outcome; o.Unreadables() != 1 || o.Complete || o.StopReason != "end_of_scope" || o.ExitCode != exitIncomplete || o.Error != want {
 		t.Fatalf("resume report outcome %+v", o)
@@ -469,9 +469,9 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--format=tsv", "--no-stats", "--report", report}, failingWriter{syscall.EPIPE}); err != nil {
 		t.Fatalf("du into a closed pipe: %v", err)
 	}
-	rep = listing.Report{}
+	rep = inventory.Report{}
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.ExitCode != exitOK || o.Class != listing.ClassOK || o.Complete || o.StopReason != listing.StopDownstreamClosed || o.Unreadables() != 1 {
+	if o := rep.Outcome; o.ExitCode != exitOK || o.Class != inventory.ClassOK || o.Complete || o.StopReason != inventory.StopDownstreamClosed || o.Unreadables() != 1 {
 		t.Fatalf("du into a closed pipe: outcome %+v", o)
 	}
 	// -q keeps the error line, -qq drops it; the exit code stays.

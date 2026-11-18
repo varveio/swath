@@ -44,9 +44,9 @@ The release's `go-tests` runs the race tests in the shards of `scripts/ci/go-rac
 read from the table at the tag, one matrix leg per shard and every one on amd64, beside a
 `vet-reader` leg (`go vet`, the table's `--check`, the reader module's race tests); `publish`
 needs every leg. One unsharded run took 19.5 to 25.5 of the about 28 minutes from a tag push to
-the approval prompt, `internal/listing` alone 1,044 to 1,369 s; the slowest shard sets that wait
+the approval prompt, `internal/inventory` alone 1,044 to 1,369 s; the slowest shard sets that wait
 now, `cmd` at about 10 minutes in a rehearsal of the job ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
-The cost: no leg runs all the tests of `internal/listing` or of `cmd/swath`, the two split
+The cost: no leg runs all the tests of `internal/inventory` or of `cmd/swath`, the two split
 packages, in one process under the race detector, so state leaking from one of their tests into a
 test of another shard is caught only by nightly's unsharded amd64 `go-race-nightly`. The release
 does not check it: its checklist requires a successful `go-race-nightly` job on the commit being
@@ -216,10 +216,10 @@ test is selected by exactly one of its rows; whole-package rows are checked for 
 so a row whose packages have no tests passes and runs nothing. `--self-test` checks the table logic
 against synthetic package lists without Go.
 
-The heavy shards (`internal/listing` and `cmd/swath`, split by their crash, durable, remote-crash
+The heavy shards (`internal/inventory` and `cmd/swath`, split by their crash, durable, remote-crash
 and kill matrices) race on `ubuntu-24.04-arm`. Its weaker memory model makes it the better race target, and
-the same suite took about 30 % less time there (`internal/listing` 490 s against 700 s). The
-`rest*` shards stay on amd64: that gain was measured on `internal/listing` only, and the Parquet
+the same suite took about 30 % less time there (`internal/inventory` 490 s against 700 s). The
+`rest*` shards stay on amd64: that gain was measured on `internal/inventory` only, and the Parquet
 encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `internal/parquetout`
 `footeronly_test.go` pins the bytes of both, #308), so the `rest*` shards' amd64 run and the
 `ubuntu-24.04-arm` `go-xos` leg each exercise one of them. The nightly unsharded
@@ -228,14 +228,14 @@ encoder path differs by architecture (AVX2 on amd64, generic elsewhere; `interna
 In the measured history (2026-11-09, about 200 runs), a warm run took 7–8 minutes and its critical
 path was the single `go-race (rest)` shard at 5.4–8.4 minutes. That shard is now three
 (`rest-replay`, `rest-source`, `rest`); their observations are recorded in [measurements](../../internals/measurements.md).
-By 2026-11-17 the critical path of an ordinary pull request was `go-race (listing-rest)`, whose
-`internal/listing` binary runs its tests one at a time: `TestRemoteCrashMatrix` took 122 of its 430 s,
+By 2026-11-17 the critical path of an ordinary pull request was `go-race (inventory-rest)`, whose
+`internal/inventory` binary runs its tests one at a time: `TestRemoteCrashMatrix` took 122 of its 430 s,
 so it is a shard of its own, `remote-crash`. A test binary's run time is the floor of its shard;
 splitting a package by `-run` is the lever, and `--check` keeps the split complete.
 
-A row may also name another row's build cache. The shards of `internal/listing` build the same
+A row may also name another row's build cache. The shards of `internal/inventory` build the same
 test binary with the same flags on the same runner, and their tests build nothing else, so they
-share one cache (`go-race-listing-rest`) instead of growing four copies; `--check` refuses a shared
+share one cache (`go-race-inventory-rest`) instead of growing four copies; `--check` refuses a shared
 cache between rows of different packages or runners. The two `cmd/swath` shards share one too
 (`go-race-cmd`): both build the race test binary and the swath binary with the `swathtest` tag,
 and `cmd` also builds it without the tag, a few entries it rebuilds when `cmd-kill` saved first.
@@ -249,35 +249,35 @@ command to rerun the shard locally.
 ### Cross-OS
 
 Ordinary PRs retain arm64 coverage for packages raced on amd64, using the complement of the shard
-table. They do not repeat `internal/listing` and `cmd/swath` there. Full platform validation runs
+table. They do not repeat `internal/inventory` and `cmd/swath` there. Full platform validation runs
 on main and dispatch, and on PRs selected by platform/dependency inputs or `ci:full`. Cross-builds
 remain on PRs. The selected-module and platform-skip details belong to
 [Go testing](../../internals/testing.md#cross-os).
 
 Windows runs the suite without `-race` about three times slower than macOS: once the journaled,
-crash and kill matrices ran there, its single leg took 32 minutes (`internal/listing` 28 of them,
+crash and kill matrices ran there, its single leg took 32 minutes (`internal/inventory` 28 of them,
 beside the other packages on four vCPUs). Its full run is therefore split into legs along the race
 shards: a second table in `go-race-shards.sh` names the shards of each leg, the leg runs one
 `go test` per shard, and `--check` and `--self-test` prove every shard is in exactly one leg. Three
 legs of several long shards each made the slowest leg the critical path of every `main` push
-(17.6 minutes median, once 26.5 of its 30-minute limit), so each `internal/listing` and `cmd/swath`
+(17.6 minutes median, once 26.5 of its 30-minute limit), so each `internal/inventory` and `cmd/swath`
 shard is now a leg of its own (`remote-crash` takes about five minutes there, too long to ride with
 another), and the three `rest*` shards share one leg. The leg holding `rest` also vets the module, tests the nested modules and keeps the `go-xos` build
 cache, which the stress Windows runs restore; the other legs use the build cache of their shards
-(the four `internal/listing` legs share one, the two `cmd/swath` legs another). The nightly `go-xos-windows` runs the main module in
+(the four `internal/inventory` legs share one, the two `cmd/swath` legs another). The nightly `go-xos-windows` runs the main module in
 the same legs, from the same table. Microsoft Defender's real-time scanning is
 already off on `windows-latest`, with `C:\` and `D:\` excluded, so the jobs leave it alone
 ([measurements](../../internals/measurements.md#windows-legs-2026-11-16)).
 
 macOS then became the critical job of a full run, 14.5 to 15.7 minutes, its single leg running
-`internal/listing` and `cmd/swath` side by side on three vCPUs. A third table in the same script
-splits it in two legs: `listing` (`internal/listing`'s four shards, which run as the whole package)
+`internal/inventory` and `cmd/swath` side by side on three vCPUs. A third table in the same script
+splits it in two legs: `inventory` (`internal/inventory`'s four shards, which run as the whole package)
 and `rest` (everything else, `go vet` and the nested modules, with the `go-xos` cache). A macOS leg
 runs its packages in one `go test`, as the single job did, so each package still runs all its
 tests in one process there ([macOS legs](../../internals/testing.md#macos-legs)). A full run now
 holds two macOS runners at once instead of one, of the five concurrent macOS jobs the account's plan
 allows: two overlapping full runs (or one and the nightly) take four, and a third beside them waits
-for a runner. The first run took 10.8 minutes for its slowest leg, its `listing` cache not yet
+for a runner. The first run took 10.8 minutes for its slowest leg, its `inventory` cache not yet
 saved, against 15.7 for the single job ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).
 
 A leg's step runs the commands the script prints for it, one per line. A leg that printed none
@@ -297,7 +297,7 @@ each carrying its own copy of the same module cache. Sharing the module cache an
 generations brought one generation to 4.9 GB (2026-11-09), but by 2026-11-17 the caches held
 10.9 GB again with one generation kept: each job restored its build cache, added what it compiled
 and saved it all, and the go command deletes only entries unused for five days, so every cache grew
-with every commit (the three arm64 `internal/listing` shards' from 78 MB each to 175, 289 and
+with every commit (the three arm64 `internal/inventory` shards' from 78 MB each to 175, 289 and
 1,207 MB). GitHub evicted the least recently used entries, module caches among them, and about half
 of the Go jobs downloaded their modules again. The current layout removes the duplication, bounds
 the generations and saves each build cache trimmed to what its job used.
@@ -347,7 +347,7 @@ to the step summary, so a pull request shows what `main` would save. The cost: a
 did not build is not in the next run's cache, and is built again when a run needs it.
 
 Jobs that build the same packages with the same flags on one runner share a build-cache key
-rather than each saving a copy: the `internal/listing` race shards and the `cmd/swath` race shards
+rather than each saving a copy: the `internal/inventory` race shards and the `cmd/swath` race shards
 on arm64, and likewise their Windows legs, as the shard table names them. They race to save one key
 per commit; the first save wins and the others log a warning. That works because each of them
 would save the same trimmed entries, or nearly (`cmd` also builds the swath binary without the
@@ -373,7 +373,7 @@ run's caches. A fixed-order, deduplicated snapshot limits deletions to observed 
 are left for the next pass. This bounds generations, not bytes: concurrent writes can temporarily
 exceed the quota, and the retained families still need to fit the repository budget. With the
 trim, one generation is estimated at about 8.2 GB: 18 build-cache families of about 5.3 GB
-compressed (the macOS `listing` leg's, added after the
+compressed (the macOS `inventory` leg's, added after the
 [#619 measurement](../../internals/measurements.md#windows-shard-legs-remote-crash-and-trimmed-build-caches-2026-11-17),
 about 0.16–0.20 GB), four module caches of 1.9 GB, BuildKit's 0.4 GB and CodeQL's main dependency
 cache and overlay databases, about 0.5 GB ([measurements](../../internals/measurements.md#macos-legs-and-the-releases-race-shards-2026-11-17)).

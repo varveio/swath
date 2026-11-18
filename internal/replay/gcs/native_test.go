@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/replay/store"
 	sourcegcs "github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -34,11 +34,11 @@ func TestNativeSchemaRendersTheBucketsMetadata(t *testing.T) {
 	slices.Sort(keys)
 	url := gcstest.NewStrict(keys).Serve(t)
 	out := filepath.Join(t.TempDir(), "ds")
-	if _, err := listing.Run(context.Background(), listing.Config{
-		Source: listing.SourceConfig{URI: "gs://bkt", Options: &sourcegcs.Options{Endpoint: url, Anonymous: true}},
+	if _, err := inventory.Run(context.Background(), inventory.Config{
+		Source: inventory.SourceConfig{URI: "gs://bkt", Options: &sourcegcs.Options{Endpoint: url, Anonymous: true}},
 		// A dataset is all these tests need: unjournaled where a journaled run is refused (Windows).
-		Output: listing.OutputConfig{Dir: out},
-		Limits: listing.Limits{PartSize: 6 << 10, PartInterval: -1},
+		Output: inventory.OutputConfig{Dir: out},
+		Limits: inventory.Limits{PartSize: 6 << 10, PartInterval: -1},
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
 
@@ -53,7 +53,7 @@ func TestTraceFlag(t *testing.T) {
 		t.Fatalf("trace events %v", kinds)
 	}
 	end := evs[len(evs)-1]
-	if end["status"] != listing.StatusCommitted || end["dropped"] != 0.0 || end["events"] != float64(len(evs)-1) {
+	if end["status"] != inventory.StatusCommitted || end["dropped"] != 0.0 || end["events"] != float64(len(evs)-1) {
 		t.Fatalf("run_end %v", end)
 	}
 	var rep struct {

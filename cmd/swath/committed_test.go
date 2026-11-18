@@ -17,7 +17,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/objfile/gcs/gcsfake"
 )
@@ -29,7 +29,7 @@ import (
 // is partial.
 func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, want *int64) {
 	t.Helper()
-	var rep listing.Report
+	var rep inventory.Report
 	if err := json.Unmarshal(raw, &rep); err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +47,11 @@ func committedReport(t *testing.T, name string, raw []byte, m dataset.Manifest, 
 	if has := strings.Contains(string(raw), `"committed_object_bytes"`); has != (want != nil) {
 		t.Fatalf("%s: committed_object_bytes present %v", name, has)
 	}
-	class, code := listing.ClassOK, exitOK
+	class, code := inventory.ClassOK, exitOK
 	if !m.Coverage.Complete {
-		class, code = listing.ClassIncomplete, exitIncomplete
+		class, code = inventory.ClassIncomplete, exitIncomplete
 	}
-	if oc := rep.Outcome; oc.Status != listing.StatusCommitted || oc.Class != class || oc.ExitCode != code || oc.Complete != m.Coverage.Complete {
+	if oc := rep.Outcome; oc.Status != inventory.StatusCommitted || oc.Class != class || oc.ExitCode != code || oc.Complete != m.Coverage.Complete {
 		t.Fatalf("%s: outcome %+v", name, oc)
 	}
 }
@@ -137,7 +137,7 @@ func TestRemoteResumeFindsCommit(t *testing.T) {
 	}{
 		{"complete", nil, false},
 		// A partial commit (a key limit) is a diag run's, never resumable;
-		// listing.TestCommittedOutcome covers its run.json outcome.
+		// inventory.TestCommittedOutcome covers its run.json outcome.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := gcsfake.New("dst")
@@ -190,7 +190,7 @@ func TestRemoteResumeFindsCommit(t *testing.T) {
 				t.Fatal(err)
 			}
 			committedReport(t, "--report", b, m, want)
-			var rep listing.Report
+			var rep inventory.Report
 			_ = json.Unmarshal(b, &rep)
 			if r := rep.Output.Remote; r == nil || r.Commit != "resumed" {
 				t.Fatalf("--report remote %+v", r)

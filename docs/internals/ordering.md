@@ -48,7 +48,7 @@ marker) lists the rest of its marker's group, so it lies inside a certificate on
 above `max(cs, K)`, which the test's request log rules out as well. A claimed part whose record was lost is
 reproduced after K at its claimed row count (parquet-output.md) from the replayed and listed rows; on a
 static source they are the cold run's rows in the cold run's order, so the pinned cut falls where it did
-and does not raise `ErrAmbiguousTail` (`keyrange` `TestGroupsFencesAtCompleteKeys`; `listing`
+and does not raise `ErrAmbiguousTail` (`keyrange` `TestGroupsFencesAtCompleteKeys`; `inventory`
 `TestVersionsDurableSpill`, including kills at `journal-append` with K inside a live certificate).
 
 **Repeated keys and the drain tail.** The segment-parallel tail ([Segments](#segments-parts-written-in-parallel-after-listing)) cuts the rest of the stream where the
@@ -63,7 +63,7 @@ checks as `send` does: inside a segment equality is accepted only in group mode,
 rows in provider order, never against `Options.After`. Segments count their distinct keys into
 `Stats.DistinctKeys`, and the versions counts see the segments' rows as well (registry's `versionSegmenter`).
 `order` `TestSegmentsCutAtKeyChanges` (7-row groups cut every 5 rows, the parts the serial drain's) and
-`TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `listing`
+`TestSegmentsSeamInsideAGroup` (planned without the rule, the seam check refuses); `inventory`
 `TestVersionsTailSeamsAtKeyChanges` (the serial tail), `TestVersionsSegmentsAtKeyChanges` (hot keys, segments
 engaged from memory, byte-identical to the one-encoder run) and `TestVersionsSegmentsReadDurableFiles` (segments
 reading sealed durable files, byte-identical to a serial run).
@@ -78,7 +78,7 @@ those children's keys (`TestFailedRangeStopsTheStream` forces that window with `
 ## The budget
 
 `Options.Budget` is a byte budget, `--sort-buffer`, for rows in flight: by default 1/16 of the least detected memory
-limit (physical, cgroup, `GOMEMLIMIT`), between 128 KiB and 1 GiB (`listing.rowBudgetFor`). A row counts its value (`schema.Row[P]`, the
+limit (physical, cgroup, `GOMEMLIMIT`), between 128 KiB and 1 GiB (`inventory.rowBudgetFor`). A row counts its value (`schema.Row[P]`, the
 key and the payload), its key bytes and the payload's strings (`Schema.RowBytes`, with the producer's `Heap`). The strings are views of the page arena they came from, so
 counting them approximates the arena they keep alive. That holds only while most of a page is handed on: a row
 filter (`registry/filtered.go`) that keeps at most half of a page's rows or charged bytes detaches the survivors
@@ -163,18 +163,18 @@ by about 15 MiB at the smallest `--sort-buffer`; RSS at 512 workers with 1 KiB k
 **Encoder admission.** The default encoder count is `GOMAXPROCS`, admitted against the run's resources with
 a floor of one: as many encoders as fit in an encoder allowance of their own, apart from the row budget, each
 priced from the provider's schema before the source opens (`parquetout.EncoderBytes`,
-`registry.Factory.EncoderBytes`) plus, for a dataset in a bucket, the one buffer its upload holds (`listing.uploadBytes`): 8 MiB by default
+`registry.Factory.EncoderBytes`) plus, for a dataset in a bucket, the one buffer its upload holds (`inventory.uploadBytes`): 8 MiB by default
 for every provider; a GCS chunk asked is rounded up to 256 KiB as the SDK sends it, an S3 part (5 MiB to
 5 GiB) and an Azure block (1 byte to 256 MiB) are exactly the size asked, any other size refused. The allowance is the default row budget's share of the
 memory found (1/16, at least 128 KiB, at most 1 GiB; 128 MiB when no limit is found), whatever `--sort-buffer`
 says: the sort buffer sizes row storage only, and a small one does not starve the writers. [Writer buffers and admission](parquet-output.md#writer-buffers-and-admission)
 own the calculation, per-schema prices and measured margins. Descriptors bound the default count too:
 as many as the soft limit leaves after 16 spill descriptors (`order.MaxSpillReaders`), two per worker
-and a reserve of 32 (`listing.admitEncoders`). An explicit `--encoders N` bypasses default memory
+and a reserve of 32 (`inventory.admitEncoders`). An explicit `--encoders N` bypasses default memory
 and descriptor admission and is honored with a warning on a resource shortfall.
 
 Once the provider has finished listing (every range expanded, none in flight: `order.Options.ListingDone`,
-the report's `timings.provider_finished_at`), the default count is raised to `listing.admitAfterListing`: no page is
+the report's `timings.provider_finished_at`), the default count is raised to `inventory.admitAfterListing`: no page is
 in flight any more, so the memory the workers' pages held outside the budget (counted at 1 MiB each, a
 1,000-key S3 response and its arena) is added to the encoder allowance, still at most `GOMAXPROCS` and the
 descriptors. For S3's schema (31.5 MiB a writer; 39.5 MiB with an 8 MiB GCS chunk, S3 part or Azure block), before `GOMAXPROCS` caps it:
@@ -280,7 +280,7 @@ listing whatever it holds (a region grown since the prior, keys appended past it
 after it), and certified durable files stay on disk until K covers them. What it removes is the cause of spill
 on a fresh prior: rows listed across the whole keyspace ahead of the output. Rows ahead of the output stay near
 the window's rows plus one tile per worker, so a cap a fraction of a cold run's spill is expected to hold without
-a refused frame (`order` `TestWindowSpillCapHeld`, `listing` `TestPlannedRunIsTheUnseededRun`: a cap at a fifth of
+a refused frame (`order` `TestWindowSpillCapHeld`, `inventory` `TestPlannedRunIsTheUnseededRun`: a cap at a fifth of
 the unseeded run's spill peak, none refused from the dataset's tiles, the parts identical). Expected, not guaranteed, even on a fresh prior
 with exact counts: admission gates tiles, not the listing inside a tile admitted. A tile of 200,000 rows that
 splits, whose lower range stalls while an upper range lists 100,000 poorly compressible rows of about 1 KiB, puts
@@ -300,7 +300,7 @@ spill seen behind the output and the certificates it evicted. Tests: `order` `Te
 frontier: workers wait at the window holding no range, the tiles held stay within it, the run completes when
 released), `TestWindowSmallerThanATile`, `TestPlanWaitWakes`, `TestPlanFailureStopsTheStream`,
 `TestWindowCancelWhileWaiting`, `TestWindowGrowthGuard`, `TestWindowSpillCapHeld`, `TestWindowShrinksToTheSpillCap`; `keyrange` `TestPlanTilesAsTilePrior`,
-`TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `listing` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
+`TestPlanListsEveryKey`, `TestPlanFailureFailsTheRun`; `inventory` `TestCrashMatrix` (`s3-seeded`, the prior's reader killed
 too, and `s3-coarse`, its cuts split behind the window), `TestDurableResumePlannedAcrossTiles` (certificates spanning many tiles); `cmd/swath`
 `TestSIGKILLAtEveryPoint` (`s3-planned`).
 
@@ -379,7 +379,7 @@ merges into the shared tally under one lock, copying a prefix only when it first
 commute, so the result is the same whatever the ranges' interleaving (`TestTallyMatchesBruteForce`, shuffled
 and concurrent batches against a brute-force sum); memory is the distinct prefixes, never the objects, capped
 by `--max-prefixes` (a merge past it fails the run, `totals.LimitError`, cause `prefix_limit`). The prefixes are
-sorted by byte once, at the end, and written through `listing.Config.Deliver` after the count completes and
+sorted by byte once, at the end, and written through `inventory.Config.Deliver` after the count completes and
 before the run's end is stamped, so a failed write or a stop during it fails the run.
 
 A sink that is an `order.RangeSink` takes the rows in runs instead: the emitter opens a run at a range's first
@@ -488,7 +488,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
 - **Active ranges spill too.** The unit is a publish batch of a running range, not a finished range. A
   range larger than the remaining budget therefore does not block on the row budget while the disk budget
   and reserve admit its frames (the waits above); this is what the slow-frontier shape needs.
-- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, `swath-ATTEMPT-RANDOM/spill/spill-*/` in the temp directory; a dry run never spills). The scratch directory is created exclusively and named for the file and the attempt (`listing.textScratch`), so two attempts writing sibling files, the same file, or streams never share or remove each other's (`TestTextScratchPerAttempt`); a killed attempt leaves its own, with the file's `.NAME.*.tmp`, for the user to delete.
+- **Files.** One file per range under `DIR/.swath/spill/spill-*/` (for a text file, under `.NAME.swath-ATTEMPT-RANDOM/spill/spill-*/` beside it, a directory its attempt made and removes; for stdout, `swath-ATTEMPT-RANDOM/spill/spill-*/` in the temp directory; a dry run never spills). The scratch directory is created exclusively and named for the file and the attempt (`inventory.textScratch`), so two attempts writing sibling files, the same file, or streams never share or remove each other's (`TestTextScratchPerAttempt`); a killed attempt leaves its own, with the file's `.NAME.*.tmp`, for the user to delete.
   Frames are length-prefixed (4 bytes, little-endian), carry a CRC-32C of the payload, and are typed by the
   payload's first byte: `Y` delta rows compressed with zstd level 1 (the default), `D` delta rows
   uncompressed (`--no-spill-compress`), `Z` and `R` plain rows, compressed and not
@@ -549,7 +549,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   stay within it, the least recently used closed first (`evictions.capacity`), and a miss makes room that way
   before it opens. A leased handle is never closed, so with every handle leased a miss opens past 16: the
   descriptors open are at most the larger of 16 and the concurrent readers (the drainer's 8 readers, the
-  read-ahead's 8 reads, the segment workers `listing.segmentWorkers` admits, more than 16 where the descriptor
+  read-ahead's 8 reads, the segment workers `inventory.segmentWorkers` admits, more than 16 where the descriptor
   limit allows), the bound descriptor admission priced before; the cache adds none (`peak_readers` counts its
   descriptors). A spill open refused for
   want of descriptors (EMFILE, ENFILE), a read miss's or a frame's write, closes every idle handle and is retried
@@ -568,7 +568,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   stop and replacement (`TestHandlesTruncation`, `TestHandlesStop`), row and payload conservation at caps
   0, 1, 3 and 16 and in group mode (`TestHandlesConserveRows`, `TestHandlesConserveGroups`), and a durable
   kill and resume with a smaller sort buffer, fewer workers and a smaller spill cap, objects and versions
-  (`listing.TestDurableResumeSmallerBudget`). The report's `spill.read_handles` counts hits, misses (one
+  (`inventory.TestDurableResumeSmallerBudget`). The report's `spill.read_handles` counts hits, misses (one
   open each, two when the first is refused for want of descriptors), races, evictions by reason and
   `peak_open` (descriptors open at once, opens under way not counted); a recovered certificate's replay
   (`durable_replay.go`) opens its own reader, outside these counters (in `spill.opens` and `peak_readers`); `spill.frame_bytes` and `spill.frame_rows` give the row frames'
@@ -584,7 +584,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   the budget is full, since their rows will spill, unless the disk budget has refused a frame.
 - **Disk budget.** A frame is written only if the live spill bytes stay within the spill cap and the spill
   filesystem keeps a reserve free afterwards (below). The cap is `--spill-budget`, fixed, or by default one
-  that follows the disk (`listing.spillMax`, `order.Options.SpillShare`): the space free on the spill
+  that follows the disk (`inventory.spillMax`, `order.Options.SpillShare`): the space free on the spill
   filesystem after the reserve (retained certified spill counted as free), all of it for a dataset in a
   bucket (its parts are uploaded from memory), half of it otherwise, as the filesystem is shared: a dataset on
   disk spills under its directory and a text file beside itself, so the output keeps room, and a stream spills
@@ -609,7 +609,7 @@ disk. On the finite fixture of `TestSpillKeepsWorkersBusy` no worker waits on th
   says what set the cap (`spill.max_by`: `spill_budget`, `disk`, `disk_half` or `none`), the cap the run
   started with (`start_max_bytes`), the cap in effect at the end (`max_bytes`), how many times it rose
   (`cap_raises`, `TestSpillCapFollowsDisk`) and the follower's rechecks (`cap_rechecks`, `cap_recheck_raises`); `progress.json`'s `order.spill_max_bytes` rises with it. The
-  reserve is checked against the filesystem afterwards (`listing.spillReserve`: one part per encoder at
+  reserve is checked against the filesystem afterwards (`inventory.spillReserve`: one part per encoder at
   full size, at least 1 GiB, so the parts being written, which share the filesystem with the spill directory
   under the output, and the journal and manifest have room; `swath diag list --spill-reserve` sets it; the
   reserve in effect is the report's `spill.reserve_bytes`). The two protect different things and are both
@@ -704,7 +704,7 @@ is done, the order stage cuts the rest of the stream into parts itself and write
   beside the drainer's. With two processors or one nothing changes.
 - **How many workers.** Each feeds one part's writer and reads one frame at a time: at most the encoders
   admitted after listing (each writer's working set, `parquetout.EncoderBytes`, is that admission's), one per
-  processor beside the drainer's (`spareProcs`), and the descriptors (`listing.segmentWorkers`: the 16
+  processor beside the drainer's (`spareProcs`), and the descriptors (`inventory.segmentWorkers`: the 16
   spill descriptors reserved at admission, whose drainer readers close when segments begin, plus what the limit
   leaves beside the workers' connections, the part files and the reserve), and at most one per two processors
   (at least 8, `minSegmentWorkers`): a worker drives its part's encoder too. And the row budget, at plan time:
@@ -844,7 +844,7 @@ what sized the workers (`workers_by`, with both sides of the plan), and the time
   on either path. `TestSegmentsReplayCertificates` (a certificate straddling K, part and segment boundaries in
   certified frames, no certificate drained or retired while K moves at every part; the uninterrupted run's
   parts), `TestSegmentsCertificateScanFails`, `cmd/swath` `TestSegmentsReplayDurableFiles` (resumes engaged
-  and killed in their tail at `faults.SegmentPoints`, `spill-replay` and `spill-replay-frame`) and `listing`
+  and killed in their tail at `faults.SegmentPoints`, `spill-replay` and `spill-replay-frame`) and `inventory`
   `TestVersionsSegmentsReadDurableFiles` (a versions resume) cover it. The report counts the segments' share:
   `certificates_read`, `certified_rows` and `certificate_scan_ns`, beside the resume's `replayed_certificates`.
 

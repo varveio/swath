@@ -17,7 +17,7 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source"
 )
 
@@ -155,13 +155,13 @@ func TestCount(t *testing.T) {
 	if !strings.Contains(buf.String(), "rows=2 object_bytes=6 ") {
 		t.Fatalf("summary %q", buf.String())
 	}
-	var r listing.Report
+	var r inventory.Report
 	b, err := os.ReadFile(report)
 	if err != nil || json.Unmarshal(b, &r) != nil {
 		t.Fatal(err)
 	}
-	if r.Outcome.Status != listing.StatusListed || r.Resources.Features["order"] || r.Output.RowsEmitted != 2 || r.Output.RowsFetched != 2 ||
-		r.Output.ObjectBytes == nil || *r.Output.ObjectBytes != 6 || !slices.Equal(r.Invocation.Argv[:2], []string{"diag", "count"}) || r.ReportVersion != listing.ReportVersion {
+	if r.Outcome.Status != inventory.StatusListed || r.Resources.Features["order"] || r.Output.RowsEmitted != 2 || r.Output.RowsFetched != 2 ||
+		r.Output.ObjectBytes == nil || *r.Output.ObjectBytes != 6 || !slices.Equal(r.Invocation.Argv[:2], []string{"diag", "count"}) || r.ReportVersion != inventory.ReportVersion {
 		t.Fatalf("report %+v %+v %v", r.Outcome, r.Output, r.Invocation.Argv)
 	}
 	if r.History == nil || len(r.History.Samples) < 2 {
@@ -228,7 +228,7 @@ func TestHistoryEndsDurable(t *testing.T) {
 		if err := run(context.Background(), args, io.Discard, extra != nil); err != nil {
 			t.Fatal(err)
 		}
-		var r listing.Report
+		var r inventory.Report
 		b, err := os.ReadFile(report)
 		if err != nil || json.Unmarshal(b, &r) != nil {
 			t.Fatal(err)

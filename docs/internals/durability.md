@@ -3,7 +3,7 @@
 A resumable S3, GCS or Azure Blob run with an output directory keeps a journal so that `swath resume DIR` continues an interrupted run. A resume never
 publishes a key twice and never skips one, and the final dataset holds an uninterrupted run's rows: byte-identical
 to it on a static source when no part was cut by time, the same rows with timing-dependent part boundaries when
-`--part-interval` cut one (the promise below). Package `internal/journal` holds the journal; `internal/listing/journal.go` connects it to the router
+`--part-interval` cut one (the promise below). Package `internal/journal` holds the journal; `internal/inventory/journal.go` connects it to the router
 and the provider. Filesystem runs opt out: they are fast enough to restart.
 
 ## Progress states
@@ -91,7 +91,7 @@ replayed once). A certificate becomes a reused range that the order stage replay
 starts inside its `[max(cs, K), ce)`. A prior confers no coverage: no key range is skipped or certified because
 a prior listed it. Coverage above K comes only from certificates that this run's ledger and files prove, and
 a certificate never depends on a prior. The tests are `keyrange` `TestReuseTilesAroundSpans`, prior arm (prior cuts inside
-and around spans; without the cut the resume listed every key), `listing` `TestDurableResumePlannedAcrossTiles`
+and around spans; without the cut the resume listed every key), `inventory` `TestDurableResumePlannedAcrossTiles`
 (certificates spanning many tiles of a counted prior) and the campaign's `seed-from` arm.
 
 **The recovery point's age.** Durable progress advances a part at a time, and a part closes at its size
@@ -145,7 +145,7 @@ The part file itself is written by the seekparquet module's part writer (`write.
 footer, syncs and closes the file, and returns the part's rows, size, exact bounds and the SHA-256 of every
 byte written, footer included, computed as the bytes went out). Its writes and sync go through swath's
 `faults` (the disk-fault matrix). The claim, the record, the rename into `data/` and the manifest's
-installation stay swath's (`listing.runJournal.publish`, `dataset.PublishPartWith`/`PublishPartIn`,
+installation stay swath's (`inventory.runJournal.publish`, `dataset.PublishPartWith`/`PublishPartIn`,
 `dataset.Publish` through `dataset.Replace`), not the module's `local.PublishPart` and `local.Commit`: those
 take no fault hooks, so the crash matrix's `renamed-unsynced` point and the disk-fault matrix's manifest write
 and sync could not be reached through them; and at the pinned version `PublishPart` renames over an existing
@@ -247,7 +247,7 @@ stays). Before recovery, when the run saved a candidate manifest, the destinatio
 one request (`objfile.ReadObject`, bounded by the manifest limit): the
 candidate means the commit happened (the marker is written and the aftermath finished, and the run is
 complete); another manifest, a lost race (refused); none, recovery goes on and the commit creates that
-candidate. Recovery (`listing.recoverRemote`) then syncs the journal, refuses a receipt beyond the ordinal
+candidate. Recovery (`inventory.recoverRemote`) then syncs the journal, refuses a receipt beyond the ordinal
 after the last record (an acknowledged record was lost), and checks every recorded part: the object at its name
 must still be the recorded version (generation, version id or ETag), and its bytes, read whole through that
 pinned version as a stream (opened at the recorded size, with no metadata request: the first read checks the
@@ -268,7 +268,7 @@ name never replace each other's staged blocks. Nothing remote
 is deleted during recovery; the crashed attempts' orphans go at the commit.
 
 A journaled run whose output (the work directory, for a bucket destination) is on a filesystem that
-refuses a directory sync is refused with `listing.ErrUnenforced` and the filesystem's error, whether its
+refuses a directory sync is refused with `inventory.ErrUnenforced` and the filesystem's error, whether its
 destination is local or in S3, GCS or Azure Blob: `openJournal` probes the nearest existing directory on the
 output's path once (`dataset.CheckDirSync`) before taking the output lock, and a bucket destination still
 needs the local `--work-dir` entries synced, so direct uploads do not bypass the refusal. Recovery and
@@ -322,7 +322,7 @@ from a copy of its work directory at another path, the original removed, and req
 replayed and nothing created at the old path. A failed upload, a cancellation, a lost manifest answer, a delayed
 creation, a race of two work directories with different rows, retained objects replaced, deleted or altered,
 links in the work directory, a damaged header and a drifted endpoint have their own tests
-(`internal/listing/remote_test.go`, `remote_faults_test.go`). The tests of `remote_test.go`, and the lost-race
+(`internal/inventory/remote_test.go`, `remote_faults_test.go`). The tests of `remote_test.go`, and the lost-race
 resume and profiles-and-spill tests of `remote_faults_test.go`, run once per provider, against its in-process
 fake (`objfile/gcs/gcsfake`, `objfile/s3/s3fake`, `objfile/azblob/azfake`; the S3 and Azure harnesses lower the
 part and block size to 4 KiB, so a listing part is a multipart upload, or blocks and a block list); the rest of
@@ -336,7 +336,7 @@ uploads and staged blocks follow the documented protocol, not observed GCS, S3 o
 1. Takes the output lock (`DIR/.swath/lock`, `flock`) before recovering, removing or writing anything (the
    command reads the journal header first, to replay its command, and the read-only refusals come before the
    lock so a refused directory is left as it was). It is held through the run's cleanup, publication and the
-   command's `error.json` and progress writes (`listing.Config.Settle`, `Progress.Owned`); a failure under the
+   command's `error.json` and progress writes (`inventory.Config.Settle`, `Progress.Owned`); a failure under the
    lock (a damaged journal, a mismatch, a failed recovery) is settled before it is released, and a resume whose
    source does not open takes the lock to settle, so the interrupted run's outcome never stands as current
    (`TestOutcomeIsCurrent`). Such an early failure settles only the run it saw: it takes `journal.Witness` (a
@@ -415,7 +415,7 @@ uploads and staged blocks follow the documented protocol, not observed GCS, S3 o
    must exist as a directory and every retained part, a claimed part and every entry of `.swath/suspect/`
    (the one read and the ones removed) must be regular files (`TestRecoveryRefusesLinkedSuspectUnchanged`). Anything else (an interrupted output whose `data/` or journal became a link to something
    elsewhere, which cleanup would delete from or the reopen would truncate) is refused with
-   `dataset.ErrUnsafeLayout` (`listing.ErrUnsafeLayout`; a `*LayoutError` naming the path; exit 1, class
+   `dataset.ErrUnsafeLayout` (`inventory.ErrUnsafeLayout`; a `*LayoutError` naming the path; exit 1, class
    `fatal`, `cause` `unsafe_layout`, not resumable, whatever stop cause was selected meanwhile,
    `TestTerminalCausesOutrankStops`; the report is written, and `error.json` when the settlement can take the
    lock, which a refused workspace or journal prevents) (`TestRecoveryRefusesSymlinkedData`, `TestRecoveryRefusesSymlinkedSuspectDir`,
@@ -470,7 +470,7 @@ relisting it would have saved: the resume lists everything above K, as the sourc
 ## The outcome of an attempt
 
 The durable output says what was committed; how an attempt ended is a separate record. Each invocation gets an
-attempt (`listing.Attempt`: a random 128-bit id and its start time). The report a supervisor names with
+attempt (`inventory.Attempt`: a random 128-bit id and its start time). The report a supervisor names with
 `--report FILE` (outside the output, a fresh path per attempt) is written when the attempt ends, on every
 outcome, refusals before the run included, and carries the attempt and the outcome; `error.json` in the output
 carries the same attempt and outcome when the attempt could record it under the lock. The contract for a
@@ -600,7 +600,7 @@ tail as JSON lines.
   publication, recovery, the remote state) are made durable by the directory sync that follows each, as on
   Unix. A filesystem that refuses the directory's flush is found by the probe
   before the run writes anything, and a journaled run or resume there is refused with
-  `listing.ErrUnenforced` and its error (`TestUnenforcedPlatformRefusesJournal`), never run without the
+  `inventory.ErrUnenforced` and its error (`TestUnenforcedPlatformRefusesJournal`), never run without the
   syncs. The output lock is enforced (`LockFileEx`, exclusive and failing at once, with the same identity
   checks as on Unix). The seekparquet module's own publication still refuses on Windows
   (`local.ErrDirSyncUnsupported` unless `Ops.AllowUnsynced`); swath does not publish through it (above).

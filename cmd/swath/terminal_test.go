@@ -19,16 +19,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/internal/totals"
 )
 
-func snap() listing.ProgressSnapshot {
+func snap() inventory.ProgressSnapshot {
 	usd := 0.0125
-	return listing.ProgressSnapshot{Rows: 1234567, Retained: 1000, Parts: 3, Requests: 2500, Inflight: 17, DurationMs: 10_000,
+	return inventory.ProgressSnapshot{Rows: 1234567, Retained: 1000, Parts: 3, Requests: 2500, Inflight: 17, DurationMs: 10_000,
 		StartedAt: jsontime.Of(time.Unix(1, 0)), CostUSD: &usd, CostRatePer1kUSD: 0.005}
 }
 
@@ -123,7 +123,7 @@ func TestProgressRedrawAndAppend(t *testing.T) {
 	// line cleared, the cursor at its start, whichever path stops it.
 	tty.Reset()
 	d = &display{out: &stderrCoord{w: &tty}, redraw: true, erase: true, width: func() int { return 200 }, interval: time.Second, started: time.Now(),
-		samples: make(chan listing.ProgressSnapshot, 1), stopped: make(chan struct{})}
+		samples: make(chan inventory.ProgressSnapshot, 1), stopped: make(chan struct{})}
 	d.render(snap(), now)
 	d.stop()
 	d.render(snap(), now.Add(time.Second))
@@ -217,14 +217,14 @@ func TestStatsBlock(t *testing.T) {
 	rss := int64(200_000_000)
 	usd := 0.01
 	objBytes := int64(5 << 40)
-	r := &listing.Report{Timings: listing.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
-		Invocation: listing.Invocation{Out: "ds1"},
-		Outcome:    listing.Outcome{Status: listing.StatusCommitted, Complete: true, Class: listing.ClassOK},
-		Output: listing.Output{RowsFetched: 2_000_000, RowsEmitted: 2_000_000, RowsCommitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000,
+	r := &inventory.Report{Timings: inventory.Timings{WallMs: 12_300, SessionMs: 14_000, ListingMs: 12_000},
+		Invocation: inventory.Invocation{Out: "ds1"},
+		Outcome:    inventory.Outcome{Status: inventory.StatusCommitted, Complete: true, Class: inventory.ClassOK},
+		Output: inventory.Output{RowsFetched: 2_000_000, RowsEmitted: 2_000_000, RowsCommitted: 2_000_000, PartsWritten: 2, OutputBytes: 3_500_000,
 			CommittedObjectBytes: &objBytes},
-		Requests: &listing.Requests{HTTPAttempts: 2000, Retries: 3},
-		Cost:     &listing.Cost{CostUSD: &usd, Basis: &listing.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
-		Process:  listing.Process{PeakRSSBytes: &rss}}
+		Requests: &inventory.Requests{HTTPAttempts: 2000, Retries: 3},
+		Cost:     &inventory.Cost{CostUSD: &usd, Basis: &inventory.CostBasis{RatePer1kUSD: 0.005, Source: "aws-list-reference-rate"}},
+		Process:  inventory.Process{PeakRSSBytes: &rss}}
 	store := rowNouns(false, false)
 	check := func(got []string, want ...string) {
 		t.Helper()
@@ -246,40 +246,40 @@ func TestStatsBlock(t *testing.T) {
 		t.Fatalf("short resume %q", l[0])
 	}
 	// A text file, a stream, a discarded file.
-	text := listing.Report{Timings: r.Timings, Outcome: listing.Outcome{Status: listing.StatusWritten, Complete: true},
-		Output: listing.Output{RowsFetched: 1, RowsEmitted: 1, Text: &listing.TextOutput{Destination: "out.tsv", Bytes: 2048}}}
+	text := inventory.Report{Timings: r.Timings, Outcome: inventory.Outcome{Status: inventory.StatusWritten, Complete: true},
+		Output: inventory.Output{RowsFetched: 1, RowsEmitted: 1, Text: &inventory.TextOutput{Destination: "out.tsv", Bytes: 2048}}}
 	check(statsLines(&text, false, rowNouns(true, false), false), "complete: 1 entry in 14.0s · 0 entries/s → out.tsv (2.00 KiB)")
 	text.Output.Text.Destination = "-"
 	check(statsLines(&text, false, store, false), "complete: 1 object in 14.0s · 0 keys/s")
 	text.Output.Text.Destination = "out.tsv"
-	text.Outcome = listing.Outcome{Status: listing.StatusFailed, Class: listing.ClassFatal, ExitCode: exitFatal}
+	text.Outcome = inventory.Outcome{Status: inventory.StatusFailed, Class: inventory.ClassFatal, ExitCode: exitFatal}
 	check(statsLines(&text, false, store, false), "failed: 1 object in 14.0s · 0 keys/s, no file written")
 	// A stopped dataset run: what it saved for swath resume, what it listed.
-	r.Outcome = listing.Outcome{Status: listing.StatusFailed, Class: "deadline", ExitCode: exitDeadline, Resumable: true}
-	r.Output = listing.Output{RowsFetched: 12_003, RowsEmitted: 9_000, RowsDurable: 7_003, PartsWritten: 1, OutputBytes: 2048}
+	r.Outcome = inventory.Outcome{Status: inventory.StatusFailed, Class: "deadline", ExitCode: exitDeadline, Resumable: true}
+	r.Output = inventory.Output{RowsFetched: 12_003, RowsEmitted: 9_000, RowsDurable: 7_003, PartsWritten: 1, OutputBytes: 2048}
 	check(statsLines(r, false, store, false), "stopped: --max-duration reached; 7,003 saved, 12,003 listed in 14.0s · 857 keys/s → ds1 (1 part, 2.00 KiB)",
 		"next: swath resume ds1")
 	// swath du: the total row's counts and size.
 	size := int64(410 << 10)
-	du := listing.Report{Timings: listing.Timings{SessionMs: 100}, Outcome: listing.Outcome{Complete: true},
-		Output: listing.Output{RowsFetched: 16, RowsEmitted: 16, Totals: &totals.Stats{Objects: 7, Dirs: 9, Size: &size}}}
+	du := inventory.Report{Timings: inventory.Timings{SessionMs: 100}, Outcome: inventory.Outcome{Complete: true},
+		Output: inventory.Output{RowsFetched: 16, RowsEmitted: 16, Totals: &totals.Stats{Objects: 7, Dirs: 9, Size: &size}}}
 	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 7 files, 9 directories, 410 KiB in 0.1s")
 	// Its filters count rows: two names of one hard-linked file kept, one
 	// file filtered out, where the total counts the file once.
-	du.Output = listing.Output{RowsFetched: 3, RowsEmitted: 2, RowsFiltered: 1, Totals: &totals.Stats{Objects: 1, Size: &size}}
+	du.Output = inventory.Output{RowsFetched: 3, RowsEmitted: 2, RowsFiltered: 1, Totals: &totals.Stats{Objects: 1, Size: &size}}
 	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 1 file (2 entries kept, 1 filtered out), 410 KiB in 0.1s")
 	// A size unknown (the names metadata tier) leaves the bytes out: of the
 	// totals, of the committed dataset, never the attempt's sum instead.
 	du.Output.Totals.SizeMissing = 1
 	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 1 file (2 entries kept, 1 filtered out) in 0.1s")
 	zero := int64(0)
-	names := listing.Report{Timings: listing.Timings{SessionMs: 100}, Invocation: listing.Invocation{Out: "ds"},
-		Outcome: listing.Outcome{Status: listing.StatusCommitted, Complete: true},
-		Output:  listing.Output{RowsFetched: 3, RowsEmitted: 3, RowsCommitted: 3, PartsWritten: 1, OutputBytes: 2048, ObjectBytes: &zero}}
+	names := inventory.Report{Timings: inventory.Timings{SessionMs: 100}, Invocation: inventory.Invocation{Out: "ds"},
+		Outcome: inventory.Outcome{Status: inventory.StatusCommitted, Complete: true},
+		Output:  inventory.Output{RowsFetched: 3, RowsEmitted: 3, RowsCommitted: 3, PartsWritten: 1, OutputBytes: 2048, ObjectBytes: &zero}}
 	if l := statsLines(&names, false, rowNouns(true, false), false); l[0] != "complete: 3 entries in 0.1s → ds (1 part, 2.00 KiB)" {
 		t.Fatalf("committed, its object bytes unknown: %q", l[0])
 	}
-	quick := &listing.Report{Timings: listing.Timings{SessionMs: 100}}
+	quick := &inventory.Report{Timings: inventory.Timings{SessionMs: 100}}
 	switch {
 	case showStats(termOptions{}, quick, false):
 		t.Fatal("a short complete run without output prints statistics")
@@ -355,9 +355,9 @@ func TestReportContinuity(t *testing.T) {
 		t.Fatalf("run %+v, attempt %+v, started_at %q", r.Run, r.Attempt, r.Timings.StartedAt)
 	}
 	// The progress file's last snapshot: the run's final counts, done.
-	var p listing.ProgressSnapshot
+	var p inventory.ProgressSnapshot
 	readJSON(t, filepath.Join(ds, progressName), &p)
-	if p.ProgressVersion != listing.ProgressVersion || p.State != listing.StateDone || p.AttemptID != r.Attempt.ID || p.RunID != r.Run.ID ||
+	if p.ProgressVersion != inventory.ProgressVersion || p.State != inventory.StateDone || p.AttemptID != r.Attempt.ID || p.RunID != r.Run.ID ||
 		p.Rows != r.Output.RowsFetched || p.Requests != r.Requests.HTTPAttempts || p.ObjectBytes == nil || *p.ObjectBytes != 9 {
 		t.Fatalf("progress.json %+v, report %+v", p, r)
 	}
@@ -452,7 +452,7 @@ func TestUnknownSizesNoBytes(t *testing.T) {
 	if err := run(context.Background(), []string{root, "--metadata", "names", "-o", filepath.Join(t.TempDir(), "ds"), "--stats", "--no-progress", "--report", report}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	if !regexp.MustCompile(`(?m)^  complete: [0-9,]+ entries in `).MatchString(stderr.String()) || rep.Output.ObjectBytes != nil || rep.Output.CommittedObjectBytes != nil {
 		t.Fatalf("stderr %q, object_bytes %v, committed_object_bytes %v", stderr.String(), rep.Output.ObjectBytes, rep.Output.CommittedObjectBytes)

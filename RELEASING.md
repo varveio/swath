@@ -107,7 +107,7 @@ what guards the bytes it ships, on the tag SHA, from a cold cache:
   small public S3 prefix over HTTPS into a dataset, read back with DuckDB by the manifest's
   part list, then resumed as a no-op), and the replay image serving that dataset.
 
-Sharding gives one thing up: no release leg runs all the tests of `internal/listing`, or all
+Sharding gives one thing up: no release leg runs all the tests of `internal/inventory`, or all
 those of `cmd/swath` (the two packages the shards split), in one process under the race detector,
 so a test that leaks state (a global, a goroutine, a file) into a test of another shard is not
 caught at the tag. Only nightly's `go-race-nightly` job, the unsharded `go test -race ./...` on
@@ -185,7 +185,7 @@ do not repair the published candidate by hand.
    want to release, with that commit already on `origin/main`. Check by hand that the
    `go-race-nightly` job (not just its run: a dispatch with another `jobs` value skips it)
    succeeded on that commit, or on an earlier one with the same Go sources; the release does
-   not check it, and it is the only race run of all the tests of `internal/listing` and of
+   not check it, and it is the only race run of all the tests of `internal/inventory` and of
    `cmd/swath` in one process each ([What gates a release](#what-gates-a-release)):
    ```sh
    gh run list --workflow nightly.yml --branch main --limit 5 --json databaseId,headSha,event

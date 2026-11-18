@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/faults"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // terminal is a run's one terminal result: frozen at its first
@@ -32,7 +32,7 @@ type terminal struct {
 	ctx      context.Context // the run's: its cause is how it stopped
 	dir      string
 	provider func(error) string
-	att      *listing.Attempt
+	att      *inventory.Attempt
 
 	gate   sync.Mutex // held by commit, and by claim before mu
 	forced bool       // under gate: a forced exit took the result; no commit follows
@@ -45,7 +45,7 @@ type terminal struct {
 
 // classify freezes the classification of (sum, err) at the first call and
 // returns it at every call.
-func (t *terminal) classify(sum listing.Report, err error) (error, outcome) {
+func (t *terminal) classify(sum inventory.Report, err error) (error, outcome) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.out == nil {
@@ -58,8 +58,8 @@ func (t *terminal) classify(sum listing.Report, err error) (error, outcome) {
 }
 
 // account applies the frozen classification to r and keeps r as the
-// terminal report (listing.Config.Finalize).
-func (t *terminal) account(r *listing.Report, err error) {
+// terminal report (inventory.Config.Finalize).
+func (t *terminal) account(r *inventory.Report, err error) {
 	_, out := t.classify(*r, err)
 	account(&r.Outcome, out)
 	b, jerr := json.Marshal(r)
@@ -74,7 +74,7 @@ func (t *terminal) account(r *listing.Report, err error) {
 var errForced = errors.New("not committed: the forced exit took the run's result first")
 
 // commit runs step, the manifest's installation and the committed report's
-// account (listing.Config.Commit), unless a forced exit took the run's
+// account (inventory.Config.Commit), unless a forced exit took the run's
 // result first; a forced exit that comes during step waits for it (claim).
 func (t *terminal) commit(step func() error) error {
 	t.gate.Lock()
@@ -94,10 +94,10 @@ type snapshot struct {
 }
 
 // report is the snapshot's accounted report, once there is one.
-func (s snapshot) report() (listing.Report, bool) {
-	var r listing.Report
+func (s snapshot) report() (inventory.Report, bool) {
+	var r inventory.Report
 	if s.rep == nil || json.Unmarshal(s.rep, &r) != nil {
-		return listing.Report{}, false
+		return inventory.Report{}, false
 	}
 	return r, true
 }
@@ -142,7 +142,7 @@ func (t *terminal) claim(forced func() outcome, wait time.Duration, late func(sn
 // outcomeOf is the outcome file's view (error.json, the stderr outcome
 // line) of an accounted report: the same class, exit code, resumability,
 // cause, message, attempt, run, status and coverage.
-func outcomeOf(r listing.Report) outcome {
+func outcomeOf(r inventory.Report) outcome {
 	return outcome{Class: r.Outcome.Class, ExitCode: r.Outcome.ExitCode, Message: r.Outcome.Error,
 		Resumable: r.Outcome.Resumable, Cause: r.Outcome.Cause, StopSource: r.Outcome.StopSource, Attempt: r.Attempt, Run: r.Run}.withCoverage(r.Outcome)
 }

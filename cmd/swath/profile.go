@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 )
 
 // The profiles' phase files beside FILE: the listing phase (from the start
@@ -28,7 +28,7 @@ const (
 	phaseExit    = ".exit"
 )
 
-// The run report's kinds of profile file (listing.ProfileFile), in the
+// The run report's kinds of profile file (inventory.ProfileFile), in the
 // order it lists them.
 const (
 	kindCPUListing = "cpu_listing"
@@ -37,7 +37,7 @@ const (
 	kindMemExit    = "mem_exit"
 )
 
-// A profile file's status in the run report (listing.ProfileFile).
+// A profile file's status in the run report (inventory.ProfileFile).
 const (
 	statusPlanned = "planned" // to be written later in the run
 	statusWritten = "written"
@@ -281,7 +281,7 @@ func (p *profiler) writeMem(fs []*profFile) {
 	p.settle(fs, err)
 }
 
-// listingDone is listing.Config.ListingDone: it marks the boundary now and
+// listingDone is inventory.Config.ListingDone: it marks the boundary now and
 // switches the profiles to the tail on a goroutine of its own, so the
 // order stage, which plans the drain's segments once this returns, does
 // not wait for the listing phase's profile to be written.
@@ -379,13 +379,13 @@ func (p *profiler) stop() {
 // account is the run report's account of the profiles now (nil for a nil
 // profiler): each file with its status, the boundary, and the switch's
 // times once it has run. It never waits for a profile's write.
-func (p *profiler) account() *listing.Profiles {
+func (p *profiler) account() *inventory.Profiles {
 	if p == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	a := &listing.Profiles{Files: []listing.ProfileFile{}}
+	a := &inventory.Profiles{Files: []inventory.ProfileFile{}}
 	if !p.boundary.IsZero() {
 		a.PhaseBoundaryAt = jsontime.Of(p.boundary)
 	}
@@ -403,7 +403,7 @@ func (p *profiler) account() *listing.Profiles {
 	}
 	for _, kind := range []string{kindCPUListing, kindCPUTail, kindMemListing, kindMemExit} {
 		for _, f := range p.files[kind] {
-			a.Files = append(a.Files, listing.ProfileFile{Kind: f.kind, Path: f.path, Status: f.status, Error: f.err})
+			a.Files = append(a.Files, inventory.ProfileFile{Kind: f.kind, Path: f.path, Status: f.status, Error: f.err})
 		}
 	}
 	return a

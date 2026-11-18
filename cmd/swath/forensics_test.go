@@ -24,7 +24,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -68,7 +68,7 @@ func TestStuckCause(t *testing.T) {
 			}
 			var o outcome
 			readJSON(t, filepath.Join(dir, errorName), &o)
-			var rep listing.Report
+			var rep inventory.Report
 			readJSON(t, report, &rep)
 			if o.Class != "stuck" || o.Cause != c.want || rep.Outcome.Cause != c.want {
 				t.Fatalf("error.json %+v, report cause %q: want cause %s", o, rep.Outcome.Cause, c.want)
@@ -141,7 +141,7 @@ func TestForcedExitCode(t *testing.T) {
 			}
 			var o outcome
 			readJSON(t, filepath.Join(dir, errorName), &o)
-			var rep listing.Report
+			var rep inventory.Report
 			readJSON(t, report, &rep)
 			if o.ExitCode != want || rep.Outcome.ExitCode != want || o.Class != rep.Outcome.Class || o.Attempt == nil ||
 				rep.Attempt == nil || o.Attempt.ID != rep.Attempt.ID || !strings.Contains(o.Message, "forced exit") {
@@ -161,7 +161,7 @@ func TestForcedExitCode(t *testing.T) {
 func TestOneTerminalAccount(t *testing.T) {
 	captureStderr(t)
 	ctx := context.Background()
-	same := func(t *testing.T, name string, a, b listing.Outcome) {
+	same := func(t *testing.T, name string, a, b inventory.Outcome) {
 		t.Helper()
 		if a.Class != b.Class || a.ExitCode != b.ExitCode || a.Resumable != b.Resumable || a.Cause != b.Cause {
 			t.Fatalf("%s %+v disagrees with the report %+v", name, a, b)
@@ -180,7 +180,7 @@ func TestOneTerminalAccount(t *testing.T) {
 		if c := exitCode(t, err); c != exitIncomplete {
 			t.Fatalf("exit %d (%v)", c, err)
 		}
-		var rep, rj listing.Report
+		var rep, rj inventory.Report
 		readJSON(t, report, &rep)
 		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
 		if rep.Outcome.Class != "incomplete" || rep.Outcome.ExitCode != exitIncomplete {
@@ -240,11 +240,11 @@ func TestOneTerminalAccount(t *testing.T) {
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("exit %d (%v)", c, err)
 		}
-		var rep listing.Report
+		var rep inventory.Report
 		readJSON(t, report, &rep)
 		var o outcome
 		readJSON(t, filepath.Join(dir, errorName), &o)
-		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
+		same(t, "error.json", inventory.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
 		kept, _ := filepath.Glob(filepath.Join(dir, dataset.DataDir, "*.parquet"))
 		var size int64
 		for _, p := range kept {
@@ -295,14 +295,14 @@ func TestOneTerminalAccount(t *testing.T) {
 			t.Fatalf("the run failed after %s and the command returned after %s: not across the %s deadline",
 				failedAt.Sub(start), time.Since(start), deadline)
 		}
-		var rep listing.Report
+		var rep inventory.Report
 		readJSON(t, report, &rep)
 		var o outcome
 		readJSON(t, filepath.Join(dir, errorName), &o)
 		if c := exitCode(t, err); c != exitFatal || o.Class != "fatal" {
 			t.Fatalf("exit %d, error.json %+v, report %+v", c, o, rep.Outcome)
 		}
-		same(t, "error.json", listing.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
+		same(t, "error.json", inventory.Outcome{Class: o.Class, ExitCode: o.ExitCode, Resumable: o.Resumable, Cause: o.Cause}, rep.Outcome)
 	})
 }
 
@@ -339,7 +339,7 @@ func TestStacksWholeAndBounded(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			setLog(c.term, "")
 			n := len(stderr.String())
-			where := dumpStacks("", nil, "stuck", "test", listing.ProgressSnapshot{})
+			where := dumpStacks("", nil, "stuck", "test", inventory.ProgressSnapshot{})
 			out := stderr.String()[n:]
 			if c.file {
 				b, err := os.ReadFile(where)

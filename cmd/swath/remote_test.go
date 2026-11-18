@@ -28,8 +28,8 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/objfile/azblob/azfake"
 	"github.com/varveio/swath/objfile/gcs/gcsfake"
@@ -306,12 +306,12 @@ func TestRemoteOutcomes(t *testing.T) {
 		code      int
 		resumable bool
 	}{
-		{listing.ErrDestinationExists, listing.ClassRefused, exitUsage, true},
-		{listing.ErrOverlap, listing.ClassRefused, exitUsage, true},
-		{fmt.Errorf("publish: %w", dataset.ErrCommitUnresolved), listing.ClassUnresolved, exitStuck, true},
-		{fmt.Errorf("%w: %w", dataset.ErrCommitUnresolved, dataset.ErrCandidateMismatch), listing.ClassFatal, exitFatal, false},
-		{&dataset.LostRaceError{}, listing.ClassFatal, exitFatal, false},
-		{fmt.Errorf("resume: %w", dataset.ErrRemoteAltered), listing.ClassFatal, exitFatal, false},
+		{inventory.ErrDestinationExists, inventory.ClassRefused, exitUsage, true},
+		{inventory.ErrOverlap, inventory.ClassRefused, exitUsage, true},
+		{fmt.Errorf("publish: %w", dataset.ErrCommitUnresolved), inventory.ClassUnresolved, exitStuck, true},
+		{fmt.Errorf("%w: %w", dataset.ErrCommitUnresolved, dataset.ErrCandidateMismatch), inventory.ClassFatal, exitFatal, false},
+		{&dataset.LostRaceError{}, inventory.ClassFatal, exitFatal, false},
+		{fmt.Errorf("resume: %w", dataset.ErrRemoteAltered), inventory.ClassFatal, exitFatal, false},
 	} {
 		o := classify(c.err, nil, work)
 		if o.Class != c.class || o.ExitCode != c.code || o.Resumable != c.resumable {
