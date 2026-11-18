@@ -277,7 +277,9 @@ func TestDuMatchesLstat(t *testing.T) {
 	if err := runDu(context.Background(), []string{root, "--metadata", "names", "--format=tsv", "--no-stats"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if w := duOracle(t, root, 0, false)[""]; !strings.Contains(out.String(), fmt.Sprintf("\ntotal\t0\t%d\t%d\t\\N\t%d\t\\N\t%d\t", w.objects, w.dirs, w.objects, w.objects)) {
+	// Every name counts, and every entry lacks blocks: the files and the
+	// directories.
+	if w := duOracle(t, root, 0, false)[""]; !strings.Contains(out.String(), fmt.Sprintf("\ntotal\t0\t%d\t%d\t\\N\t%d\t\\N\t%d\t", w.objects, w.dirs, w.objects, w.objects+w.dirs)) {
 		t.Fatalf("--metadata names: %q, want every name of %+v", out.String(), w)
 	}
 	// The sparse file is where the two figures part: both in one row,

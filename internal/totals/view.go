@@ -613,8 +613,14 @@ func (r *ViewRun) Add(row *Row) {
 		if !leaf && !cut {
 			c.children = 1
 		}
-	} else if row.Dir && row.HasAllocated && r.v.primary == AllocatedBytes {
-		c.bytes = row.Allocated // its own blocks, in its node and those above it, as the tally counts them
+	} else if row.Dir && r.v.primary == AllocatedBytes {
+		// Its own blocks, in its node and those above it, as the tally
+		// counts them.
+		if row.HasAllocated {
+			c.bytes = row.Allocated
+		} else {
+			c.missing = 1
+		}
 	}
 	r.any = true
 	if r.ordered {
@@ -1134,12 +1140,16 @@ func (v *View) Select(rows int) []ViewRow {
 		if i != 0 {
 			name = name[len(parentOf(name)):]
 		}
+		// A shared line gives the first prefix's sums: they hold its one
+		// child's and its own blocks (a directory's, under the allocated
+		// bytes), so the lines under its parent still add up to it.
+		top := s
 		for joins(s) {
 			s = &nodes[s.kids[0]]
 			name += s.n.Key[len(parentOf(s.n.Key)):]
 		}
-		out = append(out, ViewRow{Name: name, Level: level, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest,
-			Unreadable: s.n.Unreadable})
+		out = append(out, ViewRow{Name: name, Level: level, Bytes: top.n.Bytes, Objects: top.n.Objects, Missing: top.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest,
+			Unreadable: top.n.Unreadable || s.n.Unreadable})
 		f := ViewRow{Level: level + 1, Fold: true, Bytes: s.n.Bytes, Objects: s.n.Objects, Missing: s.n.Missing, More: s.n.Children - shown(s)}
 		if s.n.Children < 0 {
 			f.More = -1

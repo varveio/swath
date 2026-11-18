@@ -21,6 +21,7 @@ import (
 // origin in the total alone. alloc: the source has allocated bytes.
 func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
+	allocKnown := map[string]int64{} // the entries with allocated bytes, by prefix
 	for _, r := range rows {
 		key := r.Key
 		if !strings.HasPrefix(key, opt.Origin) {
@@ -46,6 +47,9 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 			}
 			if r.Dir && r.HasAllocated {
 				p.Allocated += r.Allocated
+				allocKnown[p.Prefix]++
+			} else if r.Dir {
+				p.AllocatedMissing++
 			}
 			if r.Dir && key[:end] == r.Key {
 				break
@@ -65,6 +69,7 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 				}
 				if r.HasAllocated {
 					p.Allocated += r.Allocated
+					allocKnown[p.Prefix]++
 				} else {
 					p.AllocatedMissing++
 				}
@@ -80,7 +85,7 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 	var out []Prefix
 	for _, p := range m {
 		p.HasSize = p.Objects == 0 || p.SizeMissing < p.Objects
-		p.HasAllocated = alloc && (p.Objects == 0 || p.AllocatedMissing < p.Objects)
+		p.HasAllocated = alloc && (p.AllocatedMissing == 0 || allocKnown[p.Prefix] > 0)
 		out = append(out, *p)
 	}
 	slices.SortFunc(out, func(a, b Prefix) int { return strings.Compare(a.Prefix, b.Prefix) })
@@ -197,10 +202,12 @@ func TestDirBlocks(t *testing.T) {
 		{Key: "a/b/", Dir: true, Size: 64, HasSize: true, Allocated: 4096, HasAllocated: true},
 		{Key: "a/f", Object: true, Size: 5, HasSize: true, Allocated: 8192, HasAllocated: true},
 		{Key: "e/", Dir: true, Allocated: 1024, HasAllocated: true},
+		{Key: "s/", Dir: true, Allocated: 4096, HasAllocated: true}, // one child: its line is shared
+		{Key: "s/g", Object: true, Size: 100, HasSize: true, Allocated: 4096, HasAllocated: true},
 		{Key: "x", Object: true, Size: 1, HasSize: true, Allocated: 0, HasAllocated: true},
 	}
 	want := map[string][4]int64{ // objects, dirs, size, allocated
-		"": {2, 3, 6, 17408}, "a/": {1, 1, 5, 16384}, "a/b/": {0, 0, 0, 4096}, "e/": {0, 0, 0, 1024},
+		"": {3, 4, 106, 25600}, "a/": {1, 1, 5, 16384}, "a/b/": {0, 0, 0, 4096}, "e/": {0, 0, 0, 1024}, "s/": {1, 0, 100, 8192},
 	}
 	for _, ordered := range []bool{true, false} {
 		tl := New(Options{Depth: 2, Primary: AllocatedBytes, View: true})
@@ -225,13 +232,27 @@ func TestDirBlocks(t *testing.T) {
 			}
 		}
 		v := tl.View()
-		if v.Total.Bytes != 17408 || v.Total.Objects != 2 {
+		if v.Total.Bytes != 25600 || v.Total.Objects != 3 {
 			t.Errorf("ordered %v: view total %+v", ordered, v.Total)
 		}
 		for _, n := range v.Nodes {
 			if w, ok := want[n.Key]; ok && n.Bytes != w[3] {
 				t.Errorf("ordered %v: view node %q %d bytes, want %d", ordered, n.Key, n.Bytes, w[3])
 			}
+		}
+		// The drawn lines: s/ shares its line with s/g, and the line gives
+		// s/'s bytes, its own block too; the total's lines add up to it.
+		var top, shared int64
+		for _, r := range v.Select(20) {
+			if r.Level == 1 {
+				top += r.Bytes
+			}
+			if r.Name == "s/g" {
+				shared = r.Bytes
+			}
+		}
+		if shared != 8192 || top != 25600 {
+			t.Errorf("ordered %v: shared line %d bytes, the total's lines %d: %+v", ordered, shared, top, v.Select(20))
 		}
 	}
 }
@@ -244,7 +265,7 @@ func TestShortKeysAndDepth(t *testing.T) {
 	for _, r := range []Row{
 		{Key: "top", Object: true, Size: 1, HasSize: true},
 		{Key: "a/", Object: false}, // a delete marker
-		{Key: "a/b/", Dir: true},   // a directory: in a/'s Dirs, not its own
+		{Key: "a/b/", Dir: true},   // a directory: in a/'s Dirs, not its own; without blocks, missing in both
 		{Key: "a/x", Object: true, Size: 2, HasSize: true, Mtime: 5, HasMtime: true},
 		{Key: "a/b/c/d/e", Object: true, Size: 4, HasSize: true, Mtime: 9, HasMtime: true},
 		{Key: "a/b/y", Object: true}, // no bytes, no time
@@ -255,9 +276,9 @@ func TestShortKeysAndDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Prefix{
-		{Prefix: "", Objects: 4, Dirs: 1, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 4, Newest: 9, HasNewest: true},
-		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Size: 6, SizeMissing: 1, HasSize: true, AllocatedMissing: 3, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/", Depth: 2, Objects: 2, Size: 4, SizeMissing: 1, HasSize: true, AllocatedMissing: 2, Newest: 9, HasNewest: true},
+		{Prefix: "", Objects: 4, Dirs: 1, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 5, Newest: 9, HasNewest: true},
+		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Size: 6, SizeMissing: 1, HasSize: true, AllocatedMissing: 4, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/", Depth: 2, Objects: 2, Size: 4, SizeMissing: 1, HasSize: true, AllocatedMissing: 3, Newest: 9, HasNewest: true},
 		{Prefix: "a/b/c/", Depth: 3, Objects: 1, Size: 4, HasSize: true, AllocatedMissing: 1, Newest: 9, HasNewest: true},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {

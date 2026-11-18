@@ -140,12 +140,12 @@ func TestDu(t *testing.T) {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 	// The allocated bytes are every row's too: the files' and the
-	// directories' blocks, known for each file, but on Windows, which reads
-	// none; an empty directory's own (0 on Windows, and on APFS).
+	// directories' blocks, known for each entry, but on Windows, which reads
+	// none (an empty directory's own unknown there too; 0 on APFS).
 	for _, r := range duTSV(t, out.String()) {
 		switch {
-		case r["objects"] == "0" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"),
-			r["objects"] != "0" && runtime.GOOS == "windows" && (r["allocated_bytes"] != `\N` || r["allocated_bytes_missing"] != r["objects"]),
+		case runtime.GOOS == "windows" && r["allocated_bytes"] != `\N`,
+			r["objects"] == "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"),
 			r["objects"] != "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"):
 			t.Errorf("allocated bytes %+v", r)
 		}
@@ -362,24 +362,26 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 }
 
 // TestDuNamesOnly: without sizes or blocks (the names metadata tier) both
-// figures of a prefix with files are null, beside the files without them,
-// as rclone size's sizeless; the table shows them, and the time the tier
-// does not read, as "-", unknown; an empty directory has 0 bytes. Nothing tells hard links apart, so every
-// name counts and the rows say so.
+// figures of a prefix with files are null, beside the files without them
+// (for the blocks, the directories too), as rclone size's sizeless; the
+// table shows them, and the time the tier does not read, as "-", unknown;
+// an empty directory has 0 bytes of size and unknown blocks, its own.
+// Nothing tells hard links apart, so every name counts and the rows say
+// so.
 func TestDuNamesOnly(t *testing.T) {
 	root, _ := depthTree(t)
 	none := fmt.Sprintf("%-*s", len(duTimeHeading()), "-")
 	const tail = `,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n"
 	for format, want := range map[string]string{
 		"tsv": "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
-			"total\t0\t4\t4\t\\N\t4\t\\N\t4\t\\N\tsize\tname\tfalse\t\n" +
-			"prefix\t1\t2\t1\t\\N\t2\t\\N\t2\t\\N\tsize\tname\tfalse\ta/\n" +
-			"prefix\t1\t1\t0\t\\N\t1\t\\N\t1\t\\N\tsize\tname\tfalse\tc/\n" +
-			"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\te/\n",
-		"jsonl": `{"row_type":"total","depth":0,"prefix":"","objects":4,"dirs":4,"size":null,"size_missing":4,"allocated_bytes":null,"allocated_bytes_missing":4` + tail +
-			`{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"dirs":1,"size":null,"size_missing":2,"allocated_bytes":null,"allocated_bytes_missing":2` + tail +
-			`{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":null,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":1` + tail +
-			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0` + tail,
+			"total\t0\t4\t4\t\\N\t4\t\\N\t8\t\\N\tsize\tname\tfalse\t\n" +
+			"prefix\t1\t2\t1\t\\N\t2\t\\N\t4\t\\N\tsize\tname\tfalse\ta/\n" +
+			"prefix\t1\t1\t0\t\\N\t1\t\\N\t2\t\\N\tsize\tname\tfalse\tc/\n" +
+			"prefix\t1\t0\t0\t0\t0\t\\N\t1\t\\N\tsize\tname\tfalse\te/\n",
+		"jsonl": `{"row_type":"total","depth":0,"prefix":"","objects":4,"dirs":4,"size":null,"size_missing":4,"allocated_bytes":null,"allocated_bytes_missing":8` + tail +
+			`{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"dirs":1,"size":null,"size_missing":2,"allocated_bytes":null,"allocated_bytes_missing":4` + tail +
+			`{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":null,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":2` + tail +
+			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1` + tail,
 		"table": "" +
 			"size  files  dirs  " + duTimeHeading() + "  path\n" +
 			"   -      2     1  " + none + "  a/\n" +

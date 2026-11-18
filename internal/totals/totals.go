@@ -98,6 +98,11 @@ type Options struct {
 	Primary string
 	// Reason says why Primary is the one it is (ReasonFlag and the others).
 	Reason string
+	// Lenient counts an entry without allocated bytes as missing rather
+	// than fail the count by them (the registry's binding): a listing whose
+	// platform may leave them out of some entries (statx), led by them by
+	// default. The figure is then a lower bound beside its missing count.
+	Lenient bool
 	// LinksOnce counts an object with several hard links once (Row.Link).
 	LinksOnce bool
 	// View also builds the adaptive view (view.go) from the rows given to
@@ -172,8 +177,11 @@ type Prefix struct {
 	SizeMissing int64
 	HasSize     bool
 	// Allocated, AllocatedMissing and HasAllocated are the same for the
-	// allocated bytes; HasAllocated is false throughout for a source
-	// without them (Tally.SetAllocated).
+	// allocated bytes, counted over the entries: the files' and the
+	// directories' own (Row.Dir), so AllocatedMissing counts directories
+	// without them too, and the figure is known where any entry had one.
+	// HasAllocated is false throughout for a source without them
+	// (Tally.SetAllocated).
 	Allocated        int64
 	AllocatedMissing int64
 	HasAllocated     bool
@@ -213,7 +221,8 @@ type Stats struct {
 	Dirs          int64  `json:"dirs"`    // directories counted in the total (a local tree's)
 	// Size and AllocatedBytes are the total's figures, nil when unknown
 	// (Prefix.HasSize, HasAllocated); the missing counts are the objects
-	// without a value for each.
+	// without a value for each (for the allocated bytes, the entries:
+	// directories too).
 	Size                  *int64 `json:"size"`
 	SizeMissing           int64  `json:"size_missing"`
 	AllocatedBytes        *int64 `json:"allocated_bytes"`
@@ -269,6 +278,7 @@ type linked struct {
 // cell is one prefix's sums.
 type cell struct {
 	objects, dirs, size, sizeMissing, alloc, allocMissing, newest int64
+	allocKnown                                                    int64 // the entries (files, directories' own) with allocated bytes
 	hasNewest                                                     bool
 }
 
@@ -279,6 +289,7 @@ func (c *cell) add(o *cell) {
 	c.sizeMissing += o.sizeMissing
 	c.alloc += o.alloc
 	c.allocMissing += o.allocMissing
+	c.allocKnown += o.allocKnown
 	if o.hasNewest && (!c.hasNewest || o.newest > c.newest) {
 		c.newest, c.hasNewest = o.newest, true
 	}
@@ -427,7 +438,7 @@ func (b *Batch) Add(r *Row) {
 			c.sizeMissing = 1
 		}
 		if r.HasAllocated {
-			c.alloc = r.Allocated
+			c.alloc, c.allocKnown = r.Allocated, 1
 		} else {
 			c.allocMissing = 1
 		}
@@ -446,7 +457,9 @@ func (b *Batch) Add(r *Row) {
 		b.notObjects++
 		c.dirs = 1
 		if r.HasAllocated {
-			c.alloc = r.Allocated
+			c.alloc, c.allocKnown = r.Allocated, 1
+		} else {
+			c.allocMissing = 1
 		}
 	default:
 		b.notObjects++
@@ -464,7 +477,8 @@ func (b *Batch) Add(r *Row) {
 		if r.Dir && p == r.Key {
 			// A directory lists its own prefix (an empty one shows 0) and
 			// counts in its parents'; its own blocks count in both.
-			b.ents[j].c.alloc += c.alloc
+			own := &b.ents[j].c
+			own.alloc, own.allocKnown, own.allocMissing = own.alloc+c.alloc, own.allocKnown+c.allocKnown, own.allocMissing+c.allocMissing
 			break
 		}
 		b.ents[j].c.add(&c)
@@ -568,7 +582,9 @@ func (t *Tally) prefix(p string, c *cell) Prefix {
 	r := Prefix{Prefix: p, Depth: strings.Count(p[len(t.opt.Origin):], "/"), Objects: c.objects, Dirs: c.dirs,
 		Size: c.size, SizeMissing: c.sizeMissing, Allocated: c.alloc, AllocatedMissing: c.allocMissing, Newest: c.newest, HasNewest: c.hasNewest}
 	r.HasSize = r.known(r.SizeMissing)
-	r.HasAllocated = t.alloc && r.known(r.AllocatedMissing)
+	// Directories' own blocks count too: the figure is known where any
+	// entry under the prefix had one, or none lacked it.
+	r.HasAllocated = t.alloc && (c.allocMissing == 0 || c.allocKnown > 0)
 	r.Unreadable = t.unreadable[p]
 	return r
 }

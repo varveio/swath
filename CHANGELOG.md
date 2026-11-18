@@ -19,8 +19,11 @@ Notable changes per release. The human summary of the current release is in the
   `-A`, `--apparent-size`, gives the lengths as before. A listing that reads no blocks (Windows,
   `--metadata names`), an object store, and a saved dataset without allocated bytes lead with the lengths.
   `--allocated` now only requires the space on disk. TSV and JSONL rows keep both figures under the same names;
-  their `primary`, the order with `--sort size`, and `allocated_bytes` (now with directories' blocks) change.
-  The run report's `totals` gains `primary_reason` (#659).
+  their `primary`, the order with `--sort size`, `allocated_bytes` (now with directories' blocks) and
+  `allocated_bytes_missing` (now counting directories without blocks: an empty directory's is unknown at
+  `--metadata names`) change. With `--metadata statx`, entries a filesystem answers without blocks count as
+  missing. The run report's `totals` gains `primary_reason`, and `swath du --from-dataset -v`'s `read` event
+  `primary` and `primary_reason` (#659).
 - `swath du`'s table heads the newest time under a prefix `newest (ZONE)`, as the terminal view does, instead
   of `last_modified (ZONE)`. TSV and JSONL keep the field `max_last_modified`.
 - `swath show` names a dataset's storage by its Parquet parts and schema; `-v` adds the SeekParquet format id.

@@ -30,7 +30,7 @@ type totalsSink[P any] struct {
 	// strict: the allocated bytes are the primary figure (--allocated, or
 	// a local tree's default where its listing reads them), so an object or
 	// a directory without them fails the count (totals.NoAllocatedError)
-	// rather than count none.
+	// rather than count none; not with totals.Options.Lenient.
 	strict            bool
 	nlink, dev, inode func(*P) (int64, bool)
 }
@@ -43,7 +43,7 @@ type totalsSink[P any] struct {
 // in any order (order.Options.Unordered).
 func Totals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P], ordered bool) (order.Sink[P], error) {
 	opt := t.Options()
-	k := totalsSink[P]{t: t, box: s.Container, strict: opt.Primary == totals.AllocatedBytes}
+	k := totalsSink[P]{t: t, box: s.Container, strict: opt.Primary == totals.AllocatedBytes && !opt.Lenient}
 	if vers != nil {
 		k.marker = vers.DeleteMarker
 	}

@@ -54,7 +54,9 @@ Each line is a prefix or an object, with:
 
 A prefix with a single child shares its line with it (`18/rerun/`; in a directory, `videos/trip.mp4`). Under
 each parent the view lists its largest children, then one `(N more)` line for the rest: how many they are, what
-they hold together and their newest date, so the bytes of the lines under a parent always add up to its bytes.
+they hold together and their newest date, so the bytes of the lines under a parent add up to its bytes: on disk,
+less the directory's own blocks when every child has a line (a `(N more)` line holds them otherwise). A shared
+line gives the first prefix's bytes, its own blocks included.
 Only a `(N more)` line of 0 bytes is left out (unless it holds a directory that could not be read), so the
 counts shown under a parent need not add up: empty files and directories may not appear. A `!` after the size marks a line whose sums leave out a directory that could not be
 read ([Entries that could not be read](#entries-that-could-not-be-read)).
@@ -148,8 +150,10 @@ $ swath du -d 1 media -A
 
 Here `archive/` holds a sparse 64 MiB disk image that takes no blocks: 64.8 MiB long, 788 KiB on disk. Where the
 listing reads no blocks, the lengths lead: on Windows, at `--metadata names` (which reads no lengths either),
-and for an object store, which has no allocation. `--allocated` requires the space on disk: a file without it
-fails the count, and `--metadata names` refuses it. The run report's `totals.primary` says which figure led,
+and for an object store, which has no allocation. `--metadata statx` reads blocks, but a filesystem may answer
+it without them for some entries (some network filesystems): those count as missing, and the figure is a lower
+bound (`>= `). `--allocated` requires the space on disk: an entry without it fails the count, and
+`--metadata names` refuses it. The run report's `totals.primary` says which figure led,
 and `primary_reason` why ([Run report](reference/run-report.md)).
 
 The space on disk is what the filesystem says, what `du` prints, but not the space a deletion would free:
@@ -270,7 +274,9 @@ swath: totals of the dataset media-inventory, not a live listing: /home/me/media
 The rows, the view and every format are the ones `swath du` of the dataset's source printed when it was
 listed, with the same depth, order and filters; hard links count once where the dataset records them, and `-l`
 counts every name. The space on disk leads where the dataset holds it; a dataset listed where blocks are not
-read (Windows, `--metadata names`) leads with the lengths, as its live run did. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
+read (Windows, `--metadata names`) leads with the lengths, as its live run did. Totals from a dataset listed on
+Windows with no row left after the filters say `allocated_bytes` where the live run says `size`: nothing is
+left to tell them apart, and every figure is 0. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
 giving both commands for its SOURCE. `swath du DIR` without `--from-dataset` totals the files in DIR, and when
 DIR holds a dataset a `hint:` line gives the `--from-dataset` command.
 

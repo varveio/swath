@@ -598,6 +598,45 @@ func TestDuFromDatasetWithoutBlocks(t *testing.T) {
 	}
 }
 
+// TestDuFromDatasetStatxLowerBound: a tree listed with statx, which a
+// filesystem may answer without blocks for some entries, leads with the
+// space on disk where its entries have it, those without counted missing:
+// a lower bound (">= " in the table), as its live run counts them, never
+// the size instead; --allocated still requires every entry's.
+func TestDuFromDatasetStatxLowerBound(t *testing.T) {
+	captureStderr(t)
+	at, five, block := int64(1_767_000_000_000_000), int64(5), int64(4096)
+	s := parquet.SchemaOf(new(unblockedRow))
+	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
+		"source": map[string]any{"kind": "local", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
+		"collected": map[string]any{"metadata": "statx", "columns": []string{}},
+		"coverage":  map[string]any{"complete": true, "stop_reason": "end_of_scope", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := &parquetRows{rows: []parquet.Row{
+		s.Deconstruct(nil, &unblockedRow{Key: []byte("a/"), Kind: "dir", LastModified: &at, AllocatedBytes: &block}),
+		s.Deconstruct(nil, &unblockedRow{Key: []byte("a/f"), Kind: "file", Size: &five, LastModified: &at, AllocatedBytes: &block}),
+		s.Deconstruct(nil, &unblockedRow{Key: []byte("b"), Kind: "file", Size: &five, LastModified: &at}),
+	}}
+	ds := filepath.Join(t.TempDir(), "statx")
+	if err := local.WriteDir(context.Background(), ds, s, rows, local.DatasetOptions{Extensions: ext, AllowUnsynced: true,
+		Part: write.PartOptions{Key: seekparquet.Key{Column: "key", Unique: true}, SchemaID: string(reader.LocalV1)}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := duRun(t, "--from-dataset", ds, "--format", "tsv")
+	if r := duTSV(t, out); err != nil || r[0]["primary"] != "allocated_bytes" || r[0]["allocated_bytes"] != "8192" || r[0]["allocated_bytes_missing"] != "1" {
+		t.Fatalf("default: %v\n%s", err, out)
+	}
+	if out, err := duRun(t, "--from-dataset", ds, "--format", "table"); err != nil || !strings.HasPrefix(tableCells(strings.SplitN(out, "\n", 3)[1])[0], ">= ") {
+		t.Fatalf("table: %v\n%s", err, out)
+	}
+	var nb *totals.NoAllocatedError
+	if out, err := duRun(t, "--from-dataset", ds, "--allocated", "--format", "tsv"); !errors.As(err, &nb) || out != "" {
+		t.Fatalf("--allocated: %v, stdout %q", err, out)
+	}
+}
+
 // TestDuSaveHint: a live swath du that listed hintRows entries or more ends
 // its statistics on a terminal with the commands that save its SOURCE
 // (quoted) once and total that, at its depth and order; not below the
