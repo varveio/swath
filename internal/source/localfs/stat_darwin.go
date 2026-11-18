@@ -30,6 +30,9 @@ func statAt(dirfd int, name string, _ Fields, r *Entry) error {
 // statLinks: a stat tier reads each entry's link count, device and inode.
 const statLinks = true
 
+// statBlocks: a stat tier reads each entry's allocated blocks.
+const statBlocks = true
+
 // fillSys fills the stat fields an os.FileInfo carries on darwin, birth
 // time included, as statEntry does.
 func fillSys(r *Entry, fi fs.FileInfo) {

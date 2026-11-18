@@ -174,15 +174,15 @@ prefix	1	1	0	31000000	0	31002624	0	2026-11-02T09:30:00.000000Z	size	name	true	vi
 | `dirs` | integer | the directories below the prefix (local trees only) |
 | `size` | integer | the sum of the objects' lengths, as the dataset's `size` column holds them |
 | `size_missing` | integer | the objects counted that had no length (a local walk with `--metadata names`) |
-| `allocated_bytes` | integer | the sum of the files' allocated bytes (`st_blocks` × 512), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
+| `allocated_bytes` | integer | the sum of the entries' allocated bytes (`st_blocks` × 512: the files' and the directories' own, as `du` counts them), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
 | `allocated_bytes_missing` | integer | the objects counted that had no allocated bytes (every object of a bucket) |
 | `max_last_modified` | string (UTC time) | the newest `last_modified` among the objects counted under the prefix, in UTC; directories, S3 delete markers and the names of a hard-linked file that is counted under another do not count; null when no object had one |
-| `primary` | string | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
+| `primary` | string | the figure `--sort size` orders by and the table puts first: `allocated_bytes` for a local tree whose listing reads blocks, and with `--allocated`; `size` for an object store, where blocks are not read (Windows, `--metadata names`), and with `--apparent-size` (`-A`) |
 | `sort` | string | the order of the rows, `name` or `size` (`--sort`) |
 | `links_once` | boolean | `true` when a file with several hard links is counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket, with `--metadata names` and on Windows, which read no links. It says how the listing counts, whatever the rows hold, and a saved dataset gives the same as the live run: its manifest records the metadata tier |
 | `prefix` | string | the prefix, up to and including its `/`; the total's is the key prefix SOURCE names (`logs/2026/0` for `s3://bucket/logs/2026/0`), empty for a whole bucket or tree |
 
-Every row has both byte figures, whichever `--allocated` puts first. A figure that no object under the prefix
+Every row has both byte figures, whichever `primary` puts first. A figure that no object under the prefix
 had is null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones
 there were, and its `*_missing` count says how many it leaves out. With `--metadata names` a local walk reads
 names only, so both figures are null beside their counts:

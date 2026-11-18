@@ -296,6 +296,7 @@ output.totals.not_objects int64
 output.totals.objects int64
 output.totals.prefixes int64
 output.totals.primary string
+output.totals.primary_reason string
 output.totals.size int64
 output.totals.size_missing int64
 output.versions int64

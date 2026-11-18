@@ -613,6 +613,8 @@ func (r *ViewRun) Add(row *Row) {
 		if !leaf && !cut {
 			c.children = 1
 		}
+	} else if row.Dir && row.HasAllocated && r.v.primary == AllocatedBytes {
+		c.bytes = row.Allocated // its own blocks, in its node and those above it, as the tally counts them
 	}
 	r.any = true
 	if r.ordered {

@@ -20,6 +20,7 @@ import (
 	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
+	"github.com/varveio/swath/internal/totals"
 )
 
 // The terminal surface on stderr, as Java swath's: a live progress record
@@ -733,8 +734,8 @@ func saved(r *inventory.Report) bool {
 // that stopped the rows saved for swath resume beside those listed, for a
 // resume the dataset's rows with those from earlier attempts apart;
 // otherwise the rows listed. The rows the filters dropped follow the ones
-// kept, and the bytes listed (a dataset's, or the total row's size) when
-// they are known.
+// kept, and the bytes listed (a dataset's, or the total row's primary
+// figure, "on disk" for the allocated bytes) when they are known.
 func closingCount(r *inventory.Report, n nouns) string {
 	out := &r.Output
 	if saved(r) {
@@ -756,8 +757,13 @@ func closingCount(r *inventory.Report, n nouns) string {
 		s = n.of(out.RowsEmitted + out.RowsRetained)
 	}
 	// Bytes only where every size counted is known: a sum short of an
-	// unknown size is no total.
+	// unknown size is no total. swath du's are its primary figure.
+	onDisk := false
 	switch t := out.Totals; {
+	case t != nil && t.Primary == totals.AllocatedBytes:
+		if t.AllocatedBytes != nil && t.AllocatedBytesMissing == 0 {
+			bytes, onDisk = t.AllocatedBytes, true
+		}
 	case t != nil:
 		if t.Size != nil && t.SizeMissing == 0 {
 			bytes = t.Size
@@ -780,6 +786,9 @@ func closingCount(r *inventory.Report, n nouns) string {
 	}
 	if bytes != nil {
 		s += ", " + textout.Size(*bytes)
+		if onDisk {
+			s += " " + textout.HeadingOnDisk
+		}
 	}
 	return s
 }

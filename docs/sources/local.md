@@ -34,7 +34,8 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 | `--no-link-target` | do not read symbolic links' targets |
 | `--one-file-system` | do not walk into a directory on another device (a mount point), as `du -x` and `find -xdev`; its row is kept |
 
-`swath du` also takes `--allocated` (allocated bytes instead of apparent sizes) and `-l`, `--count-links`
+`swath du` leads with the space on disk, as `du` does, and also takes `-A`, `--apparent-size` (the files'
+lengths instead), `--allocated` (require the space on disk) and `-l`, `--count-links`
 (count a hard-linked file under each of its names; by default it counts once), and `--max-inodes`, the most
 hard-linked files it remembers ([How sizes are counted](../totals.md#how-sizes-are-counted)).
 

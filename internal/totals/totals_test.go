@@ -16,8 +16,9 @@ import (
 
 // bruteWith is the oracle: every prefix of every key, summed one row at a
 // time, under opt's depth and origin, where an object counts (as an
-// object, with its figures and its time) only if counts says so. A directory counts in its parents' Dirs, a key outside the origin
-// in the total alone. alloc: the source has allocated bytes.
+// object, with its figures and its time) only if counts says so. A directory counts in its parents' Dirs, and its own allocated
+// bytes in its own prefix and its parents', as du -s; a key outside the
+// origin in the total alone. alloc: the source has allocated bytes.
 func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
 	for _, r := range rows {
@@ -42,6 +43,9 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 			if p == nil {
 				p = &Prefix{Prefix: key[:end], Depth: k}
 				m[key[:end]] = p
+			}
+			if r.Dir && r.HasAllocated {
+				p.Allocated += r.Allocated
 			}
 			if r.Dir && key[:end] == r.Key {
 				break
@@ -106,8 +110,11 @@ func randomRows(rng *rand.Rand, n int) []Row {
 		seen[k] = true
 		r := Row{Key: k, Object: rng.IntN(6) != 0, Size: rng.Int64N(1 << 40), HasSize: rng.IntN(10) != 0,
 			Allocated: rng.Int64N(1 << 40), HasAllocated: rng.IntN(4) != 0}
-		if !r.Object {
-			r.Dir, r.Size, r.HasSize, r.Allocated, r.HasAllocated = rng.IntN(2) == 0, 0, false, 0, false
+		if !r.Object { // a directory keeps its own blocks
+			r.Dir, r.Size, r.HasSize = rng.IntN(2) == 0, 0, false
+			if !r.Dir {
+				r.Allocated, r.HasAllocated = 0, false
+			}
 		}
 		if rng.IntN(8) != 0 {
 			r.Mtime, r.HasMtime = rng.Int64N(1<<50)-1<<49, true // negative times too
@@ -175,6 +182,55 @@ func TestTallyMatchesBruteForce(t *testing.T) {
 				st.SizeMissing != w.SizeMissing || st.AllocatedBytesMissing != w.AllocatedMissing || st.Depth != depth || st.Primary != Size ||
 				(st.MaxLastModified != nil) != w.HasNewest || st.MaxLastModified != nil && st.MaxLastModified.UnixMicro() != w.Newest {
 				t.Fatalf("seed %d depth %d: stats %+v", seed, depth, st)
+			}
+		}
+	}
+}
+
+// TestDirBlocks: a directory's own allocated bytes count in its own
+// prefix and its parents', as du -s counts a directory's blocks, in the
+// tally and in the view that leads with them, ordered or not; its size,
+// and an empty directory's own prefix's Dirs, count nowhere.
+func TestDirBlocks(t *testing.T) {
+	rows := []Row{
+		{Key: "a/", Dir: true, Size: 96, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/", Dir: true, Size: 64, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/f", Object: true, Size: 5, HasSize: true, Allocated: 8192, HasAllocated: true},
+		{Key: "e/", Dir: true, Allocated: 1024, HasAllocated: true},
+		{Key: "x", Object: true, Size: 1, HasSize: true, Allocated: 0, HasAllocated: true},
+	}
+	want := map[string][4]int64{ // objects, dirs, size, allocated
+		"": {2, 3, 6, 17408}, "a/": {1, 1, 5, 16384}, "a/b/": {0, 0, 0, 4096}, "e/": {0, 0, 0, 1024},
+	}
+	for _, ordered := range []bool{true, false} {
+		tl := New(Options{Depth: 2, Primary: AllocatedBytes, View: true})
+		tl.SetAllocated()
+		r, b := tl.ViewRun(ordered), tl.Batch()
+		for i := range rows {
+			b.Add(&rows[i])
+			r.Add(&rows[i])
+		}
+		r.Flush()
+		if err := b.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		r.End()
+		got := tl.Result()
+		if len(got) != len(want) {
+			t.Fatalf("ordered %v: %+v", ordered, got)
+		}
+		for _, p := range got {
+			if w := want[p.Prefix]; [4]int64{p.Objects, p.Dirs, p.Size, p.Allocated} != w || !p.HasAllocated {
+				t.Errorf("ordered %v: %q %+v, want %v", ordered, p.Prefix, p, w)
+			}
+		}
+		v := tl.View()
+		if v.Total.Bytes != 17408 || v.Total.Objects != 2 {
+			t.Errorf("ordered %v: view total %+v", ordered, v.Total)
+		}
+		for _, n := range v.Nodes {
+			if w, ok := want[n.Key]; ok && n.Bytes != w[3] {
+				t.Errorf("ordered %v: view node %q %d bytes, want %d", ordered, n.Key, n.Bytes, w[3])
 			}
 		}
 	}

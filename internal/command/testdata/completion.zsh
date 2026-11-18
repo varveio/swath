@@ -84,8 +84,8 @@ _swath_list() {
 _swath_du() {
     _arguments \
         '(-d --depth)'{-d+,--depth=}'[also total each prefix down to N levels below SOURCE (0: the total)]:N: ' \
-        '--allocated[local: show and --sort size by the files'\'' allocated bytes (on disk)]' \
-        '--apparent-size[show and --sort size by the lengths (the default)]' \
+        '--allocated[local: show and --sort size by the space on disk, and require it]' \
+        '(-A --apparent-size)'{-A,--apparent-size}'[show and --sort size by the files'\'' lengths, as du -A]' \
         '(-l --count-links)'{-l,--count-links}'[local: count a file with several hard links under each of its names]' \
         '--sort=[order prefixes by name, or by size, largest first]:value:(name size)' \
         '--max-prefixes=[fail rather than hold more than N distinct prefixes]:N: ' \

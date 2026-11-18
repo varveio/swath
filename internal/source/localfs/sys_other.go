@@ -12,6 +12,9 @@ import (
 // statLinks: no tier reads a link count, device or inode here.
 const statLinks = false
 
+// statBlocks: no tier reads allocated blocks here.
+const statBlocks = false
+
 // fillSys: other platforms fill only what os.FileInfo exposes portably
 // (kind, size, mtime, permission bits).
 func fillSys(*Entry, fs.FileInfo) {}

@@ -27,6 +27,7 @@ import (
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/s3/s3test"
+	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
 )
 
@@ -522,6 +523,78 @@ func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
 	out, err := duRun(t, "--from-dataset", ds, "--format", "tsv")
 	if exitOf(err) != exitFatal || !strings.Contains(err.Error(), "does not hold schema swath/local-entries/v1") || !strings.Contains(err.Error(), "kind") || out != "" {
 		t.Fatalf("exit %d (%v), stdout %q", exitOf(err), err, out)
+	}
+}
+
+// unblockedRow is a local tree's row as a listing that reads no blocks,
+// links or inodes writes it (Windows): every column present, those null.
+type unblockedRow struct {
+	Key            []byte  `parquet:"key"`
+	Size           *int64  `parquet:"size,optional"`
+	LastModified   *int64  `parquet:"last_modified,optional,timestamp(microsecond:utc)"`
+	Kind           string  `parquet:"kind"`
+	Mode           *uint32 `parquet:"mode,optional,uint(32)"`
+	UID            *uint32 `parquet:"uid,optional,uint(32)"`
+	GID            *uint32 `parquet:"gid,optional,uint(32)"`
+	Nlink          *uint32 `parquet:"nlink,optional,uint(32)"`
+	Inode          *uint64 `parquet:"inode,optional,uint(64)"`
+	Dev            *uint64 `parquet:"dev,optional,uint(64)"`
+	AllocatedBytes *int64  `parquet:"allocated_bytes,optional"`
+	ChangedAt      *int64  `parquet:"metadata_changed_at,optional,timestamp(microsecond:utc)"`
+	AccessedAt     *int64  `parquet:"accessed_at,optional,timestamp(microsecond:utc)"`
+	CreatedAt      *int64  `parquet:"created_at,optional,timestamp(microsecond:utc)"`
+	LinkTarget     []byte  `parquet:"link_target,optional"`
+}
+
+// TestDuFromDatasetWithoutBlocks: a local tree's dataset listed at a stat
+// tier where blocks are not read (Windows: the column there, its values
+// null) totals by size, as the live run there does, the whole count by
+// the one figure: also where some files have blocks and others do not, and
+// where the filters keep no file but a directory, which has none either.
+// --allocated, which requires them, fails.
+func TestDuFromDatasetWithoutBlocks(t *testing.T) {
+	captureStderr(t)
+	at, five, three, block := int64(1_767_000_000_000_000), int64(5), int64(3), int64(4096)
+	s := parquet.SchemaOf(new(unblockedRow))
+	ext, err := json.Marshal(map[string]any{reader.Extension: map[string]any{"version": reader.MetadataVersion,
+		"source": map[string]any{"kind": "local", "uri": "/data"}, "scope": map[string]any{"kind": "whole"},
+		"collected": map[string]any{"metadata": "stat", "columns": []string{}},
+		"coverage":  map[string]any{"complete": true, "stop_reason": "end_of_scope", "unreadable": 0, "exclusions": []string{}, "filters": []string{}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, blocks := range map[string]*int64{"none": nil, "mixed": &block} {
+		rows := &parquetRows{rows: []parquet.Row{
+			s.Deconstruct(nil, &unblockedRow{Key: []byte("a/"), Kind: "dir", LastModified: &at}),
+			s.Deconstruct(nil, &unblockedRow{Key: []byte("a/f"), Kind: "file", Size: &five, LastModified: &at, AllocatedBytes: blocks}),
+			s.Deconstruct(nil, &unblockedRow{Key: []byte("b"), Kind: "file", Size: &three, LastModified: &at}),
+		}}
+		ds := filepath.Join(t.TempDir(), name)
+		if err := local.WriteDir(context.Background(), ds, s, rows, local.DatasetOptions{Extensions: ext, AllowUnsynced: true,
+			Part: write.PartOptions{Key: seekparquet.Key{Column: "key", Unique: true}, SchemaID: string(reader.LocalV1)}}); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"-d", "1"}, {"-d", "1", "--sort", "size"}, {"-d", "1", "-A"}} {
+			out, err := duRun(t, append([]string{"--from-dataset", ds, "--format", "tsv"}, args...)...)
+			rows := duTSV(t, out)
+			if err != nil || len(rows) != 2 { // the total and a/; b is the total's alone
+				t.Fatalf("%s %q: %v\n%s", name, args, err, out)
+			}
+			for _, r := range rows {
+				if r["primary"] != "size" || r["prefix"] == "" && r["size"] != "8" {
+					t.Fatalf("%s %q: %v", name, args, r)
+				}
+			}
+		}
+		var nb *totals.NoAllocatedError
+		if out, err := duRun(t, "--from-dataset", ds, "--allocated", "--format", "tsv"); !errors.As(err, &nb) || out != "" {
+			t.Fatalf("%s --allocated: %v, stdout %q", name, err, out)
+		}
+		// Every file filtered out, its directories still say so: no blocks.
+		if out, err := duRun(t, "--from-dataset", ds, "--exclude", "a/f", "--exclude", "b", "--format", "tsv"); err != nil ||
+			duTSV(t, out)[0]["primary"] != "size" || duTSV(t, out)[0]["dirs"] != "1" {
+			t.Fatalf("%s, every file filtered out: %v\n%s", name, err, out)
+		}
 	}
 }
 

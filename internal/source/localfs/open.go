@@ -47,6 +47,11 @@ func DefaultWorkers() int { return min(maxWorkers, workersPerCPU*runtime.GOMAXPR
 // not Windows).
 func LinksRead(f Fields) bool { return f != Names && statLinks }
 
+// BlocksRead says a listing at tier f reads each entry's allocated blocks
+// (allocated_bytes): a stat tier, where the platform's stat has them
+// (statBlocks: not Windows).
+func BlocksRead(f Fields) bool { return f != Names && statBlocks }
+
 // Opened is a local tree opened by Open: the provider bound to its row
 // schema (Bound), and what a run asks of an opened source besides its
 // rows: the rows listed, the run's own output left out (Exclude), the

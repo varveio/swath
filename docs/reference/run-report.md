@@ -150,7 +150,9 @@ manifest names): `orphans_deleted`, `orphans_gone` (absent, or replaced since: n
 touched). `totals` is a
 `swath du` run's (absent otherwise), under the names of its rows ([du rows](../output.md#du-rows)): `depth`,
 `prefixes` (the rows printed, the total included), `max_prefixes` (the cap), `primary` (the figure `--sort size`
-orders by: `size`, or `allocated_bytes` with `--allocated`), the total's `objects` (directories excluded) and
+orders by: `allocated_bytes` or `size`) and `primary_reason` (why: `flag`, `--allocated` or `--apparent-size`;
+`default`, a local tree whose listing reads blocks; `object_store`; `names_tier`; `platform`, a listing that
+reads no blocks, as on Windows; `dataset`, a saved dataset whose files have no allocated bytes), the total's `objects` (directories excluded) and
 `dirs`, its `size` and `allocated_bytes` (null when unknown: no object had one, or a source without allocated
 bytes) with `size_missing` and `allocated_bytes_missing` (the objects counted without each), its
 `max_last_modified` (null when no object had a time), `not_objects` (rows counted as no object: directories,

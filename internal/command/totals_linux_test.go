@@ -144,6 +144,9 @@ func duOracle(t *testing.T, root string, depth int, once bool) map[string]duSums
 			if o.dir && p != o.key {
 				s.dirs++
 			}
+			if o.dir { // its own blocks, in its prefix and its parents', as du -s
+				s.alloc += o.alloc
+			}
 			if counts {
 				s.objects++
 				s.size += o.size
@@ -163,21 +166,27 @@ func duOracle(t *testing.T, root string, depth int, once bool) map[string]duSums
 // every name (-l, --count-links), at several depths, equals the
 // brute-force sums of lstat, prefix for prefix, in byte order, in TSV and
 // in JSONL (a name that is not UTF-8 as prefix_base64): both figures in
-// every row, the apparent size and the allocated bytes, whichever is the
-// primary (--allocated), and the row says which, and whether links counted
-// once. With --metadata names, which reads no links, every name counts.
+// every row, the apparent size (the files') and the allocated bytes (the
+// files' and the directories' own, as du -s), whichever is the primary
+// (the allocated bytes by default and with --allocated, the size with
+// --apparent-size or -A), and the row says which, and whether links
+// counted once. With --metadata names, which reads no links, every name
+// counts.
 func TestDuMatchesLstat(t *testing.T) {
 	root := duTree(t)
 	for _, depth := range []int{0, 1, 2, 4} {
-		for _, allocated := range []bool{false, true} {
+		for _, figure := range []string{"", "--allocated", "--apparent-size"} {
 			for _, once := range []bool{false, true} {
-				t.Run(fmt.Sprintf("depth%d/allocated=%v/once=%v", depth, allocated, once), func(t *testing.T) {
+				t.Run(fmt.Sprintf("depth%d/figure=%s/once=%v", depth, figure, once), func(t *testing.T) {
 					args := []string{root, "-d", strconv.Itoa(depth), "--no-stats", "--workers", "3"}
-					primary := "size"
-					if allocated {
-						args, primary = append(args, "--allocated"), "allocated_bytes"
-					} else if depth%2 == 1 {
-						args = append(args, "--apparent-size")
+					primary := "allocated_bytes"
+					switch {
+					case figure == "--apparent-size" && depth%2 == 1:
+						args, primary = append(args, "-A"), "size"
+					case figure == "--apparent-size":
+						args, primary = append(args, figure), "size"
+					case figure != "":
+						args = append(args, figure)
 					}
 					if !once {
 						args = append(args, []string{"--count-links", "-l"}[depth%2])
@@ -485,7 +494,7 @@ func TestUnreadableIsIncomplete(t *testing.T) {
 	// missing with the total row's counts, and no error line saying it
 	// again.
 	stderr.Reset()
-	if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", "--stats", "--no-progress"}, &out)); code != exitIncomplete ||
+	if code := conclude(runDu(context.Background(), []string{root, "--format=tsv", "--stats", "--no-progress", "-A"}, &out)); code != exitIncomplete ||
 		!strings.HasPrefix(stderr.String(), warning+"  partial: 1 unreadable entry; 1 file, 1 directory, 2 B in ") || strings.Contains(stderr.String(), end) {
 		t.Fatalf("--stats: exit %d, stderr %q", code, stderr.String())
 	}
@@ -613,7 +622,7 @@ func TestDuViewUnreadable(t *testing.T) {
 	stderr := captureStderr(t)
 	t.Cleanup(func() { logs.Store(nil) })
 	var out bytes.Buffer
-	if code := conclude(runDu(context.Background(), []string{root, "--no-progress"}, &out)); code != exitIncomplete {
+	if code := conclude(runDu(context.Background(), []string{root, "--no-progress", "-A"}, &out)); code != exitIncomplete { // the lengths, which the test sets
 		t.Fatalf("exit %d", code)
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")

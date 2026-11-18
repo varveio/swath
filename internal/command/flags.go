@@ -77,12 +77,12 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 	cli.Define(f, cli.Flag{Name: "max-depth", Value: cli.Count(&o.depth, 0), Metavar: "N", Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "the same as --depth"}).Hidden = true
 	def(cli.Flag{Name: "allocated", Value: cli.Switch(&o.allocated), Group: cli.GroupTotals, Commands: []string{cmdDu},
-		Usage: "local: show and --sort size by the files' allocated bytes (on disk)",
-		Long: "The files' st_blocks x 512: the table's one figure, the line under it giving the lengths; TSV and JSONL rows carry both either way. " +
-			"A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count."})
-	def(cli.Flag{Name: "apparent-size", Value: cli.Switch(&o.apparentSize), Group: cli.GroupTotals, Commands: []string{cmdDu},
-		Usage: "show and --sort size by the lengths (the default)",
-		Long:  "Not with --allocated."})
+		Usage: "local: show and --sort size by the space on disk, and require it",
+		Long: "The entries' st_blocks x 512, directories' included, as du counts them: a local tree's default where its listing reads them, so this only makes it required. " +
+			"A file without them fails the count; the names metadata tier, which reads none, refuses it. TSV and JSONL rows carry both figures either way."})
+	def(cli.Flag{Name: "apparent-size", Short: "A", Value: cli.Switch(&o.apparentSize), Group: cli.GroupTotals, Commands: []string{cmdDu},
+		Usage: "show and --sort size by the files' lengths, as du -A",
+		Long:  "An object store's default, and a local tree's where its listing reads no blocks (the names metadata tier, Windows). Not with --allocated."})
 	def(cli.Flag{Name: "count-links", Short: "l", Value: cli.Switch(&o.countLinks), Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links under each of its names",
 		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and Windows, read no links: every name counts there."})

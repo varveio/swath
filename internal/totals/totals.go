@@ -56,6 +56,27 @@ const (
 	AllocatedBytes = "allocated_bytes"
 )
 
+// Why the primary figure is the one it is (Options.Reason, the report's
+// primary_reason). A local tree leads with its allocated bytes, as du does,
+// wherever its listing reads them; the others say why it does not.
+const (
+	ReasonFlag        = "flag"         // --allocated or --apparent-size
+	ReasonDefault     = "default"      // a local tree whose listing reads blocks: allocated bytes
+	ReasonObjectStore = "object_store" // objects have no allocation: size
+	ReasonNamesTier   = "names_tier"   // --metadata names reads no stat: size
+	ReasonPlatform    = "platform"     // a platform whose listing reads no blocks (Windows): size
+	ReasonDataset     = "dataset"      // a saved dataset without allocated bytes for its files: size
+)
+
+// NoAllocatedError is a count by allocated bytes that met an object or a
+// directory without them (the registry's binding): the run fails rather
+// than count none.
+type NoAllocatedError struct{ Key string }
+
+func (e *NoAllocatedError) Error() string {
+	return fmt.Sprintf("per-prefix totals: %q has no %s (a metadata tier or platform that does not read it)", e.Key, AllocatedBytes)
+}
+
 // Options shape a tally.
 type Options struct {
 	// Depth is the deepest prefix level summed: 0 is the total alone.
@@ -75,6 +96,8 @@ type Options struct {
 	// and that a count may not lack (the registry's binding): Size ("") or
 	// AllocatedBytes. Both figures are summed whichever it is.
 	Primary string
+	// Reason says why Primary is the one it is (ReasonFlag and the others).
+	Reason string
 	// LinksOnce counts an object with several hard links once (Row.Link).
 	LinksOnce bool
 	// View also builds the adaptive view (view.go) from the rows given to
@@ -112,7 +135,9 @@ type Row struct {
 	// an S3 delete marker): its prefixes are listed, nothing is counted.
 	Object bool
 	// Dir marks a directory (not an object): it counts in its parents'
-	// Dirs, never in its own prefix's.
+	// Dirs, never in its own prefix's. Its own allocated bytes count in its
+	// prefix and its parents', as du -s counts a directory's blocks; its
+	// size counts nowhere.
 	Dir          bool
 	Size         int64 // valid with HasSize
 	HasSize      bool
@@ -181,8 +206,11 @@ type Stats struct {
 	Prefixes    int64  `json:"prefixes"`     // distinct prefixes, the total included: the rows printed
 	MaxPrefixes int64  `json:"max_prefixes"` // the cap in effect
 	Primary     string `json:"primary"`      // the figure --sort size orders by: size, or allocated_bytes
-	Objects     int64  `json:"objects"`      // objects counted in the total
-	Dirs        int64  `json:"dirs"`         // directories counted in the total (a local tree's)
+	// PrimaryReason says why: flag, default, object_store, names_tier,
+	// platform or dataset (Options.Reason).
+	PrimaryReason string `json:"primary_reason"`
+	Objects       int64  `json:"objects"` // objects counted in the total
+	Dirs          int64  `json:"dirs"`    // directories counted in the total (a local tree's)
 	// Size and AllocatedBytes are the total's figures, nil when unknown
 	// (Prefix.HasSize, HasAllocated); the missing counts are the objects
 	// without a value for each.
@@ -417,6 +445,9 @@ func (b *Batch) Add(r *Row) {
 	case r.Dir:
 		b.notObjects++
 		c.dirs = 1
+		if r.HasAllocated {
+			c.alloc = r.Allocated
+		}
 	default:
 		b.notObjects++
 	}
@@ -431,7 +462,10 @@ func (b *Batch) Add(r *Row) {
 			b.cur[k] = j
 		}
 		if r.Dir && p == r.Key {
-			break // a directory lists its own prefix (an empty one shows 0) and counts in its parents'
+			// A directory lists its own prefix (an empty one shows 0) and
+			// counts in its parents'; its own blocks count in both.
+			b.ents[j].c.alloc += c.alloc
+			break
 		}
 		b.ents[j].c.add(&c)
 	}
@@ -619,7 +653,7 @@ func (t *Tally) Stats() Stats {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.finish()
-	s := Stats{Depth: t.opt.Depth, Prefixes: int64(max(1, len(t.cells))), MaxPrefixes: int64(t.opt.MaxPrefixes), Primary: t.opt.Primary,
+	s := Stats{Depth: t.opt.Depth, Prefixes: int64(max(1, len(t.cells))), MaxPrefixes: int64(t.opt.MaxPrefixes), Primary: t.opt.Primary, PrimaryReason: t.opt.Reason,
 		NotObjects: t.notObjects, LinksOnce: t.opt.LinksOnce && t.unidentified == 0, LinkedRows: t.linkedRows, Inodes: int64(len(t.links)), MaxInodes: int64(t.opt.MaxInodes)}
 	c := t.cells[t.opt.Origin]
 	if c == nil {

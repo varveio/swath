@@ -173,7 +173,25 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	}
 	view := duView(&o, format, label, stdoutTerminal())
 	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
-		Primary: primaryFigure(&o), View: view != nil}
+		View: view != nil}
+	// The figure the live run would lead with, from what the dataset
+	// recorded: a local tree's allocated bytes where its listing read them.
+	// A tree listed where blocks are not read (Windows) has the column but
+	// no values; its first file or directory without them restarts the
+	// count by size (below), so the two are never mixed.
+	opt.Primary, opt.Reason = primaryFigure(&o)
+	implicit := opt.Primary == ""
+	switch {
+	case !implicit:
+	case !hasAllocated && hasScheme(*m.Source.URI):
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonObjectStore
+	case !hasAllocated:
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonDataset
+	case names:
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonNamesTier
+	default:
+		opt.Primary, opt.Reason = totals.AllocatedBytes, totals.ReasonDefault
+	}
 	o.filter.Base = origin
 	prov := provenanceOf(o.fromDataset, m)
 	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view, scope: prefix, label: label}
@@ -186,6 +204,12 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	l := elog()
 	l.dataset(prov, time.Now())
 	read, err := registry.DatasetTotals(ctx, d, prefix, relative, &o.filter, t.tally, runtime.GOMAXPROCS(0))
+	var unallocated *totals.NoAllocatedError
+	if implicit && errors.As(err, &unallocated) {
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonDataset
+		t.tally = totals.New(opt)
+		read, err = registry.DatasetTotals(ctx, d, prefix, relative, &o.filter, t.tally, runtime.GOMAXPROCS(0))
+	}
 	if err != nil {
 		return fail(err)
 	}

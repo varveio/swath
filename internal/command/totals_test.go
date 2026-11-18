@@ -118,12 +118,14 @@ var linksOnce = strconv.FormatBool(runtime.GOOS != "windows")
 // directory counts in its parents' Dirs, an empty one is listed), sorted by
 // prefix with the total first, each row with its type and the run's
 // primary figure, order and hard-link policy; the run report says the
-// path engaged, under the rows' names.
+// path engaged, under the rows' names, and why that figure leads. The
+// lengths lead here (--apparent-size): the files' blocks depend on the
+// filesystem (TestDuDefaultFigure).
 func TestDu(t *testing.T) {
 	root, at := depthTree(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--report", report}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--apparent-size", "--report", report}, &out); err != nil {
 		t.Fatal(err)
 	}
 	const newest, older = "2026-01-02T04:04:05.000000Z", "2026-01-02T03:04:05.000000Z"
@@ -137,12 +139,12 @@ func TestDu(t *testing.T) {
 	if got := dropColumns(out.String(), "allocated_bytes", "allocated_bytes_missing"); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
-	// The allocated bytes are every row's too: the files' blocks, known
-	// for each file, but on Windows, which reads none; 0 for an empty
-	// directory.
+	// The allocated bytes are every row's too: the files' and the
+	// directories' blocks, known for each file, but on Windows, which reads
+	// none; an empty directory's own (0 on Windows, and on APFS).
 	for _, r := range duTSV(t, out.String()) {
 		switch {
-		case r["objects"] == "0" && (r["allocated_bytes"] != "0" || r["allocated_bytes_missing"] != "0"),
+		case r["objects"] == "0" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"),
 			r["objects"] != "0" && runtime.GOOS == "windows" && (r["allocated_bytes"] != `\N` || r["allocated_bytes_missing"] != r["objects"]),
 			r["objects"] != "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"):
 			t.Errorf("allocated bytes %+v", r)
@@ -164,7 +166,7 @@ func TestDu(t *testing.T) {
 	readJSON(t, report, &r)
 	tt := r.Output.Totals
 	if tt == nil || tt.Depth != 2 || tt.Prefixes != 5 || tt.Objects != 4 || tt.Dirs != 4 || tt.Size == nil || *tt.Size != 9 || tt.SizeMissing != 0 || tt.NotObjects != 4 ||
-		tt.Primary != "size" || tt.MaxLastModified == nil || tt.MaxLastModified.Format("2006-01-02T15:04:05.000000Z") != newest || (tt.AllocatedBytes == nil) != (runtime.GOOS == "windows") ||
+		tt.Primary != "size" || tt.PrimaryReason != "flag" || tt.MaxLastModified == nil || tt.MaxLastModified.Format("2006-01-02T15:04:05.000000Z") != newest || (tt.AllocatedBytes == nil) != (runtime.GOOS == "windows") ||
 		strconv.FormatBool(tt.LinksOnce) != linksOnce || r.Output.RowsEmitted != 8 || r.Invocation.Argv[0] != "du" {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
@@ -175,7 +177,7 @@ func TestDu(t *testing.T) {
 	// The line under it on stderr gives both figures' totals.
 	stderr := captureStderr(t)
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "-d", "2", "--format=table", "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "-d", "2", "--format=table", "--no-stats", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	heading := duTimeHeading()
@@ -213,7 +215,7 @@ func TestDu(t *testing.T) {
 	// Without -d, the total alone, here without the header line; swath
 	// diag count keeps its one line.
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv", "--no-header"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv", "--no-header", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if f := strings.Split(out.String(), "\t"); len(f) != 13 || strings.Join(f[:6], "\t") != "total\t0\t4\t4\t9\t0" ||
@@ -233,7 +235,7 @@ func TestDuFile(t *testing.T) {
 	root, at := depthTree(t)
 	file := filepath.Join(root, "a", "g")
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{file, "-d", "1", "--format", "tsv", "--no-stats"}, &out); err != nil ||
+	if err := runDu(context.Background(), []string{file, "-d", "1", "--format", "tsv", "--no-stats", "-A"}, &out); err != nil ||
 		dropColumns(out.String(), "allocated_bytes", "allocated_bytes_missing", "links_once") != "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tmax_last_modified\tprimary\tsort\tprefix\n"+
 			"total\t0\t1\t0\t2\t0\t"+at.Format("2006-01-02T15:04:05.000000Z")+"\tsize\tname\t\n" {
 		t.Fatalf("du: %v %q", err, out.String())
@@ -244,16 +246,76 @@ func TestDuFile(t *testing.T) {
 	}
 }
 
+// TestDuDefaultFigure: with neither --allocated nor --apparent-size, a
+// local tree leads with its space on disk, as du does, where its listing
+// reads blocks: the table's one figure is "on disk", the line under it
+// gives the lengths, and the report says why (primary_reason default).
+// Where the listing reads no blocks the size leads, and the report says
+// why: the names tier, Windows. -A is --apparent-size; a flag is the
+// reason when one chose.
+func TestDuDefaultFigure(t *testing.T) {
+	root, _ := depthTree(t)
+	stderr := captureStderr(t)
+	reported := func(args ...string) *totals.Stats {
+		t.Helper()
+		report := filepath.Join(t.TempDir(), "r.json")
+		var out bytes.Buffer
+		if err := runDu(context.Background(), append([]string{root, "--no-stats", "--report", report}, args...), &out); err != nil {
+			t.Fatalf("%q: %v", args, err)
+		}
+		var r inventory.Report
+		readJSON(t, report, &r)
+		if tsv := slices.Contains(args, "--format=tsv"); tsv && !strings.Contains(out.String(), "\t"+r.Output.Totals.Primary+"\t") {
+			t.Fatalf("%q: rows %q, report primary %s", args, out.String(), r.Output.Totals.Primary)
+		} else if !tsv {
+			heading := map[string]string{totals.Size: "size", totals.AllocatedBytes: "on disk"}[r.Output.Totals.Primary]
+			if got := tableCells(out.String())[0]; got != heading {
+				t.Fatalf("%q: heading %q, primary %s", args, got, r.Output.Totals.Primary)
+			}
+		}
+		return r.Output.Totals
+	}
+	want, reason, line := totals.AllocatedBytes, totals.ReasonDefault, `^  [0-9.]+ [KMG]?i?B on disk in 4 files · 9 B of data\n$`
+	if runtime.GOOS == "windows" {
+		want, reason, line = totals.Size, totals.ReasonPlatform, `^  9 B in 4 files · on disk unknown\n$`
+	}
+	if tt := reported("-d", "1", "--format=table"); tt.Primary != want || tt.PrimaryReason != reason || !regexp.MustCompile(line).MatchString(stderr.String()) {
+		t.Fatalf("default: %s (%s), stderr %q", tt.Primary, tt.PrimaryReason, stderr.String())
+	}
+	for _, tc := range []struct {
+		args            []string
+		primary, reason string
+	}{
+		{[]string{"--metadata", "names", "--format=tsv"}, totals.Size, totals.ReasonNamesTier},
+		{[]string{"-A", "--format=tsv"}, totals.Size, totals.ReasonFlag},
+		{[]string{"--apparent-size", "-d", "1", "--format=table"}, totals.Size, totals.ReasonFlag},
+	} {
+		if tt := reported(tc.args...); tt.Primary != tc.primary || tt.PrimaryReason != tc.reason {
+			t.Fatalf("%q: %s (%s), want %s (%s)", tc.args, tt.Primary, tt.PrimaryReason, tc.primary, tc.reason)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if tt := reported("--allocated", "--format=tsv"); tt.Primary != totals.AllocatedBytes || tt.PrimaryReason != totals.ReasonFlag {
+			t.Fatalf("--allocated: %s (%s)", tt.Primary, tt.PrimaryReason)
+		}
+	}
+	var u usageError
+	if err := runDu(context.Background(), []string{root, "-A", "--allocated"}, io.Discard); !errors.As(err, &u) {
+		t.Fatalf("-A --allocated: %v", err)
+	}
+}
+
 // TestDuSortSize: --sort size orders the prefixes below each parent by
 // size, the largest first, each prefix's own below it and the total in its
-// place (last in the table, first in TSV); another order is refused.
+// place (last in the table, first in TSV); another order is refused. The
+// lengths lead here (-A), whose order the test sets.
 func TestDuSortSize(t *testing.T) {
 	root, _ := depthTree(t)
 	if err := os.WriteFile(filepath.Join(root, "c", "big"), make([]byte, 20), 0o644); err != nil { // c/ the largest, after a/ by name
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "-d", "2", "--sort", "size", "--format=table", "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "-d", "2", "--sort", "size", "--format=table", "--no-stats", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var order []string
@@ -265,7 +327,7 @@ func TestDuSortSize(t *testing.T) {
 		t.Fatalf("table by size: %s", got)
 	}
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "-d", "1", "--sort=size", "--format=tsv", "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "-d", "1", "--sort=size", "--format=tsv", "--no-stats", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var prefixes []string

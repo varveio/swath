@@ -286,7 +286,8 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 	// A local tree's file with several hard links counts once, as du
 	// counts it, unless --count-links.
 	view := duView(o, format, registry.Redact(root), stdoutTTY)
-	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, Primary: primaryFigure(o), View: view != nil}
+	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, View: view != nil}
+	opt.Primary, opt.Reason = primaryFigure(o)
 	if pf, err := registry.Lookup(root); err == nil {
 		opt.LinksOnce = pf.Scheme == "" && !o.countLinks
 		if pf.CheckTotals != nil {
@@ -295,17 +296,25 @@ func resolveTotals(o *options, root string, stdoutTTY bool) error {
 			}
 		}
 	}
+	if opt.Primary == "" {
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonObjectStore
+	}
 	o.totals = &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view, scope: scope, label: registry.Redact(root)}
 	return nil
 }
 
-// primaryFigure is the figure swath du puts first and sorts by: the
-// allocated bytes with --allocated, else the size.
-func primaryFigure(o *options) string {
-	if o.allocated {
-		return totals.AllocatedBytes
+// primaryFigure is the figure swath du puts first and sorts by, as
+// --allocated or --apparent-size chose it, and why; "" when neither did:
+// the source's default (registry.Factory.CheckTotals, or what a saved
+// dataset recorded).
+func primaryFigure(o *options) (figure, reason string) {
+	switch {
+	case o.allocated:
+		return totals.AllocatedBytes, totals.ReasonFlag
+	case o.apparentSize:
+		return totals.Size, totals.ReasonFlag
 	}
-	return totals.Size
+	return "", ""
 }
 
 // totalsFormat is swath du's --format (auto: the table on a terminal, TSV
