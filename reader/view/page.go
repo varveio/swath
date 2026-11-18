@@ -9,6 +9,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
@@ -32,9 +33,11 @@ import (
 //
 // With req.ChildTotals, each child prefix or directory gets the totals
 // Summarize gives a subtree target at its key, from the rows the listing
-// established, within the page's MaxDuration: the totals counted when it
-// ends stand, those not yet counted are nil, and leave the page complete.
-// They check the values they read, not the order of the keys.
+// established, within the page's MaxDuration. When it ends while they
+// are counted, the page keeps its entries, Self and Next, the totals
+// counted stand, those not yet counted are nil, and Evidence.Stop is
+// StopTimeBudget. They check the values they read, not the order of the
+// keys.
 func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	sel, err := inv.checkPage(req)
 	if err != nil {
@@ -90,8 +93,12 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		}
 	}
 	if req.ChildTotals != nil {
-		if page.Totals, err = inv.childTotals(ctx, op, entries, *sel); err != nil {
+		var stopped bool
+		if page.Totals, stopped, err = inv.childTotals(ctx, op, entries, *sel); err != nil {
 			return listing.Page{}, err
+		}
+		if stopped {
+			page.Evidence.Stop = listing.StopTimeBudget
 		}
 	}
 	if next != nil {
@@ -210,9 +217,10 @@ var (
 // page, aligned with listed: nil for any other entry, and for one whose
 // rows the listing did not establish. Each child is aggregated on its
 // own, several at once, so that when op, bounded by the page's
-// MaxDuration, ends first, the totals already counted stand and only the
-// rest are nil; ctx is the caller's.
-func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.PageEntry, sel selection) ([]*listing.Totals, error) {
+// MaxDuration, ends first, the totals already counted stand, the rest
+// are nil, and it reports true; ctx is the caller's. A child that fails
+// before the budget ends fails the page.
+func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.PageEntry, sel selection) ([]*listing.Totals, bool, error) {
 	var counted []int
 	for i, le := range listed {
 		if le.CommonPrefix != nil && established(le.Rows) {
@@ -222,16 +230,21 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 
 	out := make([]*listing.Totals, len(listed))
 	errs := make([]error, len(listed))
+	var late atomic.Bool
 	next := make(chan int)
 	var wg sync.WaitGroup
 	for range min(len(counted), runtime.GOMAXPROCS(0)) {
 		wg.Go(func() {
 			for i := range next {
 				totals, err := inv.aggregate(op, []seekparquet.RowSpan{listed[i].Rows}, sel, false)
-				if err == nil {
+				switch {
+				case err == nil:
 					out[i] = totals[0]
+				case timeUp(ctx, op):
+					late.Store(true) // not counted within the budget: nil
+				default:
+					errs[i] = err
 				}
-				errs[i] = err
 			}
 		})
 	}
@@ -241,13 +254,10 @@ func (inv *Inventory) childTotals(ctx, op context.Context, listed []seekparquet.
 	close(next)
 	wg.Wait()
 
-	if timeUp(ctx, op) {
-		return out, nil
-	}
 	for _, err := range errs {
 		if err != nil {
-			return nil, failed(ctx, err)
+			return nil, false, failed(ctx, err)
 		}
 	}
-	return out, nil
+	return out, late.Load(), nil
 }

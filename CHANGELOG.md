@@ -69,8 +69,9 @@ Notable changes per release. The human summary of the current release is in the
 - A live `Summarize` subtree target whose walk finds no directory to enter, because its key is, or lies behind, a
   symbolic link or names another kind (`ErrNotDirectory`), is unknown with that reason and incomplete; the other
   targets are answered.
-- An inventory page counts each child's totals on its own: when its `MaxDuration` ends, the totals counted stand
-  and only those not yet counted are nil.
+- An inventory page counts each child's totals on its own: when its `MaxDuration` ends while they are counted, the
+  page keeps its entries, the totals counted stand, only those not yet counted are nil, and `Evidence.Stop` is
+  `time_budget`.
 - `gcs.Open` opens a Google Cloud Storage bucket as a `Source`, with the pages, tokens, evidence and error classes
   of S3. A lookup is absent only after a 404 with reason `notFound` and a `buckets.get` that succeeds
   ([library guide](docs/library.md#google-cloud-storage)).

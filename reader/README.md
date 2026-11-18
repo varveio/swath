@@ -158,7 +158,8 @@ inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller ope
 refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with
 `listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque tokens bound to the manifest
 digest, the prefix and the kinds the child totals count, and optional child totals within the page's
-`MaxDuration`; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
+`MaxDuration` (a page it ends while they are counted keeps its entries and the totals counted, nil for the rest,
+and says `time_budget`); `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
 `Summarize` reads the entries at its targets' keys, then aggregates its subtree targets' rows in one
 `AggregateRows` call, checking their key order. A walk or summary sets no limit: a caller stops it by cancelling
 its context. An object store's prefix may be any key prefix; a local one is empty or a
