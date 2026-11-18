@@ -14,6 +14,7 @@ import (
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
+	"github.com/varveio/swath/internal/buildinfo"
 	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/jsontime"
 	"github.com/varveio/swath/reader"
@@ -174,7 +175,10 @@ type Manifest struct {
 	// Filesystem is extensions.swath.filesystem: the space of the
 	// filesystem that holds a local source's root; nil when not measured.
 	Filesystem *FilesystemSpace
-	Parts      []ManifestPart // in key order; part i is data/part-%05d.parquet
+	// WrittenBy is extensions.swath.written_by: the build that wrote the
+	// manifest; zero for a manifest written before builds recorded it.
+	WrittenBy buildinfo.Build
+	Parts     []ManifestPart // in key order; part i is data/part-%05d.parquet
 }
 
 // Totals is a committed dataset's account, from its manifest: its rows and
@@ -222,12 +226,13 @@ type swathExtension struct {
 	Collected            Collected        `json:"collected"`
 	CommittedObjectBytes *int64           `json:"committed_object_bytes,omitempty"`
 	Filesystem           *FilesystemSpace `json:"filesystem,omitempty"`
+	WrittenBy            buildinfo.Build  `json:"written_by,omitzero"`
 }
 
 // MarshalJSON writes m in the SeekParquet form.
 func (m Manifest) MarshalJSON() ([]byte, error) {
 	x := swathExtension{Version: reader.MetadataVersion, PublishedAt: jsontime.Of(m.PublishedAt), Source: m.Source, Scope: m.Scope, Coverage: m.Coverage,
-		Collected: m.Collected, CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem}
+		Collected: m.Collected, CommittedObjectBytes: m.CommittedObjectBytes, Filesystem: m.Filesystem, WrittenBy: m.WrittenBy}
 	if x.Collected.Columns == nil {
 		x.Collected.Columns = []string{}
 	}
@@ -266,7 +271,7 @@ func (m *Manifest) UnmarshalJSON(b []byte) error {
 	*m = Manifest{Format: seekparquet.Format, FormatVersion: int(sm.Version.FormatVersion), DraftRevision: int(sm.Version.DraftRevision), SchemaID: sm.SchemaID,
 		Key: sm.Key, MetadataVersion: x.Version, PublishedAt: x.PublishedAt.Time, Source: x.Source, Scope: x.Scope, Coverage: x.Coverage, Collected: x.Collected,
 		CommittedObjectBytes: x.CommittedObjectBytes,
-		Filesystem:           x.Filesystem, Parts: make([]ManifestPart, len(sm.Parts))}
+		Filesystem:           x.Filesystem, WrittenBy: x.WrittenBy, Parts: make([]ManifestPart, len(sm.Parts))}
 	for i, p := range sm.Parts {
 		m.Parts[i] = ManifestPart{Path: p.Path, PartInfo: PartInfo{Rows: p.Rows, Bytes: p.Bytes, MinKey: Key(p.MinKey), MaxKey: Key(p.MaxKey), SHA256: p.SHA256}}
 	}

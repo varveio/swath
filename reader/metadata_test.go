@@ -31,6 +31,7 @@ func TestParseMetadata(t *testing.T) {
 		"collected": {"metadata": "statx", "columns": ["link_target"]},
 		"committed_object_bytes": 81234,
 		"filesystem": {"total_bytes": 994662584320, "free_bytes": 462012616704, "available_bytes": 430573547520, "measured_at": "2026-11-08T17:59:01Z"},
+		"written_by": {"tool": "swath", "version": "0.4.1", "revision": "0123abcd"},
 		"part_md5": ["ignored"]}, "other": {"x": 1}}`)
 	m, err := ParseMetadata(full)
 	if err != nil {
@@ -47,6 +48,9 @@ func TestParseMetadata(t *testing.T) {
 	}
 	if f := m.Filesystem; f == nil || *f.TotalBytes != 994662584320 || *f.FreeBytes != 462012616704 || *f.AvailableBytes != 430573547520 || f.MeasuredAt.Second() != 1 {
 		t.Fatalf("filesystem %+v", f)
+	}
+	if w := m.WrittenBy; w == nil || *w.Tool != "swath" || *w.Version != "0.4.1" || *w.Revision != "0123abcd" {
+		t.Fatalf("written_by %+v", w)
 	}
 
 	// filesystem: absent or null is nil; its absent or null members are
@@ -72,7 +76,8 @@ func TestParseMetadata(t *testing.T) {
 		t.Fatalf("committed_object_bytes 0: %+v, %v", m, err)
 	}
 
-	// Absent members are nil, present zero values are not.
+	// Absent members are nil, present zero values are not. A manifest
+	// written before written_by opens without it.
 	m, err = ParseMetadata(manifestWith(`{"swath": {"version": 1, "source": {"kind": "local", "uri": "/data"}, "scope": {"kind": "whole"},
 		"coverage": {"complete": false, "unreadable": 0}}}`))
 	if err != nil {
@@ -80,7 +85,8 @@ func TestParseMetadata(t *testing.T) {
 	}
 	c = m.Coverage
 	if m.PublishedAt != nil || m.Source.Container != nil || m.Scope.Prefix != nil || c.Complete == nil || *c.Complete || c.Unreadable == nil ||
-		c.StopReason != nil || c.Filters != nil || c.Exclusions != nil || c.ListingStartedAt != nil || m.CommittedObjectBytes != nil || m.Collected != nil {
+		c.StopReason != nil || c.Filters != nil || c.Exclusions != nil || c.ListingStartedAt != nil || m.CommittedObjectBytes != nil || m.Collected != nil ||
+		m.WrittenBy != nil {
 		t.Fatalf("partial %+v %+v", m, *c)
 	}
 

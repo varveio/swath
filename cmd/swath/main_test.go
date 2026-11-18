@@ -72,7 +72,8 @@ func TestRun(t *testing.T) {
 // then labelled lines in reading order (source, listed, contents with
 // counts grouped, coverage, storage last), and clips a long key range to
 // the width given. The storage line names the schema; -v adds the
-// SeekParquet format id before it and changes nothing else.
+// SeekParquet format id before it and the writing build after it, and
+// changes nothing else.
 func TestShowDataset(t *testing.T) {
 	src := t.TempDir()
 	long := strings.Repeat("k", 200)
@@ -115,6 +116,11 @@ func TestShowDataset(t *testing.T) {
 	}
 	want := slices.Clone(lines)
 	want[5] = strings.Replace(want[5], "(schema ", fmt.Sprintf("(SeekParquet format %d draft %d, schema ", m.FormatVersion, m.DraftRevision), 1)
+	written := ", written by swath " + m.WrittenBy.Version
+	if m.WrittenBy.Revision != "" {
+		written += " revision " + m.WrittenBy.Revision
+	}
+	want[5] = strings.TrimSuffix(want[5], ")") + written + ")"
 	if got := strings.Split(strings.TrimSuffix(verbose.String(), "\n"), "\n"); m.DraftRevision == 0 || !slices.Equal(got, want) {
 		t.Fatalf("show -v:\n%s\nwant\n%s", verbose.String(), strings.Join(want, "\n"))
 	}
