@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package s3 opens an Amazon S3 bucket, or a bucket of an S3-compatible
-// store, as a live swath.Source.
+// store, as a live source.Source.
 //
 // The API is experimental: it may change in any release.
 package s3
@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/varveio/swath"
 	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/internal/source/objhttp"
 	s3source "github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
 )
 
 // Options configure an S3 source. The zero value reaches AWS's own
@@ -68,7 +68,7 @@ type Options struct {
 // s3:GetObject on the key, and s3:ListBucket on the bucket to tell an
 // absent key: without it S3 answers a missing key with 403, which leaves
 // the key unknown.
-func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, error) {
+func Open(ctx context.Context, bucket string, opts Options) (*source.Source, error) {
 	switch {
 	case bucket == "" || strings.ContainsAny(bucket, "/\x00"):
 		return nil, objfile.RedactError(fmt.Errorf("%w: bucket %q: a bucket's name, with no slash", listing.ErrInvalidRequest, bucket))
@@ -93,5 +93,5 @@ func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, erro
 		}
 		return nil, objfile.RedactError(err)
 	}
-	return (*swath.Source)(live.NewSource(st, false)), nil
+	return (*source.Source)(live.NewSource(st, false)), nil
 }

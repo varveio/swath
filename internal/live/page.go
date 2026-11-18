@@ -17,7 +17,7 @@ import (
 	"github.com/varveio/swath/reader/listing"
 )
 
-// Page answers swath.Source.Page.
+// Page answers source.Source.Page.
 func (s *Source) Page(ctx context.Context, req listing.PageRequest) (listing.Page, error) {
 	if err := s.checkPage(req); err != nil {
 		return listing.Page{}, err

@@ -21,10 +21,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/varveio/swath"
-	"github.com/varveio/swath/local"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
+	"github.com/varveio/swath/source/local"
 )
 
 // write makes the file rel below root, and the directories on the way.
@@ -59,7 +59,7 @@ func hold(t *testing.T, dir string) *os.File {
 }
 
 // open opens the directory f holds as a source, until the test ends.
-func open(t *testing.T, f *os.File) *swath.Source {
+func open(t *testing.T, f *os.File) *source.Source {
 	t.Helper()
 	src, err := local.Open(f)
 	if err != nil {
@@ -71,7 +71,7 @@ func open(t *testing.T, f *os.File) *swath.Source {
 
 // level pages prefix whole, limit entries a page, and returns each entry
 // as "kind key", Self first as "self kind key".
-func level(ctx context.Context, src *swath.Source, prefix string, limit int) ([]string, error) {
+func level(ctx context.Context, src *source.Source, prefix string, limit int) ([]string, error) {
 	var got []string
 	req := listing.PageRequest{Prefix: []byte(prefix), Limit: limit}
 	for {
@@ -565,7 +565,7 @@ func TestTokens(t *testing.T) {
 		t.Fatalf("%+v %v", page, err)
 	}
 	for name, c := range map[string]struct {
-		src    *swath.Source
+		src    *source.Source
 		prefix string
 	}{"another prefix": {src, "e/"}, "another root": {other, "d/"}} {
 		if _, err := c.src.Page(ctx, listing.PageRequest{Prefix: []byte(c.prefix), Limit: 2, Token: page.Next}); !errors.Is(err, listing.ErrInvalidToken) {

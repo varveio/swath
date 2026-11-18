@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package swath
+package source
 
 import (
 	"os/exec"
@@ -10,7 +10,10 @@ import (
 	"testing"
 )
 
-const mod = "github.com/varveio/swath"
+const (
+	mod = "github.com/varveio/swath"
+	src = mod + "/source"
+)
 
 // command is what swath's command is built from and no library package may
 // link: the flag package, the scheme registry and the command's
@@ -65,7 +68,7 @@ func deps(t *testing.T, pkg string) map[string][]string {
 // This package links no cloud SDK and no provider; a provider package
 // links its own SDK.
 func TestLibraryImports(t *testing.T) {
-	for _, pkg := range []string{mod, mod + "/s3"} {
+	for _, pkg := range []string{src, src + "/s3"} {
 		d := deps(t, pkg)
 		for _, c := range command {
 			if _, ok := d[c]; ok {
@@ -84,14 +87,14 @@ func TestLibraryImports(t *testing.T) {
 		}
 	}
 
-	core := deps(t, mod)
+	core := deps(t, src)
 	for path := range core {
 		if strings.HasPrefix(path, mod+"/internal/source/") || slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
-			t.Errorf("%s links %s", mod, path)
+			t.Errorf("%s links %s", src, path)
 		}
 	}
 	// The walk sees what it looks for where it is linked (not vacuous).
-	if _, ok := deps(t, mod+"/s3")["github.com/aws/aws-sdk-go-v2/service/s3"]; !ok {
+	if _, ok := deps(t, src+"/s3")["github.com/aws/aws-sdk-go-v2/service/s3"]; !ok {
 		t.Error("the walk does not see the S3 SDK in the s3 package")
 	}
 	swath := deps(t, mod+"/cmd/swath")
@@ -106,10 +109,10 @@ func TestLibraryImports(t *testing.T) {
 // parquet-go only through SeekParquet's reader; it links Google's SDK and
 // no other provider's, and the s3 package does not link Google's.
 func TestGCSImports(t *testing.T) {
-	gcs := deps(t, mod+"/gcs")
+	gcs := deps(t, src+"/gcs")
 	for _, c := range command {
 		if _, ok := gcs[c]; ok {
-			t.Errorf("%s/gcs links %s", mod, c)
+			t.Errorf("%s/gcs links %s", src, c)
 		}
 	}
 	for path, imports := range gcs {
@@ -118,7 +121,7 @@ func TestGCSImports(t *testing.T) {
 		}
 		for _, imp := range imports {
 			if strings.HasPrefix(imp, "github.com/parquet-go/") {
-				t.Errorf("%s/gcs links %s through %s, not through SeekParquet's reader", mod, imp, path)
+				t.Errorf("%s/gcs links %s through %s, not through SeekParquet's reader", src, imp, path)
 			}
 		}
 	}
@@ -127,12 +130,12 @@ func TestGCSImports(t *testing.T) {
 	others := []string{"github.com/aws/", "github.com/Azure/", mod + "/internal/source/s3", mod + "/internal/source/azblob", mod + "/internal/source/localfs"}
 	for path := range gcs {
 		if slices.ContainsFunc(others, func(p string) bool { return strings.HasPrefix(path, p) }) {
-			t.Errorf("%s/gcs links %s", mod, path)
+			t.Errorf("%s/gcs links %s", src, path)
 		}
 	}
-	for path := range deps(t, mod+"/s3") {
+	for path := range deps(t, src+"/s3") {
 		if slices.ContainsFunc(google, func(p string) bool { return strings.HasPrefix(path, p) }) || strings.HasPrefix(path, mod+"/internal/source/gcs") {
-			t.Errorf("%s/s3 links %s", mod, path)
+			t.Errorf("%s/s3 links %s", src, path)
 		}
 	}
 	// The walk sees what it looks for where it is linked (not vacuous).
@@ -146,31 +149,31 @@ func TestGCSImports(t *testing.T) {
 // Azure's; the s3 package links no Azure SDK.
 func TestAzblobImports(t *testing.T) {
 	const azure = "github.com/Azure/"
-	d := deps(t, mod+"/azblob")
+	d := deps(t, src+"/azblob")
 	for _, c := range command {
 		if _, ok := d[c]; ok {
-			t.Errorf("%s/azblob links %s", mod, c)
+			t.Errorf("%s/azblob links %s", src, c)
 		}
 	}
 	for path, imports := range d {
 		if !strings.HasPrefix(path, azure) && slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
-			t.Errorf("%s/azblob links %s", mod, path)
+			t.Errorf("%s/azblob links %s", src, path)
 		}
 		if strings.HasPrefix(path, "github.com/parquet-go/") || slices.Contains(readerEdge, path) {
 			continue
 		}
 		for _, imp := range imports {
 			if strings.HasPrefix(imp, "github.com/parquet-go/") {
-				t.Errorf("%s/azblob links %s through %s, not through SeekParquet's reader", mod, imp, path)
+				t.Errorf("%s/azblob links %s through %s, not through SeekParquet's reader", src, imp, path)
 			}
 		}
 	}
 	if _, ok := d["github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"]; !ok {
 		t.Error("the walk does not see the Azure SDK in the azblob package")
 	}
-	for path := range deps(t, mod+"/s3") {
+	for path := range deps(t, src+"/s3") {
 		if strings.HasPrefix(path, azure) || strings.HasPrefix(path, mod+"/internal/source/azblob") {
-			t.Errorf("%s/s3 links %s", mod, path)
+			t.Errorf("%s/s3 links %s", src, path)
 		}
 	}
 }
@@ -179,22 +182,22 @@ func TestAzblobImports(t *testing.T) {
 // registry, run pipeline or writer), no cloud SDK, and parquet-go only
 // through SeekParquet's reader, which the local schema reaches.
 func TestLocalImports(t *testing.T) {
-	d := deps(t, mod+"/local")
+	d := deps(t, src+"/local")
 	for _, c := range command {
 		if _, ok := d[c]; ok {
-			t.Errorf("%s/local links %s", mod, c)
+			t.Errorf("%s/local links %s", src, c)
 		}
 	}
 	for path, imports := range d {
 		if slices.ContainsFunc(sdks, func(sdk string) bool { return strings.HasPrefix(path, sdk) }) {
-			t.Errorf("%s/local links %s", mod, path)
+			t.Errorf("%s/local links %s", src, path)
 		}
 		if strings.HasPrefix(path, "github.com/parquet-go/") || slices.Contains(readerEdge, path) {
 			continue
 		}
 		for _, imp := range imports {
 			if strings.HasPrefix(imp, "github.com/parquet-go/") {
-				t.Errorf("%s/local links %s through %s, not through SeekParquet's reader", mod, imp, path)
+				t.Errorf("%s/local links %s through %s, not through SeekParquet's reader", src, imp, path)
 			}
 		}
 	}

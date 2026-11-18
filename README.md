@@ -74,6 +74,9 @@ The documentation is at [swath.varve.io](https://swath.varve.io/):
   with stopping and resuming.
 - [Sources](https://swath.varve.io/docs/sources/): Amazon S3 and S3-compatible stores, Google Cloud Storage,
   Azure Blob Storage, and local or mounted filesystems, with what each supports.
+- [Use swath from Go](https://swath.varve.io/docs/library.html) (experimental): package
+  `github.com/varveio/swath/source` opens a bucket, container or directory and pages, looks up and walks it
+  live, with no swath process.
 
 To work on swath, read the [contributor documentation](docs/internals/README.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md). [Apache-2.0](LICENSE); swath is by [Varve](https://varve.io).

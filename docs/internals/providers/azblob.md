@@ -274,7 +274,7 @@ controller and the limits of its tuning evidence. Namespace admission above rema
 ## The live source
 
 `OpenLive` builds the client as `New` does and sends nothing: no namespace admission, no range engine. `Live` is the
-`live.Store` of the library's `github.com/varveio/swath/azblob` ([library](../../library.md#azure-blob-storage)); its
+`live.Store` of the library's `github.com/varveio/swath/source/azblob` ([library](../../library.md#azure-blob-storage)); its
 location is the account, the container and the canonical route.
 
 **Pages.** `List` is one List Blobs with the delimiter `/` and `include=metadata`, its names held to no order
@@ -282,7 +282,7 @@ location is the account, the container and the canonical route.
 serves the level in byte order. A blob whose metadata says `hdi_isfolder=true` (`client.Directory`), as a
 hierarchical namespace's directory's blob does, and whose name does not end in `/`, is the directory's prefix in a
 hierarchical namespace only, so a directory listed both as that blob and as its prefix in one answer is one prefix;
-any other key listed twice is served twice, which `swath.Source`'s page check refuses (`listing.ErrInvalidPage`).
+any other key listed twice is served twice, which `source.Source`'s page check refuses (`listing.ErrInvalidPage`).
 User metadata can mark a flat namespace's blob the same way, so the first answer or Get Blob Properties holding a
 marked blob makes `Live` ask the namespace with admission's calls (`namespaceOf`: Get Account Information, then the
 Data Lake host), once per source. A flat namespace's marked blob is an object. Credentials refused or not had and a

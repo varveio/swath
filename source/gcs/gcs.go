@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package gcs opens a Google Cloud Storage bucket, through the JSON API
-// of Google's service or of a compatible endpoint, as a live swath.Source.
+// of Google's service or of a compatible endpoint, as a live source.Source.
 //
 // The API is experimental: it may change in any release.
 package gcs
@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/varveio/swath"
 	"github.com/varveio/swath/internal/live"
 	gcssource "github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
 )
 
 // Options configure a GCS source. The zero value reaches Google's own
@@ -59,7 +59,7 @@ type Options struct {
 // Page needs storage.objects.list on the bucket. Lookup needs
 // storage.objects.get on the object, and storage.buckets.get on the bucket
 // to tell an absent key: without it a missing key is unknown.
-func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, error) {
+func Open(ctx context.Context, bucket string, opts Options) (*source.Source, error) {
 	switch {
 	case bucket == "" || strings.ContainsAny(bucket, "/\x00"):
 		return nil, objfile.RedactError(fmt.Errorf("%w: bucket %q: a bucket's name, with no slash", listing.ErrInvalidRequest, bucket))
@@ -82,5 +82,5 @@ func Open(ctx context.Context, bucket string, opts Options) (*swath.Source, erro
 		}
 		return nil, objfile.RedactError(err)
 	}
-	return (*swath.Source)(live.NewSource(st, false)), nil
+	return (*source.Source)(live.NewSource(st, false)), nil
 }

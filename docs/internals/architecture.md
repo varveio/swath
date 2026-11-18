@@ -74,20 +74,20 @@ that the remainder and both children are worth their requests. It then emits `(c
 The list clients are built on the vendors' SDK service clients; what is the SDK's, what swath keeps and why:
 [clients.md](clients.md).
 
-**The library** (experimental, [library.md](../library.md)). The root package `github.com/varveio/swath` holds
+**The library** (experimental, [library.md](../library.md)). Package `github.com/varveio/swath/source` holds
 `Source`, an opened live location that answers the listing contract's Page, Lookup and Walk (`reader/listing`) with the
 checks and page tokens every object store's pages share; it links no provider and no cloud SDK. A provider's
-public package opens one with typed options and no flags: `github.com/varveio/swath/s3` (`s3.Open`) over
+public package, under it, opens one with typed options and no flags: `github.com/varveio/swath/source/s3` (`s3.Open`) over
 `internal/source/s3.OpenLive`, whose one-level call is one delimiter ListObjectsV2 and whose lookup is HeadObject,
-then HeadBucket after a 404; `github.com/varveio/swath/azblob` (`azblob.Open`) over
+then HeadBucket after a 404; `github.com/varveio/swath/source/azblob` (`azblob.Open`) over
 `internal/source/azblob.OpenLive`, whose one-level call is one delimiter List Blobs served in byte order
 ([its live source](providers/azblob.md#the-live-source)) and whose lookup is Get Blob Properties, then a one-entry
-List Blobs after a 404; `github.com/varveio/swath/gcs` (`gcs.Open`) over `internal/source/gcs.OpenLive`, whose
+List Blobs after a 404; `github.com/varveio/swath/source/gcs` (`gcs.Open`) over `internal/source/gcs.OpenLive`, whose
 one-level call is one delimiter objects.list and whose lookup is objects.get, then buckets.get after a 404 with reason
-`notFound`; and `github.com/varveio/swath/local` (`local.Open`) over `internal/source/localfs.OpenLive`, a directory
+`notFound`; and `github.com/varveio/swath/source/local` (`local.Open`) over `internal/source/localfs.OpenLive`, a directory
 the caller holds, whose one-level call reads one directory relative to it and whose lookup resolves a key one name
 at a time. `internal/live` joins the two: the `Store` a provider implements, and the `Source` over one
-(`live.NewSource`), which package `swath` defines `swath.Source` on, with methods that call it. A provider's failures take the
+(`live.NewSource`), which package `source` defines `source.Source` on, with methods that call it. A provider's failures take the
 contract's classes through `objhttp.ListingClass`, which reads them as the command's `objhttp.Label` does. Neither
 package links the command, pflag, the registry, the run pipeline or a writer (`TestLibraryImports`).
 

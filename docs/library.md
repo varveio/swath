@@ -9,11 +9,11 @@ The library is **experimental**: it is implemented and tested, but its API may c
 
 | Package | What it holds |
 |---|---|
-| `github.com/varveio/swath` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
-| `github.com/varveio/swath/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
-| `github.com/varveio/swath/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
-| `github.com/varveio/swath/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
-| `github.com/varveio/swath/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
+| `github.com/varveio/swath/source` | `Source`, an opened live location, and its `Page`, `Lookup`, `Walk` and `Close` |
+| `github.com/varveio/swath/source/s3` | `Open`, which opens a bucket of Amazon S3 or of an S3-compatible store as a `Source` |
+| `github.com/varveio/swath/source/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
+| `github.com/varveio/swath/source/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
+| `github.com/varveio/swath/source/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
 | `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 
@@ -65,7 +65,7 @@ default:
 }
 ```
 
-The same program is the package's [`Example`](../s3/example_test.go), which the tests compile.
+The same program is the package's [`Example`](../source/s3/example_test.go), which the tests compile.
 
 `Open` builds the bucket's client and may load credentials; it lists nothing, so a bucket that is not there fails
 the first call. `s3.Options` takes the region, an S3-compatible endpoint and path-style addressing, a profile, a
@@ -150,7 +150,7 @@ default:
 }
 ```
 
-The program is the s3 package's [`Example_walk`](../s3/example_test.go). A walk needs `s3:ListBucket` on the
+The program is the s3 package's [`Example_walk`](../source/s3/example_test.go). A walk needs `s3:ListBucket` on the
 bucket.
 
 ## Evidence and errors
@@ -183,7 +183,7 @@ defer src.Close()
 ```
 
 The rest is as on S3: the same `Page`, `Lookup`, `Walk` and `Close`, checks, tokens, evidence and error classes. The
-package's [`Example`](../azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
+package's [`Example`](../source/azblob/example_test.go) is the whole program. `azblob.Options` takes an endpoint that
 replaces `https://ACCOUNT.blob.core.windows.net` (Azurite, say), unsigned access to a public container and the same two
 request limits; credentials otherwise come from the environment, as for the command: `AZURE_STORAGE_SAS_TOKEN`, else
 `AZURE_STORAGE_KEY`, else Entra ID ([Authentication and permissions](sources/azure.md#authentication-and-permissions)).
@@ -216,8 +216,8 @@ What differs from S3:
 
 ## Google Cloud Storage
 
-`github.com/varveio/swath/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
-walks, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../gcs/example_test.go)):
+`github.com/varveio/swath/source/gcs` opens a Google Cloud Storage bucket as a `Source`, with the same pages, lookups,
+walks, tokens, evidence, error classes and observer as S3 (the package's [`Example`](../source/gcs/example_test.go)):
 
 ```go
 src, err := gcs.Open(ctx, "example-bucket", gcs.Options{})
@@ -245,7 +245,7 @@ otherwise come from Application Default Credentials, as for the command
 
 ## A local directory
 
-`github.com/varveio/swath/local` opens a directory as a `Source`, on Linux and macOS. The program opens the
+`github.com/varveio/swath/source/local` opens a directory as a `Source`, on Linux and macOS. The program opens the
 directory itself, without following a symbolic link, and hands swath the open file: swath never resolves the
 directory by its path, so what it reads is the directory the program opened, even once that path names
 something else.
@@ -279,7 +279,7 @@ for {
 }
 ```
 
-The same program is the package's [`Example`](../local/example_test.go), which the tests compile.
+The same program is the package's [`Example`](../source/local/example_test.go), which the tests compile.
 
 The program owns the directory: it keeps it open until the source's `Close` returns, and `Close` does not close
 it. Keys are relative to it. A page's prefix is `""` for the directory itself or a directory's key, such as

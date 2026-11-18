@@ -20,7 +20,7 @@ import (
 // emitted.
 var errStopped = errors.New("swath: the walk has stopped")
 
-// Walk answers swath.Source.Walk.
+// Walk answers source.Source.Walk.
 func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(listing.WalkBatch) error) (listing.WalkSummary, error) {
 	if err := s.checkWalk(req, emit); err != nil {
 		return listing.WalkSummary{}, err

@@ -141,7 +141,8 @@ Azure versions schema in the [dataset profile](../docs/dataset.md#schema-registr
 ## The listing contract
 
 The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds the contract of the questions swath
-answers about a listed location, from a live source or from an opened inventory: Page (the next children of a
+answers about a listed location, from a live source (package `github.com/varveio/swath/source` in the root
+module, [the Go library](../docs/library.md)) or from an opened inventory: Page (the next children of a
 prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
 (count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
 common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope and unlocated gaps), the

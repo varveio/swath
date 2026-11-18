@@ -15,18 +15,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath"
 	"github.com/varveio/swath/internal/replay/server"
 	"github.com/varveio/swath/internal/replay/store/memstore"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
-	"github.com/varveio/swath/s3"
+	"github.com/varveio/swath/source"
+	"github.com/varveio/swath/source/s3"
 )
 
 // open opens bucket at endpoint, path-style and unsigned, until the test
 // ends.
-func open(t *testing.T, endpoint, bucket string) *swath.Source {
+func open(t *testing.T, endpoint, bucket string) *source.Source {
 	t.Helper()
 	src, err := s3.Open(context.Background(), bucket, s3.Options{Endpoint: endpoint, PathStyle: true, Anonymous: true, Region: "us-east-1"})
 	if err != nil {
@@ -281,7 +281,7 @@ func TestTokenBinding(t *testing.T) {
 	before := len(sent.list())
 	for _, c := range []struct {
 		name string
-		src  *swath.Source
+		src  *source.Source
 		req  listing.PageRequest
 	}{
 		{"another prefix", src, listing.PageRequest{Prefix: []byte("b/"), Limit: 1, Token: page.Next}},

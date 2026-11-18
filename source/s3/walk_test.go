@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
 )
 
 // served counts the list requests a store is sent, and those that start a
@@ -76,7 +76,7 @@ type walked struct {
 
 // walk walks src with req, keeping what it emits and checking each entry
 // as gofakes3 serves it: an object whose size is its key's length.
-func walk(t *testing.T, ctx context.Context, src *swath.Source, req listing.WalkRequest) (walked, listing.WalkSummary, error) {
+func walk(t *testing.T, ctx context.Context, src *source.Source, req listing.WalkRequest) (walked, listing.WalkSummary, error) {
 	t.Helper()
 	var w walked
 	sum, err := src.Walk(ctx, req, func(b listing.WalkBatch) error {

@@ -1,7 +1,7 @@
 // Copyright 2026 Varve Systems Ltd
 // SPDX-License-Identifier: Apache-2.0
 
-package swath
+package source
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 )
 
 // Source is an opened live location, opened by a provider package such as
-// github.com/varveio/swath/s3, as the package documentation states. The
+// github.com/varveio/swath/source/s3, as the package documentation states. The
 // zero Source is not usable.
 type Source live.Source
 

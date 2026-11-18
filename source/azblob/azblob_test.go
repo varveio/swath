@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/varveio/swath"
-	"github.com/varveio/swath/azblob"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/azblob/client"
 	"github.com/varveio/swath/objfile"
 	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/source"
+	"github.com/varveio/swath/source/azblob"
 )
 
 // The account and container every fake serves.
@@ -38,7 +38,7 @@ func noCredentials(t *testing.T) {
 }
 
 // open opens the container at endpoint, unsigned, until the test ends.
-func open(t *testing.T, endpoint string) *swath.Source {
+func open(t *testing.T, endpoint string) *source.Source {
 	t.Helper()
 	src, err := azblob.Open(context.Background(), account, container, azblob.Options{Endpoint: endpoint, Anonymous: true})
 	if err != nil {
@@ -133,7 +133,7 @@ func level(keys []string, prefix string) (self string, children []string) {
 
 // page reads the whole level of prefix at limit: Self and the children,
 // each page checked.
-func page(t *testing.T, src *swath.Source, prefix string, limit int) (self string, children []string, err error) {
+func page(t *testing.T, src *source.Source, prefix string, limit int) (self string, children []string, err error) {
 	t.Helper()
 	req := listing.PageRequest{Prefix: []byte(prefix), Limit: limit}
 	for pages := 0; ; pages++ {
@@ -404,7 +404,7 @@ func TestTokenBinding(t *testing.T) {
 	before := len(sent.list())
 	for _, c := range []struct {
 		name string
-		src  *swath.Source
+		src  *source.Source
 		req  listing.PageRequest
 	}{
 		{"another prefix", src, listing.PageRequest{Prefix: []byte("b/"), Limit: 1, Token: p.Next}},

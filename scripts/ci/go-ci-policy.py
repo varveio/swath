@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 PLATFORM_FILE = re.compile(r'_(windows|darwin|linux|unix|arm64|amd64)(_|\.)|\.s$')
-PLATFORM_PATHS = ('internal/journal/', 'internal/source/localfs/', 'local/',
+PLATFORM_PATHS = ('internal/journal/', 'internal/source/localfs/', 'source/local/',
                   'internal/parquetout/', 'internal/order/')
 PACKAGING = {'Dockerfile', '.dockerignore', 'build.sh', 'notices.sh', 'LICENSE', 'NOTICE'}
 ROOT_PROSE = {'README.md', 'CHANGELOG.md', 'AGENTS.md', 'CONTRIBUTING.md',
@@ -18,10 +18,9 @@ MODULES = {'go': 'go.mod', 'reader': 'reader/go.mod', 'objfile': 'objfile/go.mod
 # Their links are checked by go-lint on every event, like the root prose.
 LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/ops/')
 # The Go tree: the nested modules' directories, and the main module's directories and root files
-# (the root package's .go files too: in_go_tree).
+# (a .go file at the root too: in_go_tree).
 NESTED = ('objfile/', 'reader/')
-MAIN_DIRS = ('cmd/', 'command/', 'internal/', 'bench/', 'testdata/', 'docs/',
-             's3/', 'gcs/', 'azblob/', 'local/')
+MAIN_DIRS = ('cmd/', 'command/', 'internal/', 'bench/', 'testdata/', 'docs/', 'source/')
 MAIN_FILES = {'go.mod', 'go.sum', 'verify.py', 'dataset_schema.py', 'test_dataset_readers.py'}
 # The workspace that joins the three modules for every build in the repository (go.work.sum is
 # not committed: .gitignore).
