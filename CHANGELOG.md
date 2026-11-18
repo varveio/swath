@@ -13,6 +13,18 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Changed
 
+- `swath du` on a local tree leads with the space on disk, as `du`, ncdu, gdu and dust do: the table's and the
+  view's figure is `on disk`, `--sort size` orders by it, and the closing line gives it. A directory's own blocks
+  count in it, as `du` counts them, so a tree's total is `du -s`'s less the source directory's own blocks
+  (not with a size or time filter, which tests a directory by its own size and time).
+  `-A`, `--apparent-size`, gives the lengths as before. A listing that reads no blocks (Windows,
+  `--metadata names`), an object store, and a saved dataset without allocated bytes lead with the lengths.
+  `--allocated` now only requires the space on disk. TSV and JSONL rows keep both figures under the same names;
+  their `primary`, the order with `--sort size`, `allocated_bytes` (now with directories' blocks) and
+  `allocated_bytes_missing` (now counting directories without blocks: an empty directory's is unknown at
+  `--metadata names`) change. With `--metadata statx`, entries a filesystem answers without blocks count as
+  missing. The run report's `totals` gains `primary_reason`, and `swath du --from-dataset -v`'s `read` event
+  `primary` and `primary_reason` (#659).
 - `swath du`'s table heads the newest time under a prefix `newest (ZONE)`, as the terminal view does, instead
   of `last_modified (ZONE)`. TSV and JSONL keep the field `max_last_modified`.
 - `swath show` names a dataset's storage by its Parquet parts and schema; `-v` adds the SeekParquet format id.
@@ -27,6 +39,9 @@ Notable changes per release. The human summary of the current release is in the
   interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2) (#621).
 
 ### Fixed
+
+- `swath du --allocated`: the view's heading says `on disk`, not `size`, and the closing line gives the space on
+  disk, not the lengths.
 
 - A local listing on Linux and macOS opens every directory below the root relative to its parent's open
   descriptor (`openat`, `O_NOFOLLOW`), never by its path. A symbolic link swapped in for a directory, or for any

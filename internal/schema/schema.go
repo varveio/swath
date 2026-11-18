@@ -120,6 +120,11 @@ type Info struct {
 	// link identity. swath du --from-dataset counts such a dataset's
 	// hard-linked files under every name, as the live run does.
 	NamesTier string
+	// SparseBlocksTier, if set, is the metadata tier whose rows may lack
+	// allocated bytes where others have them (statx, which a filesystem may
+	// answer without blocks). swath du --from-dataset counts such rows
+	// missing, as the live run does, rather than total by size.
+	SparseBlocksTier string
 }
 
 // Match selects the rows whose string column Column holds Value.

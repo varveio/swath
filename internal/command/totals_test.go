@@ -118,12 +118,14 @@ var linksOnce = strconv.FormatBool(runtime.GOOS != "windows")
 // directory counts in its parents' Dirs, an empty one is listed), sorted by
 // prefix with the total first, each row with its type and the run's
 // primary figure, order and hard-link policy; the run report says the
-// path engaged, under the rows' names.
+// path engaged, under the rows' names, and why that figure leads. The
+// lengths lead here (--apparent-size): the files' blocks depend on the
+// filesystem (TestDuDefaultFigure).
 func TestDu(t *testing.T) {
 	root, at := depthTree(t)
 	report := filepath.Join(t.TempDir(), "r.json")
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--report", report}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--apparent-size", "--report", report}, &out); err != nil {
 		t.Fatal(err)
 	}
 	const newest, older = "2026-01-02T04:04:05.000000Z", "2026-01-02T03:04:05.000000Z"
@@ -137,13 +139,13 @@ func TestDu(t *testing.T) {
 	if got := dropColumns(out.String(), "allocated_bytes", "allocated_bytes_missing"); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
-	// The allocated bytes are every row's too: the files' blocks, known
-	// for each file, but on Windows, which reads none; 0 for an empty
-	// directory.
+	// The allocated bytes are every row's too: the files' and the
+	// directories' blocks, known for each entry, but on Windows, which reads
+	// none (an empty directory's own unknown there too; 0 on APFS).
 	for _, r := range duTSV(t, out.String()) {
 		switch {
-		case r["objects"] == "0" && (r["allocated_bytes"] != "0" || r["allocated_bytes_missing"] != "0"),
-			r["objects"] != "0" && runtime.GOOS == "windows" && (r["allocated_bytes"] != `\N` || r["allocated_bytes_missing"] != r["objects"]),
+		case runtime.GOOS == "windows" && r["allocated_bytes"] != `\N`,
+			r["objects"] == "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"),
 			r["objects"] != "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"):
 			t.Errorf("allocated bytes %+v", r)
 		}
@@ -164,7 +166,7 @@ func TestDu(t *testing.T) {
 	readJSON(t, report, &r)
 	tt := r.Output.Totals
 	if tt == nil || tt.Depth != 2 || tt.Prefixes != 5 || tt.Objects != 4 || tt.Dirs != 4 || tt.Size == nil || *tt.Size != 9 || tt.SizeMissing != 0 || tt.NotObjects != 4 ||
-		tt.Primary != "size" || tt.MaxLastModified == nil || tt.MaxLastModified.Format("2006-01-02T15:04:05.000000Z") != newest || (tt.AllocatedBytes == nil) != (runtime.GOOS == "windows") ||
+		tt.Primary != "size" || tt.PrimaryReason != "flag" || tt.MaxLastModified == nil || tt.MaxLastModified.Format("2006-01-02T15:04:05.000000Z") != newest || (tt.AllocatedBytes == nil) != (runtime.GOOS == "windows") ||
 		strconv.FormatBool(tt.LinksOnce) != linksOnce || r.Output.RowsEmitted != 8 || r.Invocation.Argv[0] != "du" {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
@@ -175,7 +177,7 @@ func TestDu(t *testing.T) {
 	// The line under it on stderr gives both figures' totals.
 	stderr := captureStderr(t)
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "-d", "2", "--format=table", "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "-d", "2", "--format=table", "--no-stats", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	heading := duTimeHeading()
@@ -213,7 +215,7 @@ func TestDu(t *testing.T) {
 	// Without -d, the total alone, here without the header line; swath
 	// diag count keeps its one line.
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv", "--no-header"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "--no-stats", "--format=tsv", "--no-header", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if f := strings.Split(out.String(), "\t"); len(f) != 13 || strings.Join(f[:6], "\t") != "total\t0\t4\t4\t9\t0" ||
@@ -233,7 +235,7 @@ func TestDuFile(t *testing.T) {
 	root, at := depthTree(t)
 	file := filepath.Join(root, "a", "g")
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{file, "-d", "1", "--format", "tsv", "--no-stats"}, &out); err != nil ||
+	if err := runDu(context.Background(), []string{file, "-d", "1", "--format", "tsv", "--no-stats", "-A"}, &out); err != nil ||
 		dropColumns(out.String(), "allocated_bytes", "allocated_bytes_missing", "links_once") != "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tmax_last_modified\tprimary\tsort\tprefix\n"+
 			"total\t0\t1\t0\t2\t0\t"+at.Format("2006-01-02T15:04:05.000000Z")+"\tsize\tname\t\n" {
 		t.Fatalf("du: %v %q", err, out.String())
@@ -244,16 +246,106 @@ func TestDuFile(t *testing.T) {
 	}
 }
 
+// TestDuDefaultFigure: with neither --allocated nor --apparent-size, a
+// local tree leads with its space on disk, as du does, where its listing
+// reads blocks: the table's one figure is "on disk", the line under it
+// gives the lengths, and the report says why (primary_reason default).
+// Where the listing reads no blocks the size leads, and the report says
+// why: the names tier, Windows. -A is --apparent-size; a flag is the
+// reason when one chose.
+func TestDuDefaultFigure(t *testing.T) {
+	root, _ := depthTree(t)
+	stderr := captureStderr(t)
+	reported := func(args ...string) *totals.Stats {
+		t.Helper()
+		report := filepath.Join(t.TempDir(), "r.json")
+		var out bytes.Buffer
+		if err := runDu(context.Background(), append([]string{root, "--no-stats", "--report", report}, args...), &out); err != nil {
+			t.Fatalf("%q: %v", args, err)
+		}
+		var r inventory.Report
+		readJSON(t, report, &r)
+		if tsv := slices.Contains(args, "--format=tsv"); tsv && !strings.Contains(out.String(), "\t"+r.Output.Totals.Primary+"\t") {
+			t.Fatalf("%q: rows %q, report primary %s", args, out.String(), r.Output.Totals.Primary)
+		} else if !tsv {
+			heading := map[string]string{totals.Size: "size", totals.AllocatedBytes: "on disk"}[r.Output.Totals.Primary]
+			if got := tableCells(out.String())[0]; got != heading {
+				t.Fatalf("%q: heading %q, primary %s", args, got, r.Output.Totals.Primary)
+			}
+		}
+		return r.Output.Totals
+	}
+	want, reason, line := totals.AllocatedBytes, totals.ReasonDefault, `^  [0-9.]+ [KMG]?i?B on disk in 4 files · 9 B of data\n$`
+	if runtime.GOOS == "windows" {
+		want, reason, line = totals.Size, totals.ReasonPlatform, `^  9 B in 4 files · on disk unknown\n$`
+	}
+	if tt := reported("-d", "1", "--format=table"); tt.Primary != want || tt.PrimaryReason != reason || !regexp.MustCompile(line).MatchString(stderr.String()) {
+		t.Fatalf("default: %s (%s), stderr %q", tt.Primary, tt.PrimaryReason, stderr.String())
+	}
+	for _, tc := range []struct {
+		args            []string
+		primary, reason string
+	}{
+		{[]string{"--metadata", "names", "--format=tsv"}, totals.Size, totals.ReasonNamesTier},
+		{[]string{"-A", "--format=tsv"}, totals.Size, totals.ReasonFlag},
+		{[]string{"--apparent-size", "-d", "1", "--format=table"}, totals.Size, totals.ReasonFlag},
+	} {
+		if tt := reported(tc.args...); tt.Primary != tc.primary || tt.PrimaryReason != tc.reason {
+			t.Fatalf("%q: %s (%s), want %s (%s)", tc.args, tt.Primary, tt.PrimaryReason, tc.primary, tc.reason)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if tt := reported("--allocated", "--format=tsv"); tt.Primary != totals.AllocatedBytes || tt.PrimaryReason != totals.ReasonFlag {
+			t.Fatalf("--allocated: %s (%s)", tt.Primary, tt.PrimaryReason)
+		}
+	}
+	var u usageError
+	if err := runDu(context.Background(), []string{root, "-A", "--allocated"}, io.Discard); !errors.As(err, &u) {
+		t.Fatalf("-A --allocated: %v", err)
+	}
+}
+
+// TestDuFiltersLeaveOutDirBlocks: a size or time filter passes or drops a
+// directory by its own size and time, so with one the space on disk is the
+// kept files' blocks alone, as swath list's rows give them, never the
+// blocks of the directories the filter happened to keep.
+func TestDuFiltersLeaveOutDirBlocks(t *testing.T) {
+	root, _ := depthTree(t)
+	if err := os.WriteFile(filepath.Join(root, "a", "big"), make([]byte, 100_000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range [][]string{{"--max-size", "4K"}, {"--min-size", "2"}, {"--modified-since", "2026-01-02T03:30:00Z"}, {"--modified-until", "2030-01-01"}} {
+		var list bytes.Buffer
+		if err := run(context.Background(), append([]string{root, "--columns", "kind,allocated_bytes", "--no-stats", "--format", "tsv"}, f...), &list, false); err != nil {
+			t.Fatal(err)
+		}
+		var files int64
+		known := false
+		for i, l := range strings.Split(strings.TrimSpace(list.String()), "\n") {
+			c := strings.Split(l, "\t")
+			if n, err := strconv.ParseInt(c[1], 10, 64); i > 0 && c[0] == "file" && err == nil {
+				files, known = files+n, true
+			}
+		}
+		out, err := duRun(t, append([]string{root, "--format", "tsv"}, f...)...)
+		r := duTSV(t, out)[0]
+		if err != nil || known && r["allocated_bytes"] != strconv.FormatInt(files, 10) || !known && runtime.GOOS != "windows" {
+			t.Fatalf("%q: %v, du %v, the kept files' blocks %d\n%s", f, err, r, files, list.String())
+		}
+	}
+}
+
 // TestDuSortSize: --sort size orders the prefixes below each parent by
 // size, the largest first, each prefix's own below it and the total in its
-// place (last in the table, first in TSV); another order is refused.
+// place (last in the table, first in TSV); another order is refused. The
+// lengths lead here (-A), whose order the test sets.
 func TestDuSortSize(t *testing.T) {
 	root, _ := depthTree(t)
 	if err := os.WriteFile(filepath.Join(root, "c", "big"), make([]byte, 20), 0o644); err != nil { // c/ the largest, after a/ by name
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "-d", "2", "--sort", "size", "--format=table", "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "-d", "2", "--sort", "size", "--format=table", "--no-stats", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var order []string
@@ -265,7 +357,7 @@ func TestDuSortSize(t *testing.T) {
 		t.Fatalf("table by size: %s", got)
 	}
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "-d", "1", "--sort=size", "--format=tsv", "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "-d", "1", "--sort=size", "--format=tsv", "--no-stats", "-A"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var prefixes []string
@@ -300,24 +392,26 @@ func TestObjectBytesLeaveOutDirs(t *testing.T) {
 }
 
 // TestDuNamesOnly: without sizes or blocks (the names metadata tier) both
-// figures of a prefix with files are null, beside the files without them,
-// as rclone size's sizeless; the table shows them, and the time the tier
-// does not read, as "-", unknown; an empty directory has 0 bytes. Nothing tells hard links apart, so every
-// name counts and the rows say so.
+// figures of a prefix with files are null, beside the files without them
+// (for the blocks, the directories too), as rclone size's sizeless; the
+// table shows them, and the time the tier does not read, as "-", unknown;
+// an empty directory has 0 bytes of size and unknown blocks, its own.
+// Nothing tells hard links apart, so every name counts and the rows say
+// so.
 func TestDuNamesOnly(t *testing.T) {
 	root, _ := depthTree(t)
 	none := fmt.Sprintf("%-*s", len(duTimeHeading()), "-")
 	const tail = `,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}` + "\n"
 	for format, want := range map[string]string{
 		"tsv": "row_type\tdepth\tobjects\tdirs\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n" +
-			"total\t0\t4\t4\t\\N\t4\t\\N\t4\t\\N\tsize\tname\tfalse\t\n" +
-			"prefix\t1\t2\t1\t\\N\t2\t\\N\t2\t\\N\tsize\tname\tfalse\ta/\n" +
-			"prefix\t1\t1\t0\t\\N\t1\t\\N\t1\t\\N\tsize\tname\tfalse\tc/\n" +
-			"prefix\t1\t0\t0\t0\t0\t0\t0\t\\N\tsize\tname\tfalse\te/\n",
-		"jsonl": `{"row_type":"total","depth":0,"prefix":"","objects":4,"dirs":4,"size":null,"size_missing":4,"allocated_bytes":null,"allocated_bytes_missing":4` + tail +
-			`{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"dirs":1,"size":null,"size_missing":2,"allocated_bytes":null,"allocated_bytes_missing":2` + tail +
-			`{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":null,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":1` + tail +
-			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0` + tail,
+			"total\t0\t4\t4\t\\N\t4\t\\N\t8\t\\N\tsize\tname\tfalse\t\n" +
+			"prefix\t1\t2\t1\t\\N\t2\t\\N\t4\t\\N\tsize\tname\tfalse\ta/\n" +
+			"prefix\t1\t1\t0\t\\N\t1\t\\N\t2\t\\N\tsize\tname\tfalse\tc/\n" +
+			"prefix\t1\t0\t0\t0\t0\t\\N\t1\t\\N\tsize\tname\tfalse\te/\n",
+		"jsonl": `{"row_type":"total","depth":0,"prefix":"","objects":4,"dirs":4,"size":null,"size_missing":4,"allocated_bytes":null,"allocated_bytes_missing":8` + tail +
+			`{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"dirs":1,"size":null,"size_missing":2,"allocated_bytes":null,"allocated_bytes_missing":4` + tail +
+			`{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":null,"size_missing":1,"allocated_bytes":null,"allocated_bytes_missing":2` + tail +
+			`{"row_type":"prefix","depth":1,"prefix":"e/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1` + tail,
 		"table": "" +
 			"size  files  dirs  " + duTimeHeading() + "  path\n" +
 			"   -      2     1  " + none + "  a/\n" +

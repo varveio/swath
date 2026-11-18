@@ -112,7 +112,7 @@ which includes sharing a literal prefix narrow the listed prefix. It returns the
 (Azure: a prefix its URL cannot carry beside the SAS), and the root is listed as given with
 `invocation.narrowing` `provider_declined_prefix`; without the hook it is `provider_lists_root`.
 `CheckTotals` (the local factory) refuses per-prefix totals its options cannot give (`--allocated` with `--metadata names`; it turns off counting hard links once there, the names tier reading no
-link counts) before the source opens, and `CheckFilter` (the local factory) refuses
+link counts) before the source opens, and chooses the primary figure neither `--allocated` nor `--apparent-size` chose: the allocated bytes where the listing reads blocks (`localfs.BlocksRead`), else the size, with its reason (`totals.Reason*`); a provider without it leads with the size (`object_store`), and `CheckFilter` (the local factory) refuses
 filters on values its options do not read (sizes and times with `--metadata names`, storage classes).
 
 A provider's typed opener (`s3.Open`, `s3.OpenVersions`, `localfs.Open`, ...) takes the root and the provider's

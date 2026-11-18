@@ -104,7 +104,10 @@ type Factory struct {
 	Usage string
 	// CheckTotals, if set, refuses per-prefix totals (swath du) that the
 	// provider's options value cannot give, before the source is opened,
-	// and turns off in t a default its options do not read.
+	// turns off in t a default its options do not read, and chooses the
+	// primary figure and its reason when t has none (no --allocated or
+	// --apparent-size). A provider that leaves it unchosen leads with the
+	// size (totals.ReasonObjectStore).
 	CheckTotals func(options any, t *totals.Options) error
 	// CheckFilter, if set, refuses filters on columns the provider's
 	// options do not fill (filter.Spec.Reads), before the source is opened.

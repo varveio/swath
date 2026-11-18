@@ -87,7 +87,7 @@ func TestPruneCommandDu(t *testing.T) {
 			t.Setenv("SWATH_LOCALFS_ENGINE", engine)
 			reportPath := filepath.Join(t.TempDir(), "report.json")
 			var out bytes.Buffer
-			args := []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "--report", reportPath,
+			args := []string{root, "--depth", "2", "--format", "tsv", "--no-stats", "-A", "--report", reportPath,
 				"--exclude", "a/**", "--exclude", "x", "--exclude-regex", "^never$"}
 			if err := runDu(context.Background(), args, &out); err != nil {
 				t.Fatal(err)

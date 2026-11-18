@@ -27,9 +27,10 @@ type totalsSink[P any] struct {
 	mtime  func(*P) (int64, bool)
 	marker func(*P) bool
 	box    func(*P) bool
-	// strict: the allocated bytes are the primary figure (--allocated),
-	// asked for by name, so an object without them fails the count rather
-	// than count none.
+	// strict: the allocated bytes are the primary figure (--allocated, or
+	// a local tree's default where its listing reads them), so an object or
+	// a directory without them fails the count (totals.NoAllocatedError)
+	// rather than count none; not with totals.Options.Lenient.
 	strict            bool
 	nlink, dev, inode func(*P) (int64, bool)
 }
@@ -42,7 +43,7 @@ type totalsSink[P any] struct {
 // in any order (order.Options.Unordered).
 func Totals[P any](t *totals.Tally, s *schema.Schema[P], vers *schema.Versions[P], next order.Sink[P], ordered bool) (order.Sink[P], error) {
 	opt := t.Options()
-	k := totalsSink[P]{t: t, box: s.Container, strict: opt.Primary == totals.AllocatedBytes}
+	k := totalsSink[P]{t: t, box: s.Container, strict: opt.Primary == totals.AllocatedBytes && !opt.Lenient}
 	if vers != nil {
 		k.marker = vers.DeleteMarker
 	}
@@ -183,9 +184,9 @@ func (k totalsSink[P]) write(segs [][]schema.Row[P], v *totals.ViewRun) error {
 			if k.alloc != nil {
 				r.Allocated, r.HasAllocated = k.alloc(p)
 			}
-			if r.Object && k.strict && !r.HasAllocated {
+			if (r.Object || r.Dir) && k.strict && !r.HasAllocated { // a directory's own blocks count too
 				b.Discard()
-				return fmt.Errorf("per-prefix totals: %q has no %s (a metadata tier or platform that does not read it)", seg[i].Key, totals.AllocatedBytes)
+				return &totals.NoAllocatedError{Key: seg[i].Key}
 			}
 			if k.mtime != nil {
 				r.Mtime, r.HasMtime = k.mtime(p)

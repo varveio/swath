@@ -1,6 +1,6 @@
 # swath du
 
-swath du totals SOURCE's objects (a local tree's files), their lengths and allocated bytes, and their newest time, per prefix down to a depth.
+swath du totals SOURCE's objects (a local tree's files), the space they take on disk and their lengths, and their newest time, per prefix down to a depth.
 
 ## Synopsis
 
@@ -47,14 +47,14 @@ sizes) with exit 2.
   A prefix ends at a '/'; each includes what is below it, as du. --max-depth N, GNU du's spelling, is the same. Without it, a terminal shows the view instead: the largest prefixes and objects at any depth.
 
 - <a id="option-allocated"></a>[`--allocated`](#option-allocated)\
-  local: show and --sort size by the files' allocated bytes (on disk)
+  local: show and --sort size by the space on disk, and require it
 
-  The files' st_blocks x 512: the table's one figure, the line under it giving the lengths; TSV and JSONL rows carry both either way. A directory's own blocks are not counted, so a tree's total is below du's by them. A file without them (the names metadata tier reads none) fails the count.
+  The entries' st_blocks x 512, directories' included, as du counts them: a local tree's default where its listing reads them, so this only makes it required. A file without them fails the count; the names metadata tier, which reads none, refuses it. TSV and JSONL rows carry both figures either way.
 
-- <a id="option-apparent-size"></a>[`--apparent-size`](#option-apparent-size)\
-  show and --sort size by the lengths (the default)
+- <a id="option-apparent-size"></a>[`-A, --apparent-size`](#option-apparent-size)\
+  show and --sort size by the files' lengths, as du -A
 
-  Not with --allocated.
+  An object store's default, and a local tree's where its listing reads no blocks (the names metadata tier, Windows). Not with --allocated.
 
 - <a id="option-count-links"></a>[`-l, --count-links`](#option-count-links)\
   local: count a file with several hard links under each of its names
@@ -359,10 +359,11 @@ Read the totals of a bucket's first two levels as JSONL:
 swath du gs://bucket -d 2 --format jsonl
 ```
 
-Total what a local tree's files take on disk, without crossing into other filesystems:
+Total what a local tree takes on disk, without crossing into other filesystems, and the files' lengths instead:
 
 ```bash
-swath du /home --allocated --one-file-system
+swath du /home --one-file-system
+swath du /home --one-file-system -A
 ```
 
 Total the objects larger than 1 GiB:

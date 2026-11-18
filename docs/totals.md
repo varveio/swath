@@ -54,7 +54,9 @@ Each line is a prefix or an object, with:
 
 A prefix with a single child shares its line with it (`18/rerun/`; in a directory, `videos/trip.mp4`). Under
 each parent the view lists its largest children, then one `(N more)` line for the rest: how many they are, what
-they hold together and their newest date, so the bytes of the lines under a parent always add up to its bytes.
+they hold together and their newest date, so the bytes of the lines under a parent add up to its bytes: on disk,
+less the directory's own blocks when every child has a line (a `(N more)` line holds them otherwise). A shared
+line gives the first prefix's bytes, its own blocks included.
 Only a `(N more)` line of 0 bytes is left out (unless it holds a directory that could not be read), so the
 counts shown under a parent need not add up: empty files and directories may not appear. A `!` after the size marks a line whose sums leave out a directory that could not be
 read ([Entries that could not be read](#entries-that-could-not-be-read)).
@@ -65,8 +67,8 @@ gets no line of its own: a long tail of small prefixes stays in its `(N more)` l
 the terminal is full. On a narrow terminal the bar shrinks, then the share and the date go; a long path is cut in
 the middle, keeping its end, and a line never wraps. Every figure is exact, whatever the size of the source.
 
-The line under the view gives the total once, exactly, with the on-disk figure where the source has one
-(`100 MiB in 6 files · 36.4 MiB on disk`); `-q` leaves it out. Color follows `--color` and `NO_COLOR`.
+The line under the view gives the total once, exactly, with the other figure where the source has one
+(`36.5 MiB on disk in 6 files · 100 MiB of data`); `-q` leaves it out. Color follows `--color` and `NO_COLOR`.
 
 The view is for reading. In a pipe, bare `swath du` prints the total row only, as TSV, and `-d N` (`-d 0`
 included), `--sort` or `--format` prints the table or the rows of [Totals per prefix](#totals-per-prefix)
@@ -79,12 +81,12 @@ children. On the `media` directory of [Your first inventory](first-inventory.md)
 
 ```text
 $ swath du -d 1 media
-    size  files  dirs  newest (CET)         path
-64.8 MiB      2     0  2026-11-02 10:30:00  archive/
-6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+ on disk  files  dirs  newest (CET)         path
+ 788 KiB      2     0  2026-11-02 10:30:00  archive/
+6.12 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
- 100 MiB      6     5  2026-11-02 10:30:00  media (total)
-  100 MiB in 6 files · 36.4 MiB on disk
+36.5 MiB      6     5  2026-11-02 10:30:00  media (total)
+  36.5 MiB on disk in 6 files · 100 MiB of data
 ```
 
 `-d` limits the rows, not the listing: every row and the total include everything below them. Add up rows of
@@ -116,7 +118,9 @@ $ swath du -d 1 s3://noaa-gestofs-pds/stofs_2d_glo.20230113/ --anonymous --s3-re
 The rows' fields, their types and when they are null are in [Output](output.md#du-rows).
 
 The [filters](filters.md) apply before counting, to every row: in a directory to its subdirectories too, so
-`--min-size 1M` keeps the large files and drops the directories, whose own size is small.
+`--min-size 1M` keeps the large files and drops the directories, whose own size is small. With a size or time
+filter the space on disk leaves out directories' own blocks: a directory passes such a filter by its own size and
+time, so `--max-size 4K` totals the small files, not every small directory.
 
 The totals take memory for each distinct prefix, never for each object: about 150 bytes a prefix. A run that
 would hold more than `--max-prefixes` (1,000,000 by default) fails rather than print partial totals; raise it
@@ -127,27 +131,39 @@ for a deep `-d` over a wide tree. The view does not fail there: it keeps fewer l
 
 ### Apparent and allocated bytes
 
-Every row has two byte figures. `size` is the apparent size: the length of each file as `ls -l` shows it, or an
-object's length as the listing reports it. `allocated_bytes` is the space the filesystem reports for each file,
-its blocks × 512 (`st_blocks`), shown as `on disk`. The table and the view show one of them, the size by
-default; for a directory the line under them gives the total of both, so a sparse file or a tree of small files
-shows at a glance. `--allocated` shows the allocated bytes instead, and `--sort size` then orders by them:
+Every row has two byte figures. `allocated_bytes` is the space the filesystem reports for each entry, its blocks
+× 512 (`st_blocks`), shown as `on disk`. `size` is the apparent size: the length of each file as `ls -l` shows
+it, or an object's length as the listing reports it. The table and the view show one of them, and `--sort size`
+orders by it; for a directory the line under them gives the total of both, so a sparse file or a tree of small
+files shows at a glance.
+
+A local tree shows the space on disk, as `du`, ncdu and dust do, where its listing reads blocks; `-A`
+(`--apparent-size`) shows the lengths instead, as `du -A` does:
 
 ```text
-$ swath du -d 1 media --allocated
- on disk  files  dirs  newest (CET)         path
- 784 KiB      2     0  2026-11-02 10:30:00  archive/
-6.11 MiB      3     2  2026-11-02 10:30:00  photos/
+$ swath du -d 1 media -A
+    size  files  dirs  newest (CET)         path
+64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+6.10 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
-36.4 MiB      6     5  2026-11-02 10:30:00  media (total)
-  36.4 MiB on disk in 6 files · 100 MiB of data
+ 100 MiB      6     5  2026-11-02 10:30:00  media (total)
+  100 MiB in 6 files · 36.5 MiB on disk
 ```
 
-Here `archive/` holds a sparse 64 MiB disk image that takes no blocks. The allocated bytes are what the
-filesystem says, close to what `du` prints, but not the space a deletion would free:
+Here `archive/` holds a sparse 64 MiB disk image that takes no blocks: 64.8 MiB long, 788 KiB on disk. Where the
+listing reads no blocks, the lengths lead: on Windows, at `--metadata names` (which reads no lengths either),
+and for an object store, which has no allocation. `--metadata statx` reads blocks, but a filesystem may answer
+it without them for some entries (some network filesystems): those count as missing, and the figure is a lower
+bound (`>= `). `--allocated` requires the space on disk: an entry without it fails the count, and
+`--metadata names` refuses it. The run report's `totals.primary` says which figure led,
+and `primary_reason` why ([Run report](reference/run-report.md)).
 
-- A directory's own size and blocks are in no total, the source directory's included, so a tree's figure is
-  below `du -sB1`'s by them. Directories are counted in `dirs`, never as files.
+The space on disk is what the filesystem says, what `du` prints, but not the space a deletion would free:
+
+- A directory's own blocks count in its row and its parents', as `du` counts them, and its size in none.
+  The source directory's own blocks are in no total, so a tree's figure is below `du -sB1`'s by that one
+  directory; with `--one-file-system` a mount point's own blocks count, where `du -x` leaves the mount point
+  out. Directories are counted in `dirs`, never as files.
 - A symbolic link counts as a file of its own length; swath does not follow it.
 - Sparse files, compression, data stored inline in the metadata and cloud placeholder files can report less
   allocation than their length, down to zero; block rounding and preallocation can report more.
@@ -156,8 +172,7 @@ filesystem says, close to what `du` prints, but not the space a deletion would f
 - Network filesystems may report a synthetic allocation.
 - An unknown figure is not zero. Windows and `--metadata names` read no blocks: the figure is null (`-` in the
   table, `on disk unknown` under it), and `--metadata names` reads no lengths either. A figure that only some
-  files had is a lower bound, shown as `>= 12.0 KiB`. `--allocated` needs each entry's stat, so it is refused
-  with `--metadata names`, and a file whose filesystem reports no blocks fails the count.
+  files had is a lower bound, shown as `>= 12.0 KiB`.
 
 An object store has no allocated bytes: its rows carry them as null, and its table has no line under it. Its
 `size` is not the stored or billed size either: storage classes, minimum storage durations, versions and
@@ -172,12 +187,12 @@ the walk reached first. In `media`, `notes.tar` and `notes-latest.tar` are one f
 
 ```text
 $ swath du -d 1 media -l
-    size  files  dirs  newest (CET)         path
-65.5 MiB      3     0  2026-11-02 10:30:00  archive/
-6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+ on disk  files  dirs  newest (CET)         path
+1.54 MiB      3     0  2026-11-02 10:30:00  archive/
+6.12 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
- 101 MiB      7     5  2026-11-02 10:30:00  media (total)
-  101 MiB in 7 files · 37.2 MiB on disk
+37.2 MiB      7     5  2026-11-02 10:30:00  media (total)
+  37.2 MiB on disk in 7 files · 101 MiB of data
 ```
 
 `--metadata names`, and Windows, read no link counts, so every name counts there. Each row's `links_once` says
@@ -205,28 +220,28 @@ counts it among 6 directories, and its files are missing:
 
 ```text
 $ swath du -d 1 media
-    size  files  dirs  newest (CET)         path
-64.8 MiB      2     0  2026-11-02 10:30:00  archive/
-6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+ on disk  files  dirs  newest (CET)         path
+ 788 KiB      2     0  2026-11-02 10:30:00  archive/
+6.12 MiB      3     2  2026-11-02 10:30:00  photos/
        -      -     -  -                    private/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
- 100 MiB      6     6  2026-11-02 10:30:00  media (total)
-  100 MiB in 6 files · 36.4 MiB on disk
+36.5 MiB      6     6  2026-11-02 10:30:00  media (total)
+  36.5 MiB on disk in 6 files · 100 MiB of data
 swath: warning: unreadable entries:
   private: permission denied
-  partial: 1 unreadable entry; 6 files, 6 directories, 100 MiB in 0.0s
+  partial: 1 unreadable entry; 6 files, 6 directories, 36.5 MiB on disk in 0.0s
 ```
 
 The view marks with `!` after the size every line whose sums leave out such a directory, at or below it, and
 says so in one line under it instead of naming them; `-v` names them:
 
 ```text
- 100 MiB !      6   100%  ████████████████████  2026-11-02 CET  media
+36.5 MiB !      6   100%  ████████████████████  2026-11-02 CET  media
 ...
-     0 B !      0   0.0%                                          (1 more)
-  100 MiB in 6 files · 36.4 MiB on disk
+4.00 KiB !      0   0.0%                                          (1 more)
+  36.5 MiB on disk in 6 files · 100 MiB of data
 ! 1 directory could not be read (marked ! above); -v lists them
-  partial: 1 unreadable entry; 6 files, 6 directories, 100 MiB in 0.0s
+  partial: 1 unreadable entry; 6 files, 6 directories, 36.5 MiB on disk in 0.0s
 ```
 
 Under `-q` the last line says it instead: `swath: 1 entry could not be read and is missing from the output`.
@@ -251,17 +266,20 @@ query it in place with DuckDB ([Query an inventory](query.md)).
 ```text
 $ swath du --from-dataset media-inventory -d 1 --sort size
 swath: totals of the dataset media-inventory, not a live listing: /home/me/media as listed 2026-11-17 12:59:25 CET (3 hours ago); complete
-    size  files  dirs  newest (CET)         path
-64.8 MiB      2     0  2026-11-02 10:30:00  archive/
+ on disk  files  dirs  newest (CET)         path
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
-6.10 MiB      3     2  2026-11-02 10:30:00  photos/
- 100 MiB      6     5  2026-11-02 10:30:00  media-inventory (total)
-  100 MiB in 6 files · 36.4 MiB on disk
+6.12 MiB      3     2  2026-11-02 10:30:00  photos/
+ 788 KiB      2     0  2026-11-02 10:30:00  archive/
+36.5 MiB      6     5  2026-11-02 10:30:00  media-inventory (total)
+  36.5 MiB on disk in 6 files · 100 MiB of data
 ```
 
 The rows, the view and every format are the ones `swath du` of the dataset's source printed when it was
 listed, with the same depth, order and filters; hard links count once where the dataset records them, and `-l`
-counts every name. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
+counts every name. The space on disk leads where the dataset holds it; a dataset listed where blocks are not
+read (Windows, `--metadata names`) leads with the lengths, as its live run did. Totals from a dataset listed on
+Windows with no row left after the filters say `allocated_bytes` where the live run says `size`: nothing is
+left to tell them apart, and every figure is 0. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
 giving both commands for its SOURCE. `swath du DIR` without `--from-dataset` totals the files in DIR, and when
 DIR holds a dataset a `hint:` line gives the `--from-dataset` command.
 
@@ -270,7 +288,7 @@ listing was complete (`complete`, or `partial:` and what is missing), then its f
 silences it, and in JSONL each row carries the same facts in a `dataset` member ([Output](output.md#du-rows)).
 A partial dataset prints its totals and exits 3, its last line saying why. A dataset that missed entries it
 could not read counts them but does not record which directories they were, so it cannot mark them: such a
-directory's row shows 0 where the live `swath du` shows `-` or null. A dataset listed with `--metadata names`
+directory's row shows 0 files and bytes (on disk, its own blocks) where the live `swath du` shows `-` or null. A dataset listed with `--metadata names`
 holds no lengths, blocks or links, so its rows are those of a live `--metadata names` run.
 
 A SOURCE after the directory restricts the totals to part of the dataset: the dataset's source as it was

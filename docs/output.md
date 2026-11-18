@@ -160,10 +160,10 @@ add its subdirectories). What the totals mean, and the table and the view that a
 ```text
 $ swath du -d 1 media --format tsv
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
-total	0	6	5	105308864	0	38211584	0	2026-11-02T09:30:00.000000Z	size	name	true	
-prefix	1	2	0	67908864	0	802816	0	2026-11-02T09:30:00.000000Z	size	name	true	archive/
-prefix	1	3	2	6400000	0	6406144	0	2026-11-02T09:30:00.000000Z	size	name	true	photos/
-prefix	1	1	0	31000000	0	31002624	0	2026-11-02T09:30:00.000000Z	size	name	true	videos/
+total	0	6	5	105308864	0	38232064	0	2026-11-02T09:30:00.000000Z	allocated_bytes	name	true	
+prefix	1	2	0	67908864	0	806912	0	2026-11-02T09:30:00.000000Z	allocated_bytes	name	true	archive/
+prefix	1	3	2	6400000	0	6418432	0	2026-11-02T09:30:00.000000Z	allocated_bytes	name	true	photos/
+prefix	1	1	0	31000000	0	31006720	0	2026-11-02T09:30:00.000000Z	allocated_bytes	name	true	videos/
 ```
 
 | Field | Type | Meaning |
@@ -174,28 +174,29 @@ prefix	1	1	0	31000000	0	31002624	0	2026-11-02T09:30:00.000000Z	size	name	true	vi
 | `dirs` | integer | the directories below the prefix (local trees only) |
 | `size` | integer | the sum of the objects' lengths, as the dataset's `size` column holds them |
 | `size_missing` | integer | the objects counted that had no length (a local walk with `--metadata names`) |
-| `allocated_bytes` | integer | the sum of the files' allocated bytes (`st_blocks` × 512), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
-| `allocated_bytes_missing` | integer | the objects counted that had no allocated bytes (every object of a bucket) |
+| `allocated_bytes` | integer | the sum of the entries' allocated bytes (`st_blocks` × 512: the files' and the directories' own, as `du` counts them), as the dataset's `allocated_bytes` column; null for a source that has none, such as a bucket |
+| `allocated_bytes_missing` | integer | the entries counted that had no allocated bytes: files, and directories whose own blocks count (every object of a bucket) |
 | `max_last_modified` | string (UTC time) | the newest `last_modified` among the objects counted under the prefix, in UTC; directories, S3 delete markers and the names of a hard-linked file that is counted under another do not count; null when no object had one |
-| `primary` | string | the figure `--sort size` orders by and the table puts first: `size`, or `allocated_bytes` with `--allocated` |
+| `primary` | string | the figure `--sort size` orders by and the table puts first: `allocated_bytes` for a local tree whose listing reads blocks, and with `--allocated`; `size` for an object store, where blocks are not read (Windows, `--metadata names`), and with `--apparent-size` (`-A`) |
 | `sort` | string | the order of the rows, `name` or `size` (`--sort`) |
 | `links_once` | boolean | `true` when a file with several hard links is counted once, under the first of its names: a local tree listed with stat, without `-l`; `false` for a bucket, with `--metadata names` and on Windows, which read no links. It says how the listing counts, whatever the rows hold, and a saved dataset gives the same as the live run: its manifest records the metadata tier |
 | `prefix` | string | the prefix, up to and including its `/`; the total's is the key prefix SOURCE names (`logs/2026/0` for `s3://bucket/logs/2026/0`), empty for a whole bucket or tree |
 
-Every row has both byte figures, whichever `--allocated` puts first. A figure that no object under the prefix
+Every row has both byte figures, whichever `primary` puts first. A figure that no object under the prefix
 had is null, `\N` in TSV: it is unknown, not zero. A figure that only some objects had is the sum of the ones
-there were, and its `*_missing` count says how many it leaves out. With `--metadata names` a local walk reads
-names only, so both figures are null beside their counts:
+there were, and its `*_missing` count says how many it leaves out: for `allocated_bytes` the entries, since a
+directory's own blocks count too. With `--metadata names` a local walk reads names only, so both figures are
+null beside their counts (7 names of files; 12 entries, the 5 directories too, without blocks):
 
 ```text
 $ swath du media --metadata names --format jsonl
-{"row_type":"total","depth":0,"prefix":"","objects":7,"dirs":5,"size":null,"size_missing":7,"allocated_bytes":null,"allocated_bytes_missing":7,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
+{"row_type":"total","depth":0,"prefix":"","objects":7,"dirs":5,"size":null,"size_missing":7,"allocated_bytes":null,"allocated_bytes_missing":12,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
 ```
 
 An empty prefix has 0 of each figure its source has: an empty bucket's `size` is 0 and its `allocated_bytes`
-null. A local directory that could not be read (the run exits 3) has null `objects`, `dirs`, `size` and
+null, and an empty directory's `allocated_bytes` is its own blocks (unknown where they are not read). A local directory that could not be read (the run exits 3) has null `objects`, `dirs`, `size` and
 `allocated_bytes`, where an empty directory has 0; totals read from a saved dataset cannot tell that directory
-apart and give it 0 ([Total a source](totals.md#entries-that-could-not-be-read)). `max_last_modified` is null in
+apart and give it 0 files and bytes, and its own blocks on disk ([Total a source](totals.md#entries-that-could-not-be-read)). `max_last_modified` is null in
 all three cases, since no object under them had a time.
 The byte figures are JSON numbers and can exceed 2^53; parse them as 64-bit integers, not as floating point
 (JavaScript's `JSON.parse` rounds them).

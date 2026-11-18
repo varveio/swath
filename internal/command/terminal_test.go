@@ -264,6 +264,14 @@ func TestStatsBlock(t *testing.T) {
 	du := inventory.Report{Timings: inventory.Timings{SessionMs: 100}, Outcome: inventory.Outcome{Complete: true},
 		Output: inventory.Output{RowsFetched: 16, RowsEmitted: 16, Totals: &totals.Stats{Objects: 7, Dirs: 9, Size: &size}}}
 	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 7 files, 9 directories, 410 KiB in 0.1s")
+	// Its bytes are its primary figure's: the space on disk, a local tree's
+	// default, says so; one unknown there leaves the bytes out, the lengths
+	// never given instead.
+	onDisk := int64(1 << 20)
+	du.Output.Totals.Primary, du.Output.Totals.AllocatedBytes = totals.AllocatedBytes, &onDisk
+	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 7 files, 9 directories, 1.00 MiB on disk in 0.1s")
+	du.Output.Totals.AllocatedBytesMissing = 1
+	check(statsLines(&du, false, rowNouns(true, false), false), "complete: 7 files, 9 directories in 0.1s")
 	// Its filters count rows: two names of one hard-linked file kept, one
 	// file filtered out, where the total counts the file once.
 	du.Output = inventory.Output{RowsFetched: 3, RowsEmitted: 2, RowsFiltered: 1, Totals: &totals.Stats{Objects: 1, Size: &size}}

@@ -16,10 +16,12 @@ import (
 
 // bruteWith is the oracle: every prefix of every key, summed one row at a
 // time, under opt's depth and origin, where an object counts (as an
-// object, with its figures and its time) only if counts says so. A directory counts in its parents' Dirs, a key outside the origin
-// in the total alone. alloc: the source has allocated bytes.
+// object, with its figures and its time) only if counts says so. A directory counts in its parents' Dirs, and its own allocated
+// bytes in its own prefix and its parents', as du -s; a key outside the
+// origin in the total alone. alloc: the source has allocated bytes.
 func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Prefix {
 	m := map[string]*Prefix{}
+	allocKnown := map[string]int64{} // the entries with allocated bytes, by prefix
 	for _, r := range rows {
 		key := r.Key
 		if !strings.HasPrefix(key, opt.Origin) {
@@ -43,6 +45,12 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 				p = &Prefix{Prefix: key[:end], Depth: k}
 				m[key[:end]] = p
 			}
+			if r.Dir && r.HasAllocated {
+				p.Allocated += r.Allocated
+				allocKnown[p.Prefix]++
+			} else if r.Dir {
+				p.AllocatedMissing++
+			}
 			if r.Dir && key[:end] == r.Key {
 				break
 			}
@@ -61,6 +69,7 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 				}
 				if r.HasAllocated {
 					p.Allocated += r.Allocated
+					allocKnown[p.Prefix]++
 				} else {
 					p.AllocatedMissing++
 				}
@@ -76,7 +85,7 @@ func bruteWith(rows []Row, opt Options, alloc bool, counts func(Row) bool) []Pre
 	var out []Prefix
 	for _, p := range m {
 		p.HasSize = p.Objects == 0 || p.SizeMissing < p.Objects
-		p.HasAllocated = alloc && (p.Objects == 0 || p.AllocatedMissing < p.Objects)
+		p.HasAllocated = alloc && (p.AllocatedMissing == 0 || allocKnown[p.Prefix] > 0)
 		out = append(out, *p)
 	}
 	slices.SortFunc(out, func(a, b Prefix) int { return strings.Compare(a.Prefix, b.Prefix) })
@@ -106,8 +115,11 @@ func randomRows(rng *rand.Rand, n int) []Row {
 		seen[k] = true
 		r := Row{Key: k, Object: rng.IntN(6) != 0, Size: rng.Int64N(1 << 40), HasSize: rng.IntN(10) != 0,
 			Allocated: rng.Int64N(1 << 40), HasAllocated: rng.IntN(4) != 0}
-		if !r.Object {
-			r.Dir, r.Size, r.HasSize, r.Allocated, r.HasAllocated = rng.IntN(2) == 0, 0, false, 0, false
+		if !r.Object { // a directory keeps its own blocks
+			r.Dir, r.Size, r.HasSize = rng.IntN(2) == 0, 0, false
+			if !r.Dir {
+				r.Allocated, r.HasAllocated = 0, false
+			}
 		}
 		if rng.IntN(8) != 0 {
 			r.Mtime, r.HasMtime = rng.Int64N(1<<50)-1<<49, true // negative times too
@@ -180,6 +192,146 @@ func TestTallyMatchesBruteForce(t *testing.T) {
 	}
 }
 
+// TestDirBlocks: a directory's own allocated bytes count in its own
+// prefix and its parents', as du -s counts a directory's blocks, in the
+// tally and in the view that leads with them, ordered or not; its size,
+// and an empty directory's own prefix's Dirs, count nowhere.
+func TestDirBlocks(t *testing.T) {
+	rows := []Row{
+		{Key: "a/", Dir: true, Size: 96, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/", Dir: true, Size: 64, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/f", Object: true, Size: 5, HasSize: true, Allocated: 8192, HasAllocated: true},
+		{Key: "e/", Dir: true, Allocated: 1024, HasAllocated: true},
+		{Key: "s/", Dir: true, Allocated: 4096, HasAllocated: true}, // one child: its line is shared
+		{Key: "s/g", Object: true, Size: 100, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "x", Object: true, Size: 1, HasSize: true, Allocated: 0, HasAllocated: true},
+	}
+	want := map[string][4]int64{ // objects, dirs, size, allocated
+		"": {3, 4, 106, 25600}, "a/": {1, 1, 5, 16384}, "a/b/": {0, 0, 0, 4096}, "e/": {0, 0, 0, 1024}, "s/": {1, 0, 100, 8192},
+	}
+	for _, ordered := range []bool{true, false} {
+		tl := New(Options{Depth: 2, Primary: AllocatedBytes, View: true})
+		tl.SetAllocated()
+		r, b := tl.ViewRun(ordered), tl.Batch()
+		for i := range rows {
+			b.Add(&rows[i])
+			r.Add(&rows[i])
+		}
+		r.Flush()
+		if err := b.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		r.End()
+		got := tl.Result()
+		if len(got) != len(want) {
+			t.Fatalf("ordered %v: %+v", ordered, got)
+		}
+		for _, p := range got {
+			if w := want[p.Prefix]; [4]int64{p.Objects, p.Dirs, p.Size, p.Allocated} != w || !p.HasAllocated {
+				t.Errorf("ordered %v: %q %+v, want %v", ordered, p.Prefix, p, w)
+			}
+		}
+		v := tl.View()
+		if v.Total.Bytes != 25600 || v.Total.Objects != 3 {
+			t.Errorf("ordered %v: view total %+v", ordered, v.Total)
+		}
+		for _, n := range v.Nodes {
+			if w, ok := want[n.Key]; ok && n.Bytes != w[3] {
+				t.Errorf("ordered %v: view node %q %d bytes, want %d", ordered, n.Key, n.Bytes, w[3])
+			}
+		}
+		// The drawn lines: s/ shares its line with s/g, and the line gives
+		// s/'s bytes, its own block too; the total's lines add up to it.
+		var top, shared int64
+		for _, r := range v.Select(20) {
+			if r.Level == 1 {
+				top += r.Bytes
+			}
+			if r.Name == "s/g" {
+				shared = r.Bytes
+			}
+		}
+		if shared != 8192 || top != 25600 {
+			t.Errorf("ordered %v: shared line %d bytes, the total's lines %d: %+v", ordered, shared, top, v.Select(20))
+		}
+	}
+}
+
+// TestNoDirBlocks: with NoDirBlocks (a size or time filter) directories'
+// own blocks count nowhere, neither as bytes nor as missing, in the tally
+// and the view; they still count in Dirs.
+func TestNoDirBlocks(t *testing.T) {
+	rows := []Row{
+		{Key: "a/", Dir: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/", Dir: true}, // without blocks: not missing either
+		{Key: "a/f", Object: true, Size: 5, HasSize: true, Allocated: 8192, HasAllocated: true},
+	}
+	tl := New(Options{Depth: 2, Primary: AllocatedBytes, View: true, NoDirBlocks: true})
+	tl.SetAllocated()
+	r, b := tl.ViewRun(true), tl.Batch()
+	for i := range rows {
+		b.Add(&rows[i])
+		r.Add(&rows[i])
+	}
+	r.Flush()
+	if err := b.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	r.End()
+	for _, p := range tl.Result() {
+		want := map[string]int64{"": 8192, "a/": 8192, "a/b/": 0}[p.Prefix]
+		if p.Allocated != want || p.AllocatedMissing != 0 || !p.HasAllocated {
+			t.Errorf("%q: %+v, want %d allocated", p.Prefix, p, want)
+		}
+	}
+	if st := tl.Stats(); st.Dirs != 2 {
+		t.Errorf("dirs %d", st.Dirs)
+	}
+	if v := tl.View(); v.Total.Bytes != 8192 || v.Total.Missing != 0 {
+		t.Errorf("view total %+v", v.Total)
+	}
+}
+
+// TestDirBlocksSharedFold: under a shared line the fold holds the rest of
+// the line's bytes, the joined prefixes' own blocks too: a/ shares its line
+// with a/b/, whose f has a line and whose empty file folds, so the line's
+// children add up to its bytes.
+func TestDirBlocksSharedFold(t *testing.T) {
+	rows := []Row{
+		{Key: "a/", Dir: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/", Dir: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/f", Object: true, Size: 1, HasSize: true, Allocated: 4096, HasAllocated: true},
+		{Key: "a/b/zero", Object: true, Size: 0, HasSize: true, Allocated: 0, HasAllocated: true},
+	}
+	for _, ordered := range []bool{true, false} {
+		tl := New(Options{Primary: AllocatedBytes, View: true})
+		tl.SetAllocated()
+		r, b := tl.ViewRun(ordered), tl.Batch()
+		for i := range rows {
+			b.Add(&rows[i])
+			r.Add(&rows[i])
+		}
+		r.Flush()
+		if err := b.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		r.End()
+		lines := tl.View().Select(20)
+		var shared, under int64
+		for _, l := range lines {
+			switch {
+			case l.Name == "a/b/":
+				shared = l.Bytes
+			case l.Level == 2:
+				under += l.Bytes
+			}
+		}
+		if shared != 12288 || under != shared {
+			t.Errorf("ordered %v: shared line %d bytes, its lines %d: %+v", ordered, shared, under, lines)
+		}
+	}
+}
+
 // TestShortKeysAndDepth: a key counts in the prefixes it has; a key's own
 // trailing '/' is its deepest prefix; nothing below the depth is held.
 func TestShortKeysAndDepth(t *testing.T) {
@@ -188,7 +340,7 @@ func TestShortKeysAndDepth(t *testing.T) {
 	for _, r := range []Row{
 		{Key: "top", Object: true, Size: 1, HasSize: true},
 		{Key: "a/", Object: false}, // a delete marker
-		{Key: "a/b/", Dir: true},   // a directory: in a/'s Dirs, not its own
+		{Key: "a/b/", Dir: true},   // a directory: in a/'s Dirs, not its own; without blocks, missing in both
 		{Key: "a/x", Object: true, Size: 2, HasSize: true, Mtime: 5, HasMtime: true},
 		{Key: "a/b/c/d/e", Object: true, Size: 4, HasSize: true, Mtime: 9, HasMtime: true},
 		{Key: "a/b/y", Object: true}, // no bytes, no time
@@ -199,9 +351,9 @@ func TestShortKeysAndDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Prefix{
-		{Prefix: "", Objects: 4, Dirs: 1, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 4, Newest: 9, HasNewest: true},
-		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Size: 6, SizeMissing: 1, HasSize: true, AllocatedMissing: 3, Newest: 9, HasNewest: true},
-		{Prefix: "a/b/", Depth: 2, Objects: 2, Size: 4, SizeMissing: 1, HasSize: true, AllocatedMissing: 2, Newest: 9, HasNewest: true},
+		{Prefix: "", Objects: 4, Dirs: 1, Size: 7, SizeMissing: 1, HasSize: true, AllocatedMissing: 5, Newest: 9, HasNewest: true},
+		{Prefix: "a/", Depth: 1, Objects: 3, Dirs: 1, Size: 6, SizeMissing: 1, HasSize: true, AllocatedMissing: 4, Newest: 9, HasNewest: true},
+		{Prefix: "a/b/", Depth: 2, Objects: 2, Size: 4, SizeMissing: 1, HasSize: true, AllocatedMissing: 3, Newest: 9, HasNewest: true},
 		{Prefix: "a/b/c/", Depth: 3, Objects: 1, Size: 4, HasSize: true, AllocatedMissing: 1, Newest: 9, HasNewest: true},
 	}
 	if got := tl.Result(); !reflect.DeepEqual(got, want) {

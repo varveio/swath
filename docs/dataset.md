@@ -247,7 +247,7 @@ records `no_dirs` in `coverage.filters`):
 | Column | Type | Source |
 |---|---|---|
 | `key` | binary, required | the path relative to the root, `/`-separated, no leading `/`; a directory's ends in `/`; the name's exact bytes |
-| `size` | int64 | `st_size` (apparent bytes); a directory's row carries its own, so a byte total excludes `kind = 'dir'` (or is `swath du`'s): a plain `sum(size)` exceeds `swath du`'s total |
+| `size` | int64 | `st_size` (apparent bytes); a directory's row carries its own, so a byte total excludes `kind = 'dir'` (or is `swath du`'s): a plain `sum(size)` exceeds `swath du -A`'s total |
 | `last_modified` | timestamp | `st_mtime` |
 | `kind` | STRING, required | `file`, `dir`, `symlink`, `fifo`, `socket`, `char_device`, `block_device`, `unknown` |
 | `mode` | uint32 | `st_mode & 0o7777` (permissions, setuid, setgid, sticky) |
@@ -263,7 +263,8 @@ Under `--metadata names` (no stat) the stat columns are null.
 
 **Totals from a local dataset.** A directory's `size` and `last_modified` are its own, never its subtree's, and
 the root has no row. Summing `size` over every row gives entry bytes, directories' own `st_size` included: not
-the files' content bytes, and not disk usage (`allocated_bytes`). For files only, leave out `kind = 'dir'`. That
+the files' content bytes, and not disk usage (`allocated_bytes`). For files only, leave out `kind = 'dir'`.
+Summing `allocated_bytes` over every row, directories included, gives `swath du`'s on-disk total. Either
 SQL sum counts a hard-linked file once per name; `swath du --from-dataset DIR` counts it once, and
 `swath du --from-dataset DIR --count-links` gives the same sum as the SQL. Under `--metadata names` the sizes are
 null, so a sum is no total.

@@ -12,18 +12,18 @@ swath du media
 ```
 
 ```text
-    size  files  share                        newest          path
- 100 MiB      6   100%  ████████████████████  2026-11-02 CET  media
-64.8 MiB      2  64.5%  ████████████▉         2026-11-02        archive/
-64.0 MiB      1  63.7%  ████████████▋         2026-11-02          disk.img
- 781 KiB      1   0.8%  ▏                     2026-11-02          (2 more)
-29.6 MiB      1  29.4%  █████▉                2026-11-02        videos/trip.mp4
-6.10 MiB      3   6.1%  █▏                    2026-11-02        photos/
-4.77 MiB      2   4.7%  ▉                     2026-11-02          2025/
-2.86 MiB      1   2.8%  ▌                     2026-11-02            beach.jpg
-1.91 MiB      1   1.9%  ▍                     2026-11-02            dunes.jpg
-1.34 MiB      1   1.3%  ▎                     2026-11-02          2026/snow.jpg
-  100 MiB in 6 files · 36.4 MiB on disk
+ on disk  files  share                        newest          path
+36.5 MiB      6   100%  ████████████████████  2026-11-02 CET  media
+29.6 MiB      1  81.1%  ████████████████▏     2026-11-02        videos/trip.mp4
+6.12 MiB      3  16.8%  ███▎                  2026-11-02        photos/
+4.78 MiB      2  13.1%  ██▌                   2026-11-02          2025/
+2.86 MiB      1   7.9%  █▌                    2026-11-02            beach.jpg
+1.91 MiB      1   5.2%  █                     2026-11-02            dunes.jpg
+1.34 MiB      1   3.7%  ▋                     2026-11-02          2026/snow.jpg
+ 788 KiB      2   2.1%  ▍                     2026-11-02        archive/
+ 784 KiB      1   2.1%  ▍                     2026-11-02          notes-latest.tar
+4.00 KiB      1   0.0%                        2026-11-02          (2 more)
+  36.5 MiB on disk in 6 files · 100 MiB of data
 ```
 
 On a terminal, bare `swath du` shows where the bytes are: the largest directories and files at any depth,
@@ -40,20 +40,21 @@ swath du -d 1 media
 ```
 
 ```text
-    size  files  dirs  newest (CET)         path
-64.8 MiB      2     0  2026-11-02 10:30:00  archive/
-6.10 MiB      3     2  2026-11-02 10:30:00  photos/
+ on disk  files  dirs  newest (CET)         path
+ 788 KiB      2     0  2026-11-02 10:30:00  archive/
+6.12 MiB      3     2  2026-11-02 10:30:00  photos/
 29.6 MiB      1     0  2026-11-02 10:30:00  videos/
- 100 MiB      6     5  2026-11-02 10:30:00  media (total)
-  100 MiB in 6 files · 36.4 MiB on disk
+36.5 MiB      6     5  2026-11-02 10:30:00  media (total)
+  36.5 MiB on disk in 6 files · 100 MiB of data
 ```
 
 Each row totals everything below it, as `du` does: its files, its directories and their bytes. `-d 1` limits
 the breakdown to one level. It does not limit the walk: swath still reads the whole tree, and every row and
 the total include everything below them. `--sort size` puts the largest first.
 
-The sizes are the files' lengths, and the last line adds the space on disk: here `archive/` holds a sparse disk
-image and one hard-linked file with two names, counted once ([How sizes are
+The figures are the space on disk, as `du` counts it, and the last line adds the files' lengths: here
+`archive/` holds a 64 MiB sparse disk image that takes no blocks, and one hard-linked file with two names,
+counted once. `-A` (`--apparent-size`) puts the lengths first ([How sizes are
 counted](totals.md#how-sizes-are-counted)). In a pipe the same totals are TSV ([Output](output.md#du-rows)).
 
 ## 2. List every entry

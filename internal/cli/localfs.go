@@ -72,9 +72,12 @@ func localFlags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
 	return o
 }
 
-// checkLocalTotals refuses totals the names tier cannot give
-// (registry.Factory.CheckTotals): the allocated bytes are read from each
-// entry's stat. The hard links are too, so the names tier, and a platform
+// checkLocalTotals chooses and refuses the totals a local tree can give
+// (registry.Factory.CheckTotals). The allocated bytes are read from each
+// entry's stat: they lead by default, as du's, where the listing reads
+// them (localfs.BlocksRead), and the size leads where it does not (the
+// names tier, Windows); --allocated is refused at the names tier. The hard
+// links are read from the stat too, so the names tier, and a platform
 // whose stat has no link count (localfs.LinksRead: Windows), count every
 // name.
 func checkLocalTotals(options any, t *totals.Options) error {
@@ -84,6 +87,18 @@ func checkLocalTotals(options any, t *totals.Options) error {
 	}
 	if o.Fields == localfs.Names && t.Primary == totals.AllocatedBytes {
 		return errors.New("--allocated reads each entry's stat: not with --metadata names")
+	}
+	if t.Primary == "" {
+		switch {
+		case localfs.BlocksRead(o.Fields):
+			// statx may leave blocks out of an entry (some network
+			// filesystems): counted missing, not a failed count.
+			t.Primary, t.Reason, t.Lenient = totals.AllocatedBytes, totals.ReasonDefault, o.Fields == localfs.Statx
+		case o.Fields == localfs.Names:
+			t.Primary, t.Reason = totals.Size, totals.ReasonNamesTier
+		default:
+			t.Primary, t.Reason = totals.Size, totals.ReasonPlatform
+		}
 	}
 	if !localfs.LinksRead(o.Fields) {
 		t.LinksOnce = false

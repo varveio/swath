@@ -74,7 +74,7 @@ func TestDuView(t *testing.T) {
 	t.Setenv("TERM", "xterm") // not dumb, which turns color off
 	stderr := captureStderr(t)
 	var out bytes.Buffer
-	if err := runDu(context.Background(), []string{root, "--no-stats"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "--no-stats", "-A"}, &out); err != nil { // the lengths, which the test sets
 		t.Fatal(err)
 	}
 	// The dates are local, the zone named once.
@@ -106,7 +106,7 @@ func TestDuView(t *testing.T) {
 	}{{40, false, false, false}, {60, false, true, true}, {80, true, true, true}, {100, true, true, true}, {120, true, true, true}} {
 		viewTerminal(t, tc.width, 24)
 		out.Reset()
-		if err := runDu(context.Background(), []string{root, "--no-stats", "-q"}, &out); err != nil {
+		if err := runDu(context.Background(), []string{root, "--no-stats", "-q", "-A"}, &out); err != nil {
 			t.Fatal(err)
 		}
 		lines := strings.Split(strings.TrimSuffix(strings.Replace(out.String(), root, "ROOT", 1), "\n"), "\n")
@@ -132,7 +132,7 @@ func TestDuView(t *testing.T) {
 	}{{"1", []string{"--color", "always"}, true}, {"", nil, true}, {"", []string{"--color", "never"}, false}} {
 		t.Setenv("NO_COLOR", tc.noColor)
 		out.Reset()
-		if err := runDu(context.Background(), append([]string{root, "--no-stats", "-q"}, tc.args...), &out); err != nil {
+		if err := runDu(context.Background(), append([]string{root, "--no-stats", "-q", "-A"}, tc.args...), &out); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.Contains(out.String(), "\x1b["); got != tc.color {
@@ -143,7 +143,7 @@ func TestDuView(t *testing.T) {
 	// A short terminal: fewer lines, still adding up.
 	viewTerminal(t, 80, 10)
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "--no-stats", "-q", "--color", "never"}, &out); err != nil {
+	if err := runDu(context.Background(), []string{root, "--no-stats", "-q", "-A", "--color", "never"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if n := strings.Count(out.String(), "\n"); n > 9 { // 10 rows less the prompt (-q)
@@ -155,7 +155,7 @@ func TestDuView(t *testing.T) {
 	viewTerminal(t, 80, 24)
 	for _, args := range [][]string{{"-d", "1"}, {"-d", "0"}, {"--format", "table"}, {"--sort", "size"}, {"--sort", "name"}, {"--max-depth", "1"}} {
 		out.Reset()
-		if err := runDu(context.Background(), append([]string{root, "--no-stats", "-q"}, args...), &out); err != nil || !strings.HasSuffix(strings.SplitN(out.String(), "\n", 2)[0], "  path") {
+		if err := runDu(context.Background(), append([]string{root, "--no-stats", "-q", "-A"}, args...), &out); err != nil || !strings.HasSuffix(strings.SplitN(out.String(), "\n", 2)[0], "  path") {
 			t.Errorf("%q: %v\n%s", args, err, out.String())
 		}
 	}

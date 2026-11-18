@@ -28,6 +28,9 @@ type ViewLayout struct {
 	// Loc is the dates' zone (nil: time.Local), named once, on the total's
 	// line.
 	Loc *time.Location
+	// Primary is the figure the rows' bytes are (totals.Size, the default,
+	// or totals.AllocatedBytes), which names the bytes' column.
+	Primary string
 }
 
 // The view's columns: the bar's cells (wideBar from wideView columns,
@@ -70,7 +73,11 @@ func WriteView(w io.Writer, l ViewLayout, rows []totals.ViewRow) error {
 	if l.Local {
 		countHead = headingFiles
 	}
-	const sizeHead, shareHead, dateHead, pathHead = "size", "share", headingNewest, "path"
+	const shareHead, dateHead, pathHead = "share", headingNewest, "path"
+	sizeHead := FieldSize
+	if l.Primary == totals.AllocatedBytes {
+		sizeHead = HeadingOnDisk
+	}
 	names := make([]string, len(rows))
 	sizes := make([]string, len(rows))
 	counts := make([]string, len(rows))

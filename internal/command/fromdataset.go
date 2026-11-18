@@ -173,7 +173,27 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	}
 	view := duView(&o, format, label, stdoutTerminal())
 	opt := totals.Options{Depth: o.depth, Origin: origin, MaxPrefixes: o.maxPrefixes, MaxInodes: o.maxInodes, LinksOnce: hasNlink && !names && !o.countLinks,
-		Primary: primaryFigure(&o), View: view != nil}
+		View: view != nil, NoDirBlocks: dirBlocksFiltered(&o.filter)}
+	// The figure the live run would lead with, from what the dataset
+	// recorded: a local tree's allocated bytes where its listing read them.
+	// A tree listed where blocks are not read (Windows) has the column but
+	// no values; its first file or directory without them restarts the
+	// count by size (below), so the two are never mixed.
+	// A schema without the column is an object store's: a local tree's
+	// has it. A tree listed with statx may lack blocks in some entries, as
+	// its live run counts them missing (totals.Options.Lenient).
+	opt.Primary, opt.Reason = primaryFigure(&o)
+	implicit := opt.Primary == ""
+	switch {
+	case !implicit:
+	case !hasAllocated:
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonObjectStore
+	case names:
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonNamesTier
+	default:
+		sparse := info.SparseBlocksTier != "" && m.Collected != nil && m.Collected.Metadata != nil && *m.Collected.Metadata == info.SparseBlocksTier
+		opt.Primary, opt.Reason, opt.Lenient = totals.AllocatedBytes, totals.ReasonDefault, sparse
+	}
 	o.filter.Base = origin
 	prov := provenanceOf(o.fromDataset, m)
 	t := &totalsOut{format: format, sortBy: o.sortBy, noHeader: o.noHeader, tally: totals.New(opt), view: view, scope: prefix, label: label}
@@ -186,10 +206,21 @@ func duFromDataset(ctx context.Context, o options, stdout io.Writer) error {
 	l := elog()
 	l.dataset(prov, time.Now())
 	read, err := registry.DatasetTotals(ctx, d, prefix, relative, &o.filter, t.tally, runtime.GOMAXPROCS(0))
+	var unallocated *totals.NoAllocatedError
+	if implicit && errors.As(err, &unallocated) {
+		// The rows read again by size; the read event accounts for both
+		// scans' reads, and its reason says why.
+		first := read
+		opt.Primary, opt.Reason = totals.Size, totals.ReasonDataset
+		t.tally = totals.New(opt)
+		read, err = registry.DatasetTotals(ctx, d, prefix, relative, &o.filter, t.tally, runtime.GOMAXPROCS(0))
+		read.Plan.Add(first.Plan)
+		read.Scan.Add(first.Scan)
+	}
 	if err != nil {
 		return fail(err)
 	}
-	l.read(o.fromDataset, read)
+	l.read(o.fromDataset, read, opt)
 	if read.Rows == 0 && o.datasetSource != "" {
 		l.warn(warnPrefixNotFound, fmt.Sprintf("no key of the dataset starts with %q", prefix))
 	}
@@ -342,28 +373,32 @@ func provenanceOf(dir string, m reader.Metadata) provenance {
 }
 
 // readFields are the read event's: the rows read under the prefix, those
-// the filters dropped, the columns read besides the key, and SeekParquet's
+// the filters dropped, the columns read besides the key, SeekParquet's
 // account of planning and scanning (parts opened, ranges read, their
-// bytes).
+// bytes: both scans' where the count restarted by size), and the figure
+// the totals lead with and why (totals.Options.Reason).
 type readFields struct {
-	Rows        int64    `json:"rows"`
-	Filtered    int64    `json:"filtered"`
-	Columns     []string `json:"columns"`
-	PartsOpened int64    `json:"parts_opened"`
-	SourceReads int64    `json:"source_reads"`
-	SourceBytes int64    `json:"source_bytes"`
+	Rows          int64    `json:"rows"`
+	Filtered      int64    `json:"filtered"`
+	Columns       []string `json:"columns"`
+	PartsOpened   int64    `json:"parts_opened"`
+	SourceReads   int64    `json:"source_reads"`
+	SourceBytes   int64    `json:"source_bytes"`
+	Primary       string   `json:"primary"`
+	PrimaryReason string   `json:"primary_reason"`
 }
 
-// read prints what was read of the dataset in dir (-v).
-func (l *eventLog) read(dir string, r registry.DatasetRead) {
+// read prints what was read of the dataset in dir (-v), and by which
+// figure the totals were counted.
+func (l *eventLog) read(dir string, r registry.DatasetRead, opt totals.Options) {
 	if !l.shows(lvInfo) {
 		return
 	}
 	st := r.Plan
 	st.Add(r.Scan)
-	msg := fmt.Sprintf("read %s rows of %s (%s dropped by the filters), the key and %s: %s bytes in %s reads",
-		count(r.Rows), dir, count(r.Filtered), strings.Join(r.Columns, ", "), count(st.SourceBytes), count(st.SourceReads))
-	l.print(lvInfo, evRead, msg, readFields{r.Rows, r.Filtered, r.Columns, st.PartsOpened, st.SourceReads, st.SourceBytes})
+	msg := fmt.Sprintf("read %s rows of %s (%s dropped by the filters), the key and %s: %s bytes in %s reads; totals by %s (%s)",
+		count(r.Rows), dir, count(r.Filtered), strings.Join(r.Columns, ", "), count(st.SourceBytes), count(st.SourceReads), opt.Primary, opt.Reason)
+	l.print(lvInfo, evRead, msg, readFields{r.Rows, r.Filtered, r.Columns, st.PartsOpened, st.SourceReads, st.SourceBytes, opt.Primary, opt.Reason})
 }
 
 // dataset prints what totals read from a dataset are (unless -q): saved

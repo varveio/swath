@@ -36,6 +36,7 @@ import (
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/objhttp"
+	"github.com/varveio/swath/internal/totals"
 	"github.com/varveio/swath/reader"
 )
 
@@ -96,7 +97,8 @@ func TestDocsLogEvents(t *testing.T) {
 	src, complete, stop, unreadable, listed := "s3://bucket/logs/", true, "end_of_scope", int64(0), jsontime.Of(at.Add(-50*time.Hour))
 	l.dataset(provenance{Path: "logs-inventory", Source: &src, SchemaID: "swath/s3-objects/v1", ListingStartedAt: &listed, ListingFinishedAt: &listed,
 		Complete: &complete, StopReason: &stop, Unreadable: &unreadable, Filters: []reader.Filter{}, Exclusions: []string{}}, at)
-	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}})
+	l.read("logs-inventory", registry.DatasetRead{Rows: 120000, Columns: []string{"size", "last_modified"}, Scan: seekparquet.ReadStats{PartsOpened: 2, SourceReads: 9, SourceBytes: 1048576}},
+		totals.Options{Primary: totals.Size, Reason: totals.ReasonObjectStore})
 	t.Chdir(t.TempDir())
 	j, err := journal.Create("inventory", journal.Identity{Tool: "swath"}, nil)
 	if err != nil {
