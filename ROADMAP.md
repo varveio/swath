@@ -49,8 +49,7 @@ module is importable by released version.
 What exists: the reader module holds an experimental contract of the questions swath
 answers about a listed location (`reader/listing`: Page, Lookup and Walk, an inventory's
 Summarize, their evidence and error classes) and an inventory view that answers them from a dataset
-(`reader/view`). Both may change in any release.
-
-Still to come: a public live source, one that answers the same contract by listing an
-object store or a filesystem directly. Until then the listing engine is reachable only
-through the CLI, and its internal packages are not an embedding API.
+(`reader/view`). The root module's package `source` answers the same contract live, from an S3 or GCS
+bucket, an Azure Blob Storage container or a local directory ([the Go library](docs/library.md)). All
+three may change in any release. A whole run, with its output and exit codes, is reachable only through
+the CLI.
