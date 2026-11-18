@@ -250,6 +250,26 @@ do not repair the published candidate by hand.
    verification commands below against what it just published, and only then un-drafts
    it. If verification fails the release stays a draft — fix and re-tag rather than
    publishing by hand.
+6. **Final releases only:** update the Homebrew tap,
+   [varveio/homebrew-tap](https://github.com/varveio/homebrew-tap), by hand until
+   [#655](https://github.com/varveio/swath/issues/655) automates it. With Homebrew installed (macOS, or the
+   `ghcr.io/homebrew/brew` image), open the bump pull request:
+   ```sh
+   brew tap varveio/tap && brew trust --formula varveio/tap/swath
+   HOMEBREW_GITHUB_API_TOKEN=$(gh auth token) \
+     brew bump-formula-pr --no-fork --no-browse --version=0.5.0 varveio/tap/swath
+   ```
+   It points the formula at the new tag's source archive and its checksum. When `brew test-bot`
+   is green on that pull request (it builds the bottles), publish them with its number and head SHA:
+   ```sh
+   gh workflow run publish.yml -R varveio/homebrew-tap -f pull_request=PR -f head_sha=SHA
+   gh run watch -R varveio/homebrew-tap --exit-status   # pick the "brew pr-pull" run
+   ```
+   That uploads the bottles to a tap release, pushes the formula to the tap's `main` and closes
+   the pull request. Once the run has succeeded, refresh the tap and check the installed version:
+   ```sh
+   brew update && brew upgrade varveio/tap/swath && swath --version   # brew install the first time
+   ```
 
 ### When a step fails half way
 
