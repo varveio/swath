@@ -164,8 +164,10 @@ A target is `Complete` when its key's state is known (the root's excepted) and i
 `Unread` counts what its walk could not read, and its totals then cover what was read. A summary lists no names: a
 program that wants them walks the target. A subtree whose lookup was left unknown is still walked; if that walk
 fails the target counts what it read and stays incomplete. A subtree whose walk is refused (`ErrAuth`) or reaches
-another device (`ErrOtherDevice`) counts one `Unread`, as a walk above it would. Any other failure is the call's
-error, and so is its context ending.
+another device (`ErrOtherDevice`) counts one `Unread`, as a walk above it would. A subtree whose walk finds no
+directory to enter (`ErrNotDirectory`: another kind, or a symbolic link at or on the way to its key) is unknown, with
+that error as its `Reason`, and incomplete. The other targets are answered either way. Any other failure is the
+call's error, and so is its context ending.
 
 ```go
 targets := []listing.Target{

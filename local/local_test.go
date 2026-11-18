@@ -774,3 +774,28 @@ func TestSummarize(t *testing.T) {
 		t.Errorf("d/, counting directories: %+v, %v", dirs, err)
 	}
 }
+
+// TestSummarizeThroughLink: a subtree target that is, or lies behind, a
+// symbolic link is unknown with ErrNotDirectory and incomplete, and the
+// other targets are answered.
+func TestSummarizeThroughLink(t *testing.T) {
+	root, locked := tree(t)
+	src := open(t, hold(t, root))
+	targets := []listing.Target{{Key: []byte("d/"), Subtree: true}, {Key: []byte("link/"), Subtree: true}, {Key: []byte("link/x/"), Subtree: true}, {Key: []byte("locked/"), Subtree: true}}
+	sums, ev, err := src.Summarize(context.Background(), targets, listing.SummaryOptions{})
+	if err != nil || ev.Stop != listing.StopCompleted {
+		t.Fatalf("%+v, %v", ev, err)
+	}
+
+	if s := sums[0]; s.State != listing.LookupPresent || !s.Complete || s.Entries != 2 {
+		t.Errorf("d/: %+v", s)
+	}
+	for _, s := range sums[1:3] {
+		if s.State != listing.LookupUnknown || !errors.Is(s.Reason, listing.ErrNotDirectory) || s.Complete || s.Entries != 0 || s.Unread != 0 {
+			t.Errorf("through the link: %+v", s)
+		}
+	}
+	if s := sums[3]; s.State != listing.LookupPresent || s.Complete == locked || s.Unread != map[bool]int64{true: 1}[locked] {
+		t.Errorf("locked/: %+v", s)
+	}
+}
