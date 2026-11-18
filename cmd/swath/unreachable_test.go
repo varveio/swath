@@ -19,7 +19,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -47,7 +47,7 @@ func shortGrace(t *testing.T, d time.Duration) {
 
 // unreachableReport is the part of the report these tests read.
 type unreachableReport struct {
-	Outcome     listing.Outcome `json:"outcome"`
+	Outcome     inventory.Outcome `json:"outcome"`
 	Diagnostics struct {
 		Source struct {
 			Stats struct {
@@ -107,7 +107,7 @@ func TestUnreachableEndpoint(t *testing.T) {
 			var rep unreachableReport
 			readJSON(t, report, &rep)
 			o := rep.Outcome
-			if o.Class != listing.ClassStuck || o.ExitCode != exitStuck || o.Cause != source.CauseUnreachable || o.Resumable || strings.Contains(o.Error, "every request was failing") {
+			if o.Class != inventory.ClassStuck || o.ExitCode != exitStuck || o.Cause != source.CauseUnreachable || o.Resumable || strings.Contains(o.Error, "every request was failing") {
 				t.Fatalf("outcome %+v", o)
 			}
 			if !c.admission && (rep.value("unreachable.stops") < 1 || rep.value("unreachable.attempts") < 2) {
@@ -179,7 +179,7 @@ func TestUnreachableAfterAnswer(t *testing.T) {
 	}
 	var rep unreachableReport
 	readJSON(t, report, &rep)
-	if rep.value("unreachable.stops") != 0 || rep.Outcome.Class != listing.ClassStuck || rep.Outcome.Cause == source.CauseUnreachable {
+	if rep.value("unreachable.stops") != 0 || rep.Outcome.Class != inventory.ClassStuck || rep.Outcome.Cause == source.CauseUnreachable {
 		t.Fatalf("outcome %+v, counters %v", rep.Outcome, rep.Diagnostics.Source.Stats.Counters.Values)
 	}
 }
@@ -209,7 +209,7 @@ func TestUnreachableLeavesNoRun(t *testing.T) {
 	}
 	var rep unreachableReport
 	readJSON(t, report, &rep)
-	if o := rep.Outcome; o.Class != listing.ClassStuck || o.Cause != source.CauseUnreachable || o.Resumable || o.Unrecorded != listing.UnrecordedDiscarded {
+	if o := rep.Outcome; o.Class != inventory.ClassStuck || o.Cause != source.CauseUnreachable || o.Resumable || o.Unrecorded != inventory.UnrecordedDiscarded {
 		t.Fatalf("outcome %+v", o)
 	}
 	if ents := dirNames(t, dir); len(ents) != 1 || ents[0] != dataset.Workspace || dataset.Resumable(dir) {
@@ -338,10 +338,10 @@ func TestOverwriteKeepsThePreviousDataset(t *testing.T) {
 	if err := dispatch(context.Background(), []string{"resume", dir, "--max-duration", "0", "--report", report}, io.Discard); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	now.Reset()
-	if err := show([]string{dir}, &now); err != nil || rep.Outcome.Class != listing.ClassOK || rep.Invocation.Out != dir || !rep.Output.Replaced ||
+	if err := show([]string{dir}, &now); err != nil || rep.Outcome.Class != inventory.ClassOK || rep.Invocation.Out != dir || !rep.Output.Replaced ||
 		!strings.Contains(now.String(), "  source    s3://bkt/") || !strings.Contains(now.String(), "  contents  3,000 objects") || dataset.Staged(dir) {
 		t.Fatalf("after the resume: %v %+v\n%s", err, rep.Outcome, now.String())
 	}

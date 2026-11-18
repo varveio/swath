@@ -416,7 +416,7 @@ func runB(ctx context.Context, p *Provider, out, dir string, lim Limits, resume 
 	case lim.PartIntervalMs > 0:
 		interval = msDuration(lim.PartIntervalMs)
 	case lim.PartIntervalMs == 0:
-		interval = 60 * time.Second // listing.DefaultPartInterval
+		interval = 60 * time.Second // inventory.DefaultPartInterval
 	}
 	var accounted atomic.Int64
 	ropt := parquetout.Options{Out: out, PartSize: lim.PartSize, Encoders: lim.Encoders, Interval: interval, Encoded: encoded,

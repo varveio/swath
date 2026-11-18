@@ -26,8 +26,8 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -162,7 +162,7 @@ func TestExitCodes(t *testing.T) {
 			if c, signaled := exitStatus(t, cmd.Wait()); c != want || !signaled {
 				t.Fatalf("%v: exit %d (by the signal: %v), want %d by the signal", sig, c, signaled, want)
 			}
-			if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != listing.ClassTerminated || o.StopSource != "sighup") {
+			if o := outcome(dir); o.ExitCode != want || !o.Resumable || sig == syscall.SIGHUP && (o.Class != inventory.ClassTerminated || o.StopSource != "sighup") {
 				t.Fatalf("%v: %+v", sig, o)
 			}
 			if sig != syscall.SIGINT {
@@ -181,7 +181,7 @@ func TestExitCodes(t *testing.T) {
 				}
 				end = e
 			}
-			if len(lines) < 3 || end["event"] != "run_end" || end["class"] != listing.ClassInterrupted || end["status"] != listing.StatusFailed {
+			if len(lines) < 3 || end["event"] != "run_end" || end["class"] != inventory.ClassInterrupted || end["status"] != inventory.StatusFailed {
 				t.Fatalf("an interrupted run's trace (%d lines) ends with %v", len(lines), end)
 			}
 		}
@@ -209,8 +209,8 @@ func TestExitCodes(t *testing.T) {
 		t.Fatalf("stuck: %+v", o)
 	}
 	// The progress file's last snapshot says the run failed.
-	var p listing.ProgressSnapshot
-	if b := readJSON(t, filepath.Join(stuck, progressName), &p); !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"max_mutex_hold_ns"`)) || p.State != listing.StateFailed {
+	var p inventory.ProgressSnapshot
+	if b := readJSON(t, filepath.Join(stuck, progressName), &p); !bytes.Contains(b, []byte(`"advance"`)) || !bytes.Contains(b, []byte(`"max_mutex_hold_ns"`)) || p.State != inventory.StateFailed {
 		t.Fatalf("progress file: %s", b)
 	}
 }
@@ -342,7 +342,7 @@ func TestDiskFullExits74(t *testing.T) {
 		if o.Class != "disk_full" || o.ExitCode != exitDiskFull || o.Cause != "no_space" || !o.Resumable {
 			t.Fatalf("%s: error.json %+v", target, o)
 		}
-		var rep listing.Report
+		var rep inventory.Report
 		readJSON(t, report, &rep)
 		if rep.Outcome.Class != "disk_full" || rep.Outcome.ExitCode != exitDiskFull || rep.Outcome.Cause != "no_space" || !rep.Outcome.Resumable {
 			t.Fatalf("%s: report outcome %+v", target, rep.Outcome)
@@ -396,9 +396,9 @@ func TestResumeKeepsTheRunsReport(t *testing.T) {
 	if err := resume(ctx, []string{out, "--report", second}, io.Discard); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, second, &rep)
-	if !rep.Invocation.Resume || rep.Outcome.Class != listing.ClassOK || !rep.Outcome.Complete {
+	if !rep.Invocation.Resume || rep.Outcome.Class != inventory.ClassOK || !rep.Outcome.Complete {
 		t.Fatalf("second report: %+v", rep.Outcome)
 	}
 }
@@ -567,11 +567,11 @@ func TestGCSCappedRunIsIncomplete(t *testing.T) {
 	// 3, class incomplete, not resumable.
 	report := filepath.Join(t.TempDir(), "report.json")
 	err = resume(ctx, []string{dir, "--report", report}, io.Discard)
-	if msg := dir + " is a finalized sample, partial: --max-keys reached: it cannot be resumed"; !errors.Is(err, listing.ErrComplete) ||
+	if msg := dir + " is a finalized sample, partial: --max-keys reached: it cannot be resumed"; !errors.Is(err, inventory.ErrComplete) ||
 		exitCode(t, err) != exitIncomplete || err.Error() != msg {
 		t.Fatalf("resume of a capped run: %v, want exit %d: %s", err, exitIncomplete, msg)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	if o := rep.Outcome; o.Class != "incomplete" || o.Resumable || o.Complete || o.Error != err.Error() || strings.Contains(o.Unrecorded, "complete") {
 		t.Fatalf("resume of a capped run: outcome %+v", o)
@@ -669,7 +669,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	var o outcome
 	readJSON(t, filepath.Join(out, errorName), &o)
 	check("error.json", o.Class, o.ExitCode, o.Cause, o.Resumable)
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	check("report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
 	if retained, _ := filepath.Glob(filepath.Join(out, "data", "*.parquet")); len(retained) == 0 {
@@ -695,7 +695,7 @@ func TestProtocolViolationIsUnresumable(t *testing.T) {
 	}
 	readJSON(t, filepath.Join(out, errorName), &o)
 	check("resume error.json", o.Class, o.ExitCode, o.Cause, o.Resumable)
-	rep = listing.Report{}
+	rep = inventory.Report{}
 	readJSON(t, report, &rep)
 	check("resume report", rep.Outcome.Class, rep.Outcome.ExitCode, rep.Outcome.Cause, rep.Outcome.Resumable)
 	// A resumed run (the race the command's early check cannot close)
@@ -731,7 +731,7 @@ func TestDirectoryBucketRefused(t *testing.T) {
 	if c := exitCode(t, err); c != exitUsage || !strings.Contains(err.Error(), "directory bucket") {
 		t.Fatalf("exit %d: %v", c, err)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	if rep.Outcome.Class != "refused" || rep.Outcome.ExitCode != exitUsage || rep.Outcome.Resumable {
 		t.Fatalf("report outcome %+v", rep.Outcome)

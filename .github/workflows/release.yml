@@ -91,7 +91,7 @@ jobs:
   # (every package's tests in exactly one shard), and the race tests of the reader module the main
   # one compiles in (go.mod replaces it with ./reader). The source job separately requires main
   # CI's full Go gate at this SHA; this reruns the suite that guards what ships. No leg runs all
-  # of internal/listing's or cmd/swath's tests in one process; nightly's go-race-nightly does.
+  # of internal/inventory's or cmd/swath's tests in one process; nightly's go-race-nightly does.
   # A failed or cancelled leg fails the job, so publish, which needs it, does not run. go test's
   # -timeout is per package binary and leaves the job's limit room for a cold compile, so a hang
   # ends in a goroutine dump.

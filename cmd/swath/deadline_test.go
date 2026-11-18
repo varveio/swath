@@ -24,7 +24,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 	"github.com/varveio/swath/internal/source/keyrange"
 )
@@ -132,7 +132,7 @@ func TestInfiniteEmptyPagesHonorsDeadline(t *testing.T) {
 	if d := time.Duration(s.latestNs.Load() - s.firstNs.Load()); d < 2*stall || s.fresh.Load() < 100 {
 		t.Fatalf("%d fresh empty pages over %s, not over twice the stall timeout", s.fresh.Load(), d)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	var o outcome
 	readJSON(t, filepath.Join(dir, errorName), &o)
@@ -239,7 +239,7 @@ func TestEndlessEmptyPagesAreStuck(t *testing.T) {
 	if c := exitCode(t, err); c != exitStuck {
 		t.Fatalf("exit %d (%v) after %d fresh empty pages, want %d", c, err, s.fresh.Load(), exitStuck)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	if rep.Outcome.Cause != stuckEmptyChain || !rep.Outcome.Resumable {
 		t.Fatalf("outcome %+v, want cause %s, resumable\n%s", rep.Outcome, stuckEmptyChain, stuckEvidence(dir))

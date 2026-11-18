@@ -13,13 +13,13 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/filter"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/source/localfs"
 )
 
 type commandPruneReport struct {
-	Output      listing.Output
-	Outcome     listing.Outcome
+	Output      inventory.Output
+	Outcome     inventory.Outcome
 	Diagnostics struct {
 		Source struct {
 			Name  string

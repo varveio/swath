@@ -23,8 +23,8 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/textout"
 )
@@ -292,7 +292,7 @@ func startOf(src string, local bool, o options, dir string) startFields {
 
 // progress prints a progress record: the snapshot's fields after msg,
 // the record's text, but for its ids, which the envelope carries.
-func (l *eventLog) progress(s listing.ProgressSnapshot, msg string) {
+func (l *eventLog) progress(s inventory.ProgressSnapshot, msg string) {
 	s.AttemptID, s.RunID = "", ""
 	l.print(lvInfo, evProgress, msg, s)
 }
@@ -323,7 +323,7 @@ func conclude(err error) int {
 		err = nil
 	}
 	l := elog()
-	o := outcome{Class: listing.ClassOK, ExitCode: exitOK}
+	o := outcome{Class: inventory.ClassOK, ExitCode: exitOK}
 	var ee *exitError
 	var u usageError
 	switch {
@@ -334,9 +334,9 @@ func conclude(err error) int {
 	case errors.As(err, &ee):
 		o = ee.out
 	case errors.As(err, &u):
-		o = outcome{Class: listing.ClassUsage, ExitCode: exitUsage, Message: err.Error()}
+		o = outcome{Class: inventory.ClassUsage, ExitCode: exitUsage, Message: err.Error()}
 	default:
-		o = outcome{Class: listing.ClassFatal, ExitCode: exitFatal, Message: err.Error()}
+		o = outcome{Class: inventory.ClassFatal, ExitCode: exitFatal, Message: err.Error()}
 	}
 	cr := (*credentialRefusal)(nil)
 	refused := errors.As(err, &cr)
@@ -356,7 +356,7 @@ func conclude(err error) int {
 				level, msg = lvError, err.Error()
 			}
 			if o.Status == "" && o.ExitCode != exitOK {
-				o.Status = listing.StatusFailed // stopped before a run accounted it
+				o.Status = inventory.StatusFailed // stopped before a run accounted it
 			}
 			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Status, o.Complete, o.StopReason, o.Unreadable}))
 		}
@@ -599,7 +599,7 @@ type spillFields struct {
 // check takes the progress snapshot s at now: it prints the event when one
 // is due, and returns the run's stop cause (a *spillWaitError) once the
 // wait has lasted --spill-wait-timeout.
-func (w *spillWatch) check(s listing.ProgressSnapshot, now time.Time) error {
+func (w *spillWatch) check(s inventory.ProgressSnapshot, now time.Time) error {
 	if w == nil {
 		return nil
 	}
@@ -782,7 +782,7 @@ type unreadableFields struct {
 // rest. Under swath du's view (drawn), which marks the lines they leave
 // out, it is one line unless -v. Their count is the run's error line
 // (exit 3, unreadableError), which -q keeps.
-func reportUnreadable(r *listing.Report, root string, view *viewOut) {
+func reportUnreadable(r *inventory.Report, root string, view *viewOut) {
 	n := r.Outcome.Unreadables()
 	l := elog()
 	if n == 0 || !l.shows(lvWarn) {

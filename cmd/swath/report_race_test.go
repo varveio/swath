@@ -13,7 +13,7 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
-	"github.com/varveio/swath/internal/listing"
+	"github.com/varveio/swath/internal/inventory"
 )
 
 // TestConcurrentReportWriters (B3): the graceful and the forced account of
@@ -60,12 +60,12 @@ func TestConcurrentReportWriters(t *testing.T) {
 func TestOneTerminalReport(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.json")
 	att := newAttempt()
-	first := listing.Unstarted(nil, "", att, nil)
+	first := inventory.Unstarted(nil, "", att, nil)
 	first.Outcome.Status = "committed"
-	second := listing.Unstarted(nil, "", att, nil)
+	second := inventory.Unstarted(nil, "", att, nil)
 	writeReport(path, first, nil)
 	writeReport(path, second, nil)
-	var r listing.Report
+	var r inventory.Report
 	readJSON(t, path, &r)
 	if r.Outcome.Status != "committed" {
 		t.Fatalf("the second writer replaced the attempt's report: %+v", r.Outcome)
@@ -101,7 +101,7 @@ func TestOutcomeFilesDurable(t *testing.T) {
 	if err := writeOutcome(dir, outcome{ExitCode: exitStuck, Class: "stuck"}); err != nil {
 		t.Fatal(err)
 	}
-	writeReport(filepath.Join(dir, "report.json"), listing.Report{}, nil)
+	writeReport(filepath.Join(dir, "report.json"), inventory.Report{}, nil)
 	if !synced["error"] || !synced["report"] {
 		t.Fatalf("synced before rename: %v, want error.json and report.json", synced)
 	}

@@ -24,8 +24,8 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
@@ -74,7 +74,7 @@ func TestEndpointUserinfoReports(t *testing.T) {
 					if (err == nil) != success {
 						t.Fatalf("success=%v: %v", success, err)
 					}
-					var rep listing.Report
+					var rep inventory.Report
 					readJSON(t, report, &rep)
 					if rep.Invocation.Argv == nil {
 						t.Fatal("report lacks recorded arguments")

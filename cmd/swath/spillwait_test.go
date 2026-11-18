@@ -17,22 +17,22 @@ import (
 	"time"
 
 	"github.com/varveio/swath/internal/dataset"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/jsontime"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
 // pressured is a progress snapshot with listing waiting on a full spill
 // cap since since (none when zero), after ordered rows.
-func pressured(since time.Time, ordered int64) listing.ProgressSnapshot {
+func pressured(since time.Time, ordered int64) inventory.ProgressSnapshot {
 	g := &order.GaugeSnapshot{SpillLiveBytes: 91 << 30, SpillMaxBytes: 91 << 30, SpillReserveBytes: 1 << 30}
 	if !since.IsZero() {
 		at := jsontime.Of(since)
 		g.SpillPressureSince = &at
 	}
-	return listing.ProgressSnapshot{Ordered: ordered, Order: g}
+	return inventory.ProgressSnapshot{Ordered: ordered, Order: g}
 }
 
 // TestSpillWatch: listing waiting on a full spill cap is an error event
@@ -54,14 +54,14 @@ func TestSpillWatch(t *testing.T) {
 	j.Close()
 	t0 := time.Unix(1_000_000, 0)
 	w := &spillWatch{dir: "inventory"}
-	check := func(s listing.ProgressSnapshot, d time.Duration) {
+	check := func(s inventory.ProgressSnapshot, d time.Duration) {
 		t.Helper()
 		if err := w.check(s, t0.Add(d)); err != nil {
 			t.Fatalf("at %s: %v", d, err)
 		}
 	}
 	events := func() int { return strings.Count(stderr.String(), "\n") }
-	check(listing.ProgressSnapshot{}, 0)
+	check(inventory.ProgressSnapshot{}, 0)
 	check(pressured(time.Time{}, 0), 0)
 	check(pressured(t0, 1000), 0)
 	check(pressured(t0, 1000), spillPressureFor-time.Second)
@@ -117,7 +117,7 @@ func TestSpillWatch(t *testing.T) {
 		t.Fatalf("stop %v", stop)
 	}
 	o := classify(stop, stop, "inventory")
-	if o.Class != listing.ClassDiskFull || o.ExitCode != exitDiskFull || o.Cause != causeSpillBudget || !o.Resumable || o.StopSource != "spill_wait" {
+	if o.Class != inventory.ClassDiskFull || o.ExitCode != exitDiskFull || o.Cause != causeSpillBudget || !o.Resumable || o.StopSource != "spill_wait" {
 		t.Fatalf("outcome %+v", o)
 	}
 	w = &spillWatch{wait: time.Minute} // text output: no journal
@@ -221,11 +221,11 @@ func TestSpillWaitTimeoutResumes(t *testing.T) {
 		!strings.HasSuffix(err.Error(), "stopped by --spill-wait-timeout 1s: resume it with more disk or a larger --spill-budget (swath resume "+shellOperand(dir)+" --spill-budget SIZE)") {
 		t.Fatalf("exit %d (%v), want %d naming the resume", c, err, exitDiskFull)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	var o outcome
 	readJSON(t, filepath.Join(dir, errorName), &o)
-	if rep.Outcome.Class != listing.ClassDiskFull || rep.Outcome.Cause != causeSpillBudget || !rep.Outcome.Resumable || rep.Outcome.StopSource != "spill_wait" ||
+	if rep.Outcome.Class != inventory.ClassDiskFull || rep.Outcome.Cause != causeSpillBudget || !rep.Outcome.Resumable || rep.Outcome.StopSource != "spill_wait" ||
 		o.ExitCode != exitDiskFull || o.Cause != causeSpillBudget || !o.Resumable || o.Message != rep.Outcome.Error {
 		t.Fatalf("report %+v and error.json %+v", rep.Outcome, o)
 	}

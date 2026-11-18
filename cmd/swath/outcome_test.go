@@ -25,8 +25,8 @@ import (
 
 	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/faults"
+	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
-	"github.com/varveio/swath/internal/listing"
 	"github.com/varveio/swath/internal/source/gcs/gcstest"
 )
 
@@ -138,7 +138,7 @@ func TestOutcomeIsCurrent(t *testing.T) {
 	if c := code(err); c != exitFatal {
 		t.Fatalf("failed write: exit %d", c)
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	if err := json.Unmarshal(out.Bytes(), &rep); err != nil || !strings.Contains(rep.Outcome.Unrecorded, "write "+errorName) {
 		t.Fatalf("failed write: report %v %+v", err, rep.Outcome)
 	}
@@ -322,17 +322,17 @@ func TestOutcomeSettlementAfterConcurrentCommit(t *testing.T) {
 			if got := dirTree(t, dir); !maps.Equal(want, got) {
 				t.Fatalf("%s: the directory changed:\nbefore %v\nafter  %v", name, want, got)
 			}
-			if !strings.Contains(stderr.String(), "swath: outcome: {") || !strings.Contains(stderr.String(), listing.UnrecordedChanged) {
+			if !strings.Contains(stderr.String(), "swath: outcome: {") || !strings.Contains(stderr.String(), inventory.UnrecordedChanged) {
 				t.Fatalf("%s: the outcome and its reason are not on stderr: %q", name, stderr.String())
 			}
 			// The report is this attempt's, and says why error.json does
 			// not hold it; an error.json the other process left names
 			// another attempt.
-			var rep listing.Report
+			var rep inventory.Report
 			if b, err := os.ReadFile(report); err != nil || json.Unmarshal(b, &rep) != nil {
 				t.Fatalf("%s: report: %v %q", name, err, b)
 			}
-			if rep.Attempt == nil || rep.Attempt.ID == "" || rep.Outcome.ExitCode != exitFatal || rep.Outcome.Unrecorded != listing.UnrecordedChanged {
+			if rep.Attempt == nil || rep.Attempt.ID == "" || rep.Outcome.ExitCode != exitFatal || rep.Outcome.Unrecorded != inventory.UnrecordedChanged {
 				t.Fatalf("%s: report %+v %+v", name, rep.Attempt, rep.Outcome)
 			}
 			if b, err := os.ReadFile(filepath.Join(dir, errorName)); err == nil {
@@ -365,14 +365,14 @@ func TestNothingToResumeLeavesDirectoryUntouched(t *testing.T) {
 			os.WriteFile(filepath.Join(dir, dataset.Workspace, dataset.LockName), nil, 0o644)
 		}
 		want := dirTree(t, dir)
-		if err := resume(ctx, []string{dir}, io.Discard); !errors.Is(err, listing.ErrNothingToResume) {
+		if err := resume(ctx, []string{dir}, io.Discard); !errors.Is(err, inventory.ErrNothingToResume) {
 			t.Fatalf("%s: resume: %v", layout, err)
 		}
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
 			t.Fatalf("%s: resume changed the directory:\nbefore %v\nafter  %v", layout, want, got)
 		}
 		err := runWith(ctx, command{}, []string{"gs://bkt", "--endpoint-url", ep, "--anonymous", "-o", dir}, io.Discard, nil, true, nil)
-		if !errors.Is(err, listing.ErrNothingToResume) {
+		if !errors.Is(err, inventory.ErrNothingToResume) {
 			t.Fatalf("%s: resumed run: %v", layout, err)
 		}
 		if got := dirTree(t, dir); !maps.Equal(want, got) {
@@ -430,9 +430,9 @@ func TestAttemptIdentifiesTheOutcome(t *testing.T) {
 		}
 		return o
 	}
-	readReport := func(path string) listing.Report {
+	readReport := func(path string) inventory.Report {
 		t.Helper()
-		var r listing.Report
+		var r inventory.Report
 		b, err := os.ReadFile(path)
 		if err != nil || json.Unmarshal(b, &r) != nil || r.Attempt == nil || r.Attempt.ID == "" {
 			t.Fatalf("report %s: %v %q", path, err, b)
@@ -505,13 +505,13 @@ func TestEarlyRefusalSaysWhy(t *testing.T) {
 		t.Fatal(err)
 	}
 	empty := t.TempDir()
-	for _, c := range []struct{ dir, why string }{{done, listing.UnrecordedComplete}, {empty, listing.UnrecordedNoRun}} {
+	for _, c := range []struct{ dir, why string }{{done, inventory.UnrecordedComplete}, {empty, inventory.UnrecordedNoRun}} {
 		report := filepath.Join(t.TempDir(), "report.json")
 		err := dispatch(ctx, []string{"resume", "-v", "--report", report, c.dir}, io.Discard)
 		if (err == nil) != (c.dir == done) {
 			t.Fatalf("resume of %s: %v", c.dir, err)
 		}
-		var rep listing.Report
+		var rep inventory.Report
 		readJSON(t, report, &rep)
 		// A complete dataset is no refusal (exit 0): nothing goes to stderr.
 		if rep.Outcome.Unrecorded != c.why || (c.dir != done && !strings.Contains(stderr.String(), c.why)) {
@@ -558,7 +558,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := dirTree(t, dir)
-	check := func(how string, rep listing.Report) {
+	check := func(how string, rep inventory.Report) {
 		t.Helper()
 		o := rep.Outcome
 		if o.Class != "ok" || o.ExitCode != exitOK || o.Status != "committed" || !o.Complete || o.StopReason != "end_of_scope" || o.Resumable || o.Error != "" {
@@ -576,14 +576,14 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	if !strings.Contains(out.String(), "already complete") {
 		t.Fatalf("resume printed %q", out.String())
 	}
-	var rep listing.Report
+	var rep inventory.Report
 	readJSON(t, report, &rep)
 	check("resume", rep)
 	out.Reset()
 	if err := dispatch(ctx, []string{"resume", "--report", "-", dir}, &out); err != nil {
 		t.Fatalf("resume --report -: %v", err)
 	}
-	rep = listing.Report{}
+	rep = inventory.Report{}
 	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
 		t.Fatalf("resume --report -: %v %q", err, out.String())
 	}
@@ -594,7 +594,7 @@ func TestResumeCompleteIsIdempotent(t *testing.T) {
 	if err := runWith(ctx, command{}, append(slices.Clone(args), "-o", dir, "--report", report), io.Discard, nil, true, nil); err != nil {
 		t.Fatalf("resumed run on a complete dataset: %v", err)
 	}
-	rep = listing.Report{}
+	rep = inventory.Report{}
 	readJSON(t, report, &rep)
 	check("resumed run", rep)
 }
@@ -689,7 +689,7 @@ func TestRefusalsExit2(t *testing.T) {
 		if code := exitCode(t, c.cmd(report)); code != exitUsage {
 			t.Fatalf("%s: exit %d, want %d", c.name, code, exitUsage)
 		}
-		var rep listing.Report
+		var rep inventory.Report
 		readJSON(t, report, &rep)
 		if o := rep.Outcome; o.Class != c.class || o.ExitCode != exitUsage || o.Resumable != c.resumable {
 			t.Fatalf("%s: report outcome %+v", c.name, o)
@@ -736,7 +736,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		if c := exitCode(t, err); c != exitFatal {
 			t.Fatalf("%d: exit %d (%v)", status, c, err)
 		}
-		var rep listing.Report
+		var rep inventory.Report
 		readJSON(t, report, &rep)
 		if o := rep.Outcome; o.Complete || o.StopReason != "" || o.Status != "failed" || o.Class != "fatal" || o.Cause != cause {
 			t.Fatalf("%d: outcome %+v", status, o)
@@ -753,12 +753,12 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		if (err == nil) != (extra == nil) {
 			t.Fatalf("%s: %v", name, err)
 		}
-		var rep, rj listing.Report
+		var rep, rj inventory.Report
 		var m dataset.Manifest
 		readJSON(t, report, &rep)
 		readJSON(t, filepath.Join(dir, dataset.ReportName), &rj)
 		readJSON(t, filepath.Join(dir, dataset.ManifestName), &m)
-		for how, o := range map[string]listing.Outcome{"report": rep.Outcome, "run.json": rj.Outcome} {
+		for how, o := range map[string]inventory.Outcome{"report": rep.Outcome, "run.json": rj.Outcome} {
 			if o.Status != "committed" || o.Complete != m.Coverage.Complete || o.StopReason != m.Coverage.StopReason || o.Complete != (extra == nil) {
 				t.Fatalf("%s %s: outcome %+v, manifest coverage %+v", name, how, o, m.Coverage)
 			}
@@ -766,7 +766,7 @@ func TestReportCompletionFollowsOutcome(t *testing.T) {
 		// swath resume of the committed dataset reports the same coverage.
 		report = filepath.Join(t.TempDir(), "report.json")
 		_ = resume(ctx, []string{"--report", report, dir}, io.Discard)
-		rep = listing.Report{}
+		rep = inventory.Report{}
 		readJSON(t, report, &rep)
 		if o := rep.Outcome; o.Status != "committed" || o.Complete != m.Coverage.Complete || o.StopReason != m.Coverage.StopReason {
 			t.Fatalf("%s resume: outcome %+v, manifest coverage %+v", name, o, m.Coverage)

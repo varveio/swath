@@ -4,7 +4,7 @@
 #   1. the conformance suite against the Go adapter of the seekparquet module version go.mod pins
 #      (the reader the replay server serves datasets through, and the validator): every target it
 #      claims (the reader and the four validator levels) must qualify;
-#   2. datasets this build's writer produces (internal/listing TestSeekParquetFixtures: S3 current
+#   2. datasets this build's writer produces (internal/inventory TestSeekParquetFixtures: S3 current
 #      objects, S3 versions with repeated keys, filesystem keys over 1,024 bytes) validated by the
 #      suite's reference adapter and by the Go adapter at the full and digest levels, and read by the
 #      Go adapter exactly as the reference reads them (seekparquet_conformance.py).
@@ -40,7 +40,7 @@ if [ ! -x "$work/venv/bin/python" ]; then
   "$work/venv/bin/python" -m pip install --quiet --retries 10 --timeout 60 -r "$checkout/conformance/generators/requirements.txt"
 fi
 rm -rf "$work/datasets"
-SWATH_SEEKPARQUET_FIXTURES="$work/datasets" go test -count=1 -run '^TestSeekParquetFixtures$' ./internal/listing
+SWATH_SEEKPARQUET_FIXTURES="$work/datasets" go test -count=1 -run '^TestSeekParquetFixtures$' ./internal/inventory
 "$work/venv/bin/python" -I "$(dirname "$0")/seekparquet_conformance.py" \
   --adapter "$work/seekparquet-adapter" \
   --reference "$work/venv/bin/python -I $checkout/conformance/harness/reference_adapter.py" \
