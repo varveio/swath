@@ -10,7 +10,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/varveio/swath/command"
+	"github.com/varveio/swath/internal/command"
 )
 
 func main() {

@@ -2,8 +2,8 @@
 
 swath's listing code is also a Go library: a program can open an S3 or GCS bucket, an Azure container or a local
 directory and ask it, during its own run, for the next children of a prefix (a **page**), for what is at exactly
-one key (a **lookup**) or for everything under a prefix (a **walk**), with no swath process and no output files. A `Source` links neither swath's command, its flags nor its Parquet writer. A program can also run
-the whole command line ([Run the command line](#run-the-command-line)).
+one key (a **lookup**) or for everything under a prefix (a **walk**), with no swath process and no output files. A
+`Source` links neither swath's command, its flags nor its Parquet writer.
 
 The library is **experimental**: it is implemented and tested, but its API may change in any release.
 
@@ -15,7 +15,6 @@ The library is **experimental**: it is implemented and tested, but its API may c
 | `github.com/varveio/swath/source/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
 | `github.com/varveio/swath/source/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
-| `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 
 Pages, lookups and walks answer from the location as it is during the call. To ask the same questions of a saved inventory
 instead, or for the totals under several prefixes (a summary), open it with the `reader/view` package
@@ -326,30 +325,6 @@ library guarantees:
 
 To count or trace a call's work, an `objfile.Observer` on its context is told of each page as one list request
 and each lookup as one metadata request, named by the program's key.
-
-## Run the command line
-
-A program that needs a whole run, with its flags, output, progress files and exit codes, rather than one page or
-lookup, can run the swath command line itself. `command.Main(ctx, host, args, stdout, stderr)` runs one command
-line (`args` without the program name) and returns its exit code; the swath binary is
-`command.Exit(command.Main(...))` and nothing else. This package links the whole command, its providers and its
-Parquet writer, which `Source` does not.
-
-```go
-command.Exit(command.Main(context.Background(), "example-host", os.Args[1:], os.Stdout, os.Stderr))
-```
-
-`Main` is for a process dedicated to the call, such as a child the host starts for one command line. It sets the
-command's process-wide policy when it is called, never when the package is imported, and does not undo it when it
-returns: the Azure SDK's own log is turned off, SIGINT, SIGTERM and SIGHUP stop the run, SIGPIPE is ignored, and a
-run that has not finished stopping within the shutdown grace ends the process. Terminal detection (`--format auto`,
-color, the live progress line) follows the `stdout` and `stderr` given to `Main`: a writer that is not an `*os.File`
-is not a terminal. `command.Exit` ends the process as the binary does: on Unix, a run a signal stopped dies by that
-signal.
-
-`host` names the program this copy is built into (the binary passes `""`), and `--version` then says so. The version that
-`--version`, the run report, the journal, Parquet `created_by` and the User-Agent give is swath's own: the version
-of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision.
 
 ## Not in the library yet
 

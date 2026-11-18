@@ -23,7 +23,7 @@ files=4 dirs=3 bytes=470003 errors=0 rows=7 object_bytes=470003 wall=0.000s user
 ## Options
 
 Generated from the flag table, as `--help` prints them; `TestDocsCLIFlags` fails when a block is stale
-(`UPDATE=1 go test ./command -run TestDocsCLIFlags` rewrites it) and `TestHelpGroupsCoverFlags` when a
+(`UPDATE=1 go test ./internal/command -run TestDocsCLIFlags` rewrites it) and `TestHelpGroupsCoverFlags` when a
 flag is in no group. `swath diag list`:
 
 <!-- diag-list:begin -->

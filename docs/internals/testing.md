@@ -83,7 +83,7 @@ suites for changed modules and their dependants, not a guessed subset of individ
 |---|---|
 | `reader/**` | reader and main (main builds the local reader through `go.work`) |
 | `objfile/**` | object-file module; main only if a local module dependency is added |
-| `cmd/**`, `command/**`, `internal/**`, `source/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
+| `cmd/**`, `internal/**`, `source/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
 | Pages under `docs/` (`docs/**/*.md`) but the light ones below and the provider evidence | the [docs tier](#docs-tier) (`go-docs`) alone; with a main-module input, main instead, whose race shards run the same tests |
 | Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
@@ -206,8 +206,8 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 | `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/inventory` | ubuntu-24.04-arm | `inventory-rest`'s |
 | `remote-crash` | `-run '^TestRemoteCrashMatrix$' ./internal/inventory` | ubuntu-24.04-arm | `inventory-rest`'s |
 | `inventory-rest` | `-skip` the three patterns above, `./internal/inventory` | ubuntu-24.04-arm | `go-race-inventory-rest` |
-| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./command` | ubuntu-24.04-arm | `cmd`'s |
-| `cmd` | `-skip` the pattern above, `./command` | ubuntu-24.04-arm | `go-race-cmd` |
+| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./internal/command` | ubuntu-24.04-arm | `cmd`'s |
+| `cmd` | `-skip` the pattern above, `./internal/command` | ubuntu-24.04-arm | `go-race-cmd` |
 | `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest | `go-race-rest-replay` |
 | `rest-source` | `./internal/source/...` | ubuntu-latest | `go-race-rest-source` |
 | `rest` | every package no row names (a new package lands here) | ubuntu-latest | `go-race-rest` |
@@ -478,7 +478,7 @@ only the two named.
 | `SWATH_GROWTH=1` | the 10,000-part arm of `TestPartCountGrowth` | `internal/inventory` | never |
 | `SWATH_VERIFY_DIR=DIR` | `TestVerifyThroughput` | `internal/inventory` | never |
 | `SWATH_VERIFIER_FIXTURES=DIR` | `TestVerifierFixtures`, run by `test_dataset_readers.py` | `internal/inventory` | never |
-| `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `command/testdata`, `docs/internals/counters.md`, the report schema | `command`, `internal/source/s3`, `internal/inventory` | never; the comparisons run in the default suite |
+| `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `internal/command/testdata`, `docs/internals/counters.md`, the report schema | `internal/command`, `internal/source/s3`, `internal/inventory` | never; the comparisons run in the default suite |
 | `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in the default suite |
 
 The heap tier exists because the full arms allocate hundreds of MiB and measure the live heap, which `-race`

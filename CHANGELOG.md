@@ -85,14 +85,6 @@ Notable changes per release. The human summary of the current release is in the
   `GOMAXPROCS` ([library guide](docs/library.md#a-local-directory)).
 - `objfile`: an `Observer` on the context also receives a live source's requests, every attempt with its retries:
   a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
-- `command` (experimental) is the swath command line as a function: `Main(ctx, host, args, stdout, stderr)` runs
-  one command line and returns its exit code, `Exit` exits with it as the binary does, and `host` names the program
-  that embeds it, which `--version` then states. `cmd/swath` is `command.Exit(command.Main(...))`. The process-wide
-  policy is set when `Main` is called, never at import, and terminal detection follows the streams it is given
-  ([library guide](docs/library.md#run-the-command-line)).
-- In a program that embeds swath, the build that `--version`, the run report, the journal, Parquet `created_by`
-  and the User-Agent name is swath's version among the host's dependencies (`devel` for a local replacement or a
-  workspace module), not the host's version and revision.
 - GCS: a redirect's error message leaves out the target's query. Azure Blob: the Azure SDK's log never sees an
   error answer's body, so a SAS echoed in it is not logged; swath still reports the service's error code.
 
