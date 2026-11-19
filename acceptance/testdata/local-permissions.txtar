@@ -1,0 +1,69 @@
+# A directory the user cannot read: every command still writes its output,
+# leaves the directory's contents out, says so, and exits 3 (incomplete).
+# The readable part of tree.spec is 2 files of 5+70 = 75 bytes and 2
+# directories; locked/hidden.txt (1000 bytes) must be missing everywhere.
+
+[windows] skip 'chmod 000 does not make a directory unreadable on Windows'
+
+mktree p tree.spec
+chmod 000 p/locked
+# The suite must not run as root, which reads the directory anyway.
+! exists p/locked/hidden.txt
+
+exits 3 swath du p
+stdout -count=2 '\n'
+[expect:v0.4.0] stdout '^total\t0\t2\t2\t75\t0\t[0-9]+\t0\t2026-01-05T00:00:00\.000000Z\tsize\tname\ttrue\t$'
+# #660: a local tree whose listing reads blocks leads with the space on disk.
+[expect:current] stdout '^total\t0\t2\t2\t75\t0\t[0-9]+\t0\t2026-01-05T00:00:00\.000000Z\tallocated_bytes\tname\ttrue\t$'
+stderr '\Aswath: warning: unreadable entries:\n  locked: permission denied\n  partial: 1 unreadable entry; 2 files, 2 directories, '
+[expect:v0.4.0] stderr '^  partial: 1 unreadable entry; 2 files, 2 directories, 75 B in '
+# #660: the closing line gives the space on disk, the figure that leads.
+[expect:current] stderr '^  partial: 1 unreadable entry; 2 files, 2 directories, [0-9.]+ [KMG]?i?B on disk in '
+
+exits 3 swath list p --columns key,kind,size --no-dirs
+cmp stdout want-files.tsv
+stderr '^  partial: 1 unreadable entry; 2 entries, 75 B in '
+
+exits 3 swath list p -o pds --report report.json
+! stdout .
+stderr '^  partial: 1 unreadable entry; 4 entries, 75 B in .* → pds \(1 part, '
+exists pds/manifest.json pds/run.json
+! exists pds/error.json
+dataset pds 'SELECT decode(key), kind FROM ds'
+cmp stdout want-rows.tsv
+json pds/manifest.json extensions.swath.coverage.complete extensions.swath.coverage.stop_reason extensions.swath.coverage.unreadable extensions.swath.committed_object_bytes
+stdout '\Afalse\n"end_of_scope"\n1\n75\n\z'
+json report.json outcome.class outcome.exit_code outcome.resumable outcome.status outcome.complete outcome.unreadable output.rows_committed
+stdout '\A"incomplete"\n3\nfalse\n"committed"\nfalse\n1\n4\n\z'
+
+exec swath show pds
+stdout '\Apds: partial: 1 unreadable entry\n'
+stdout '^  contents  4 entries, 75 B; keys "locked/" \.\. "top"$'
+stdout '^  coverage  1 entry unreadable; no filters; no exclusions$'
+
+exits 3 swath du --from-dataset pds --apparent-size --format jsonl
+stdout '\A\{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":2,"size":75,"size_missing":0,'
+stdout '"complete":false,"stop_reason":"end_of_scope","unreadable":1,'
+stderr '^swath: 1 entry could not be read when the dataset was listed: the totals leave it out$'
+
+# Fixing the permission and listing again gives the whole tree.
+chmod 755 p/locked
+exec swath list p -o pds --overwrite
+json pds/manifest.json extensions.swath.coverage.complete extensions.swath.coverage.unreadable extensions.swath.committed_object_bytes
+stdout '\Atrue\n0\n1075\n\z'
+
+-- tree.spec --
+dir locked 2026-01-01T00:00:00Z
+file locked/hidden.txt 1000 2026-01-09T00:00:00Z
+dir open 2026-01-01T00:00:00Z
+file open/f 5 2026-01-05T00:00:00Z
+file top 70 2026-01-02T00:00:00Z
+-- want-files.tsv --
+key	kind	size
+open/f	file	5
+top	file	70
+-- want-rows.tsv --
+locked/	dir
+open/	dir
+open/f	file
+top	file

@@ -1,0 +1,63 @@
+# A dataset written by swath 0.4.0 must stay readable and usable by every
+# later build. testdata/compat-v040/ holds it as 0.4.0 wrote it (manifest,
+# cuts.txt and parts; its run report and .swath/ workspace left out). It was
+# made on linux-amd64 with the release archive's binaries from keys.tsv
+# below (600 logs/NNNN.gz of 1..600 bytes, 600 img/NNNN.png of 1..600 bytes:
+# 1,200 objects, 360,600 bytes):
+#
+#   swath-replay serve --fixture keys.tsv --bucket bkt --port 0
+#   swath list s3://bkt --endpoint-url http://127.0.0.1:PORT --anonymous --part-max-rows 500 -o v040
+
+mkdir v040/data
+cp $TESTDATA/compat-v040/manifest.json v040/manifest.json
+cp $TESTDATA/compat-v040/cuts.txt v040/cuts.txt
+cp $TESTDATA/compat-v040/data/part-00000.parquet v040/data/part-00000.parquet
+cp $TESTDATA/compat-v040/data/part-00001.parquet v040/data/part-00001.parquet
+cp $TESTDATA/compat-v040/data/part-00002.parquet v040/data/part-00002.parquet
+
+# The files are as 0.4.0 wrote them: each part has the manifest's digest.
+dataset v040 'SELECT key, size FROM ds'
+seq want-rows.tsv 600 'img/%04[1]d.png\t%[1]d'
+seq want-rows.tsv 600 'logs/%04[1]d.gz\t%[1]d'
+cmp stdout want-rows.tsv
+! json v040/manifest.json extensions.swath.written_by
+
+exec swath show v040
+stdout -count=6 '\n'
+stdout '\Av040: complete\n'
+stdout '^  source    s3://bkt \(whole bucket\)$'
+# The time is the manifest's, in the local zone (TZ=UTC; Windows keeps the runner's).
+[!windows] stdout '^  listed    2026-11-19 10:40:23 to 10:40:23 UTC \(0\.0s\)$'
+[windows] stdout '^  listed    \d{4}-\d\d-\d\d \d\d:\d\d:\d\d to \d\d:\d\d:\d\d \S+ \(0\.0s\)$'
+stdout '^  contents  1,200 objects, 352 KiB; keys "img/0001\.png" \.\. "logs/0600\.gz"$'
+stdout '^  coverage  nothing unreadable; no filters; no exclusions$'
+[expect:v0.4.0] stdout '^  storage   3 parts, 7\.83 KiB of Parquet \(SeekParquet format 0 draft 1, schema swath/s3-objects/v1\)$'
+# #620: swath show names the storage by its parts and schema; -v adds the format id.
+[expect:current] stdout '^  storage   3 parts, 7\.83 KiB of Parquet \(schema swath/s3-objects/v1\)$'
+
+exec swath du --from-dataset v040 -d 1 --format tsv
+stdout -count=4 '\n'
+stdout '^total\t0\t1200\t360600\t0\t\\N\t1200\t2026-01-02T00:00:00\.000000Z\tsize\tname\tfalse\t$'
+stdout '^prefix\t1\t600\t180300\t0\t\\N\t600\t2026-01-02T00:00:00\.000000Z\tsize\tname\tfalse\timg/$'
+stdout '^prefix\t1\t600\t180300\t0\t\\N\t600\t2026-01-01T00:00:00\.000000Z\tsize\tname\tfalse\tlogs/$'
+[!windows] stderr '^swath: totals of the dataset v040, not a live listing: s3://bkt as listed 2026-11-19 10:40:23 UTC \(.*\); complete$'
+[windows] stderr '^swath: totals of the dataset v040, not a live listing: s3://bkt as listed .*; complete$'
+
+exec swath resume v040
+
+# A new listing of the same bucket starts from the old dataset's cut file.
+seq keys.tsv 600 'logs/%04[1]d.gz\t%[1]d\t1767225600000000'
+seq keys.tsv 600 'img/%04[1]d.png\t%[1]d\t1767312000000000'
+replay --fixture keys.tsv --bucket bkt
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --seed-from v040 -o new --report seeded.json
+json seeded.json invocation.prior
+stdout '\A\{"counted":true,"cuts":3,"cuts_file":"read","path":"v040","source":"dataset"\}\n\z'
+dataset new 'SELECT key, size FROM ds'
+cmp stdout want-rows.tsv
+
+# The old dataset can be replaced in place.
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous -o v040 --overwrite
+json v040/manifest.json extensions.swath.committed_object_bytes
+stdout '\A360600\n\z'
+dataset v040 'SELECT count(*) FROM ds'
+stdout '\A1200\n\z'

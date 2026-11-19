@@ -1,0 +1,181 @@
+# A bucket served over the Cloud Storage JSON API by swath-replay. The
+# listing must equal the key list exactly: every name once, in unsigned byte
+# order, whatever order the fixture gives them in. keys.tsv is hostile.tsv
+# (13 names, 90 bytes, newest 2026-06-01; GCS refuses a line feed in a name)
+# and 2,500 names zz/00001..zz/02500 whose sizes are 1..2500 (3,126,250
+# bytes): 2,513 objects, 3,126,340 bytes. The server fills what a key list
+# does not give (etag, generation, storage class, content type) with fixed
+# synthetic values.
+
+cp hostile.tsv keys.tsv
+seq keys.tsv 2500 'zz/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt --protocols gcs
+
+# The bare listing on a pipe: TSV, every column, every name, escaped.
+exec swath list gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous
+cp want-hostile.tsv want-all.tsv
+seq want-all.tsv 2500 'zz/%05[1]d\t%[1]d\t2026-01-01T00:00:00.000000Z\tswath-gcs-synthetic-v1\t1\t1\tSTANDARD\t\\N\t\\N\tapplication/octet-stream\t\\N'
+cmp stdout want-all.tsv
+
+exec swath list gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous --exclude 'zz/**' --format jsonl --columns key,size,last_modified,generation
+cmp stdout want-hostile.jsonl
+
+# Filters. An include with a literal prefix narrows the listing.
+exec swath list gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous --include 'z/*' --columns key,size --report narrowed.json
+cmp stdout want-z.tsv
+json narrowed.json invocation.narrowing invocation.source
+stdout '\A"narrowed"\n"gs://bkt/z/"\n\z'
+exec swath list gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous --exclude-regex '^zz/' --exclude-regex '^a' --max-size 9 --columns key
+stdout '\Akey\nB\nback\\\\slash\ncafé\n\z'
+exec swath list gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous --modified-since 2026-03-01T00:00:00Z --columns key,last_modified --no-header
+stdout '\Aa/x\t2026-06-01T00:00:00\.000000Z\n\z'
+
+# Totals.
+exec swath du gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous
+stdout '\Arow_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n'
+stdout '\ntotal\t0\t2513\t3126340\t0\t\\N\t2513\t2026-06-01T00:00:00\.000000Z\tsize\tname\tfalse\t\n\z'
+exec swath du gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous -d 1 --format jsonl
+cmp stdout want-du-1.jsonl
+
+# The dataset, in parts of at most 1,000 rows.
+exec swath list gs://bkt --endpoint-url $REPLAY/storage/v1/ --anonymous -o ds --part-max-rows 1000 --report report.json
+! stdout .
+exists ds/manifest.json ds/run.json ds/cuts.txt
+! exists ds/error.json
+dataset ds 'SELECT * FROM ds_schema'
+cmp stdout want-schema.tsv
+dataset ds 'SELECT column_name, column_type FROM (DESCRIBE ds)'
+cmp stdout want-types.tsv
+dataset ds 'SELECT CASE WHEN regexp_matches(key, ''[\t\n\\]'') THEN ''hex:'' || hex(key) ELSE key END, size, epoch_us(last_modified), etag, generation, metageneration, storage_class, md5, crc32c, content_type, created_at FROM ds'
+cp want-rows-hostile.tsv want-rows.tsv
+seq want-rows.tsv 2500 'zz/%05[1]d\t%[1]d\t1767225600000000\tswath-gcs-synthetic-v1\t1\t1\tSTANDARD\tNULL\tNULL\tapplication/octet-stream\tNULL'
+cmp stdout want-rows.tsv
+
+json ds/manifest.json format schema_id key extensions.swath.version extensions.swath.source extensions.swath.scope extensions.swath.coverage.complete extensions.swath.coverage.stop_reason extensions.swath.coverage.unreadable extensions.swath.coverage.filters extensions.swath.coverage.exclusions extensions.swath.collected extensions.swath.committed_object_bytes
+cmp stdout want-manifest.txt
+json ds/manifest.json parts.0.rows parts.0.min_key_base64 parts.1.rows parts.2.rows parts.2.max_key_base64
+stdout '\A1000\n"Qg=="\n1000\n513\n"enovMDI1MDA="\n\z'
+! json ds/manifest.json parts.3
+json report.json outcome.class outcome.exit_code outcome.status outcome.complete output.rows_committed output.committed_object_bytes invocation.schema_id
+stdout '\A"ok"\n0\n"committed"\ntrue\n2513\n3126340\n"swath/gcs-objects/v1"\n\z'
+
+exec swath show ds
+stdout -count=6 '\n'
+stdout '\Ads: complete\n'
+stdout '^  source    gs://bkt \(whole bucket\)$'
+stdout '^  contents  2,513 objects, 2\.98 MiB; keys "B" \.\. "zz/02500"$'
+stdout '^  coverage  nothing unreadable; no filters; no exclusions$'
+[expect:v0.4.0] stdout '^  storage   3 parts, [0-9.]+ KiB of Parquet \(SeekParquet format 0 draft 1, schema swath/gcs-objects/v1\)$'
+# #620: swath show names the storage by its parts and schema; -v adds the format id.
+[expect:current] stdout '^  storage   3 parts, [0-9.]+ KiB of Parquet \(schema swath/gcs-objects/v1\)$'
+
+exec swath du --from-dataset ds -d 1 --format jsonl
+stdout '\A\{"row_type":"total","depth":0,"prefix":"","objects":2513,"size":3126340,'
+stdout '^\{"row_type":"prefix","depth":1,"prefix":"zz/","objects":2500,"size":3126250,'
+
+-- hostile.tsv --
+# key	size	last_modified_us
+z/%F0%9F%98%80	13	1767225600000000
+tab%09here	11	1767225600000000
+a0	7	1767225600000000
+a/	0	1767225600000000
+B	1	1767312000000000
+a%20b	2	1767225600000000
+z/%EF%BD%9E	12	1767225600000000
+a-b	3	1767225600000000
+back%5Cslash	8	1767225600000000
+a.b	4	1767225600000000
+a/x	6	1780272000000000
+caf%C3%A9	9	1767225600000000
+z/%E6%97%A5%E6%9C%AC	14	1767225600000000
+-- want-hostile.tsv --
+key	size	last_modified	etag	generation	metageneration	storage_class	md5	crc32c	content_type	created_at
+B	1	2026-01-02T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+a b	2	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+a-b	3	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+a.b	4	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+a/	0	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+a/x	6	2026-06-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+a0	7	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+back\\slash	8	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+café	9	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+tab\there	11	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+z/日本	14	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+z/～	12	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+z/😀	13	2026-01-01T00:00:00.000000Z	swath-gcs-synthetic-v1	1	1	STANDARD	\N	\N	application/octet-stream	\N
+-- want-hostile.jsonl --
+{"key":"B","size":1,"last_modified":"2026-01-02T00:00:00.000000Z","generation":1}
+{"key":"a b","size":2,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"a-b","size":3,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"a.b","size":4,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"a/","size":0,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"a/x","size":6,"last_modified":"2026-06-01T00:00:00.000000Z","generation":1}
+{"key":"a0","size":7,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"back\\slash","size":8,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"café","size":9,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"tab\there","size":11,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"z/日本","size":14,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"z/～","size":12,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+{"key":"z/😀","size":13,"last_modified":"2026-01-01T00:00:00.000000Z","generation":1}
+-- want-z.tsv --
+key	size
+z/日本	14
+z/～	12
+z/😀	13
+-- want-du-1.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":2513,"size":3126340,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2513,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"size":6,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"z/","objects":3,"size":39,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"zz/","objects":2500,"size":3126250,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2500,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- want-schema.tsv --
+key	BYTE_ARRAY	REQUIRED	UTF8
+size	INT64	OPTIONAL	INT_64
+last_modified	INT64	OPTIONAL	TIMESTAMP_MICROS
+etag	BYTE_ARRAY	OPTIONAL	UTF8
+generation	INT64	OPTIONAL	INT_64
+metageneration	INT64	OPTIONAL	INT_64
+storage_class	BYTE_ARRAY	OPTIONAL	UTF8
+md5	BYTE_ARRAY	OPTIONAL	UTF8
+crc32c	BYTE_ARRAY	OPTIONAL	UTF8
+content_type	BYTE_ARRAY	OPTIONAL	UTF8
+created_at	INT64	OPTIONAL	TIMESTAMP_MICROS
+-- want-types.tsv --
+key	VARCHAR
+size	BIGINT
+last_modified	TIMESTAMP WITH TIME ZONE
+etag	VARCHAR
+generation	BIGINT
+metageneration	BIGINT
+storage_class	VARCHAR
+md5	VARCHAR
+crc32c	VARCHAR
+content_type	VARCHAR
+created_at	TIMESTAMP WITH TIME ZONE
+-- want-rows-hostile.tsv --
+B	1	1767312000000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+a b	2	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+a-b	3	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+a.b	4	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+a/	0	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+a/x	6	1780272000000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+a0	7	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+hex:6261636B5C736C617368	8	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+café	9	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+hex:7461620968657265	11	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+z/日本	14	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+z/～	12	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+z/😀	13	1767225600000000	swath-gcs-synthetic-v1	1	1	STANDARD	NULL	NULL	application/octet-stream	NULL
+-- want-manifest.txt --
+"seekparquet"
+"swath/gcs-objects/v1"
+{"column":"key","unique":true}
+1
+{"container":"bkt","kind":"gcs","uri":"gs://bkt"}
+{"kind":"whole"}
+true
+"end_of_scope"
+0
+[]
+[]
+{"columns":[]}
+3126340
