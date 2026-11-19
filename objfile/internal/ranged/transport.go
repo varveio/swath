@@ -27,11 +27,10 @@ import (
 // given; Transport also checks the requests an SDK sends on its own.
 //
 // A body that fails part way ends there instead (io.EOF), so that the SDK
-// does not request the rest itself: the GCS reader would, and for a response
-// labelled Content-Encoding: gzip it then skips as many bytes of that answer
-// as it had read, joining two parts of the object. The Object requests the
-// rest of a short body itself, checked as every request is. Responses to
-// other requests, and error statuses, pass unchanged.
+// does not request the rest itself: the GCS reader would, and check only
+// that answer's status. The Object requests the rest of a short body itself,
+// checked as every request is. Responses to other requests, and error
+// statuses, pass unchanged.
 func Transport(base http.RoundTripper) http.RoundTripper { return transport{base: base} }
 
 type transport struct{ base http.RoundTripper }

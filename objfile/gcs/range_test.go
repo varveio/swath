@@ -75,15 +75,19 @@ func TestServedRange(t *testing.T) {
 		// unguarded and guarded are the outcome without and with the
 		// transport.
 		unguarded, guarded string
-		serve              func(w http.ResponseWriter, start, end int, attempt int32)
+		// cut: the first body is cut part way, and the rest is requested
+		// by the SDK itself without the transport, by objfile (a second
+		// range request of its own) with it.
+		cut   bool
+		serve func(w http.ResponseWriter, start, end int, attempt int32)
 	}{
-		{"exact", exact, exact, func(w http.ResponseWriter, start, end int, _ int32) { partial(w, data, start, end) }},
-		{"ignored", fails, fails, func(w http.ResponseWriter, _, _ int, _ int32) {
+		{"exact", exact, exact, false, func(w http.ResponseWriter, start, end int, _ int32) { partial(w, data, start, end) }},
+		{"ignored", fails, fails, false, func(w http.ResponseWriter, _, _ int, _ int32) {
 			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 			_, _ = w.Write(data)
 		}},
-		{"shifted", fails, fails, func(w http.ResponseWriter, start, end int, _ int32) { partial(w, data, start+1, end+1) }},
-		{"cut, then the rest", exact, exact, func(w http.ResponseWriter, start, end int, attempt int32) {
+		{"shifted", fails, fails, false, func(w http.ResponseWriter, start, end int, _ int32) { partial(w, data, start+1, end+1) }},
+		{"cut, then the rest", exact, exact, true, func(w http.ResponseWriter, start, end int, attempt int32) {
 			if attempt == 1 {
 				cut(w, data, start, end, 2)
 				return
@@ -92,18 +96,18 @@ func TestServedRange(t *testing.T) {
 		}},
 		// The SDK checks only the status of the request it sends for the
 		// rest: without the transport the read returns another range's bytes.
-		{"cut, then the rest shifted", wrong, fails, func(w http.ResponseWriter, start, end int, attempt int32) {
+		{"cut, then the rest shifted", wrong, fails, true, func(w http.ResponseWriter, start, end int, attempt int32) {
 			if attempt == 1 {
 				cut(w, data, start, end, 2)
 				return
 			}
 			partial(w, data, start+1, end+1)
 		}},
-		// An object stored with Content-Encoding: gzip, read as stored: the
-		// SDK requests the rest itself and skips as many bytes of that
-		// answer as it had read, so without the transport (which ends the
-		// cut body instead) the read joins two parts of the object.
-		{"gzip, cut at a quarter, then the rest", wrong, exact, func(w http.ResponseWriter, start, end int, attempt int32) {
+		// An object stored with Content-Encoding: gzip, read as stored:
+		// without the transport the SDK requests the rest itself and reads
+		// that 206 from its start; with it the cut body ends and objfile
+		// requests the rest.
+		{"gzip, cut at a quarter, then the rest", exact, exact, true, func(w http.ResponseWriter, start, end int, attempt int32) {
 			w.Header().Set("Content-Encoding", "gzip")
 			if attempt == 1 {
 				cut(w, data, start, end, 4)
@@ -128,8 +132,9 @@ func TestServedRange(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				obs := &objfiletest.Observer{}
 				p := make([]byte, n)
-				_, err = f.ReadAt(p, off)
+				_, err = f.WithContext(objfile.WithObserver(context.Background(), obs)).ReadAt(p, off)
 				got := fails
 				if err == nil {
 					got = wrong
@@ -143,6 +148,13 @@ func TestServedRange(t *testing.T) {
 				}
 				if got != want {
 					t.Fatalf("read: %s (%v), want %s", got, err, want)
+				}
+				wantReqs := 1 // the first; the SDK requests the rest itself
+				if c.cut && guard {
+					wantReqs = 2 // the first and objfile's request for the rest
+				}
+				if reqs := obs.Count(objfile.RangeRequest); c.cut && reqs != wantReqs {
+					t.Fatalf("objfile made %d range requests, want %d", reqs, wantReqs)
 				}
 			})
 		}
@@ -210,10 +222,10 @@ func wholeClientOver(t *testing.T, url string, guard bool, base http.RoundTrippe
 }
 
 // TestReadObjectCut: a whole-object read of a gzip-labelled object whose
-// body is cut at a quarter. The SDK requests the rest itself and skips as
-// many bytes of that answer as it had read, joining two parts of the
-// object; with the transport the body ends where it was cut instead, and
-// ReadObject reads the rest as a checked ranged read.
+// body is cut at a quarter reads the object at its generation. Without the
+// transport the SDK requests the rest itself and reads that 206 from its
+// start; with it the body ends where it was cut, and ReadObject reads the
+// rest as a checked ranged read of its own.
 func TestReadObjectCut(t *testing.T) {
 	data := objfiletest.Data(10000, 4) // a quarter is not a multiple of Data's period
 	for _, guard := range []bool{false, true} {
@@ -226,13 +238,18 @@ func TestReadObjectCut(t *testing.T) {
 			}
 			_, _ = w.Write(data)
 		})
-		b, id, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
-		exact := err == nil && bytes.Equal(b, data)
-		if guard && (!exact || id != "7") {
-			t.Fatalf("guarded ReadObject of a cut body: %d bytes, %q, %v; want the object", len(b), id, err)
+		obs := &objfiletest.Observer{}
+		ctx := objfile.WithObserver(context.Background(), obs)
+		b, id, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(ctx, "obj", 1<<20)
+		if err != nil || !bytes.Equal(b, data) || id != "7" {
+			t.Fatalf("ReadObject of a cut body (guarded=%t): %d bytes, %q, %v; want the object", guard, len(b), id, err)
 		}
-		if !guard && exact {
-			t.Fatal("unguarded ReadObject of a cut gzip body read the object: the SDK no longer joins parts, so the transport may not be needed")
+		wantReqs := 0 // the SDK requests the rest itself
+		if guard {
+			wantReqs = 1 // objfile's request for the rest
+		}
+		if reqs := obs.Count(objfile.RangeRequest); reqs != wantReqs {
+			t.Fatalf("ReadObject of a cut body (guarded=%t): objfile made %d range requests for the rest, want %d", guard, reqs, wantReqs)
 		}
 	}
 }
