@@ -701,7 +701,7 @@ jobs:
   # The black-box acceptance suite (acceptance/, its own module) on built binaries, through the
   # reusable acceptance.yml. The policy picks the legs: `acceptance` the candidate's (go-build's
   # binaries of this commit against the v0.4.0 swath-replay; linux on a PR that selects the main
-  # module, all five targets on main, dispatch, full-scope PRs and suite changes), and
+  # module, all five targets on main, dispatch, full-scope and cross-OS PRs and suite changes), and
   # `acceptance_baseline` the published v0.4.0 archives' (all five when the suite or its workflow
   # changes, and on dispatch). Neither job has a job-level `if:`: with no leg selected, the called
   # workflow runs one `off` leg whose steps skip, so the job succeeds and ci-gate stays strict.

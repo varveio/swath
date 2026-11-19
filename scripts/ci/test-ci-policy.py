@@ -176,7 +176,8 @@ class PolicyTests(unittest.TestCase):
         cases = [
             (['internal/x.go'], 'pull_request', {}, 'linux', 'off'),
             (['reader/read.go'], 'pull_request', {}, 'linux', 'off'),
-            (['internal/journal/lock.go'], 'pull_request', {}, 'linux', 'off'),
+            (['internal/journal/lock.go'], 'pull_request', {}, 'all', 'off'),
+            (['go.sum'], 'pull_request', {}, 'all', 'off'),
             (['objfile/object.go'], 'pull_request', {}, 'off', 'off'),
             (['docs/start-here.md'], 'pull_request', {}, 'off', 'off'),
             (['README.md'], 'pull_request', {}, 'off', 'off'),

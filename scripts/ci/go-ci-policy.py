@@ -104,11 +104,12 @@ def acceptance(paths, out, event, *, unknown=False):
     """The acceptance suite's legs (.github/workflows/acceptance.yml): `acceptance` the candidate's,
     go-build's binaries of this commit (off, linux for linux-amd64, or all five targets), and
     `acceptance_baseline` the published v0.4.0 archives' (off or all). A change to the suite or its
-    workflow runs both on every target; a full run (main, dispatch, ci:full, CI changes) the
-    candidate on every target; a pull request that selects the main module the candidate on Linux."""
+    workflow runs both on every target; a full run (main, dispatch, ci:full, CI changes) and a pull
+    request that selects the cross-OS legs (`platforms`) the candidate on every target; any other
+    pull request that selects the main module the candidate on Linux."""
     suite = (unknown or event == 'workflow_dispatch'
              or any(path.startswith(ACCEPTANCE_DIR) or path == ACCEPTANCE_WORKFLOW for path in paths))
-    candidate = 'all' if suite or out['full'] else 'linux' if out['go'] else 'off'
+    candidate = 'all' if suite or out['full'] or out['platforms'] else 'linux' if out['go'] else 'off'
     return {'acceptance': candidate, 'acceptance_baseline': 'all' if suite else 'off'}
 
 
