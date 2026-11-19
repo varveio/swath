@@ -172,13 +172,17 @@ class PolicyTests(unittest.TestCase):
                                       build_tags=True)['platforms'])
 
     def test_acceptance_legs(self):
-        # (paths, event, select() keywords) -> (candidate legs, baseline legs)
+        # The path detect() takes, selection() with the repository's own go.mod files, so a change
+        # to a module main requires selects main, and the candidate, through the closure.
+        manifests = {key: (ROOT / path).read_text() for key, path in policy.MODULES.items()}
+        # (paths, event, selection() keywords) -> (candidate legs, baseline legs)
         cases = [
             (['internal/x.go'], 'pull_request', {}, 'linux', 'off'),
             (['reader/read.go'], 'pull_request', {}, 'linux', 'off'),
             (['internal/journal/lock.go'], 'pull_request', {}, 'all', 'off'),
             (['go.sum'], 'pull_request', {}, 'all', 'off'),
-            (['objfile/object.go'], 'pull_request', {}, 'off', 'off'),
+            # The root go.mod requires objfile: main and the candidate follow.
+            (['objfile/object.go'], 'pull_request', {}, 'linux', 'off'),
             (['docs/start-here.md'], 'pull_request', {}, 'off', 'off'),
             (['README.md'], 'pull_request', {}, 'off', 'off'),
             (['acceptance/testdata/local.txtar'], 'pull_request', {}, 'all', 'all'),
@@ -186,7 +190,7 @@ class PolicyTests(unittest.TestCase):
             (['.github/workflows/acceptance.yml'], 'pull_request', {}, 'all', 'all'),
             (['.github/workflows/ci.yml'], 'pull_request', {}, 'all', 'off'),
             (['scripts/ci/go-ci-policy.py'], 'pull_request', {}, 'all', 'off'),
-            (['README.md'], 'pull_request', dict(force_full=True), 'all', 'off'),
+            (['README.md'], 'pull_request', dict(labels=['ci:full']), 'all', 'off'),
             (['README.md'], 'push', {}, 'all', 'off'),
             (['internal/x.go'], 'push', {}, 'all', 'off'),
             (['acceptance/testdata/local.txtar'], 'push', {}, 'all', 'all'),
@@ -195,9 +199,9 @@ class PolicyTests(unittest.TestCase):
         ]
         for paths, event, kwargs, candidate, baseline in cases:
             with self.subTest(paths=paths, event=event, kwargs=kwargs):
-                out = policy.select(paths, event, **kwargs)
-                got = policy.acceptance(paths, out, event, unknown=kwargs.get('unknown', False))
-                self.assertEqual(got, {'acceptance': candidate, 'acceptance_baseline': baseline})
+                kwargs = dict(kwargs)
+                got = policy.selection(paths, event, kwargs.pop('labels', []), manifests, **kwargs)
+                self.assertEqual((got['acceptance'], got['acceptance_baseline']), (candidate, baseline))
 
     def test_acceptance_workflow_legs(self):
         # The plan step of acceptance.yml: the legs each `platforms` value expands to.

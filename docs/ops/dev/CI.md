@@ -106,9 +106,9 @@ Cache maintenance is a separate housekeeping workflow and is not gated. Neither 
 ## Change detection
 
 [`scripts/ci/go-ci-policy.py`](../../../scripts/ci/go-ci-policy.py) selects complete Go modules and
-tiers. PR selection follows changed paths and local module dependencies: reader changes include main,
-object-file changes stay independent unless a consumer is added, and main changes do not retest an
-unchanged independent module. Testdata, embedded files, generated-help documents and external replay
+tiers. PR selection follows changed paths and local module dependencies: reader and object-file
+changes include main, whose `go.mod` requires both, and main changes do not retest an unchanged
+nested module. Testdata, embedded files, generated-help documents and external replay
 fixtures are inputs too. The exact module/tier mapping and escalation rules live in
 [Go testing](../../internals/testing.md#change-detection); regression cases exercise the actual selector,
 workflow matrix shell, rename/deletion behavior and the gate.
