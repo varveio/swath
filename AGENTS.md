@@ -96,7 +96,8 @@ that run the built binaries as a user does, on every platform, against v0.4.0 an
 ## The Go code
 
 - The module `github.com/varveio/swath` is the repository root: the command in `cmd/swath`,
-  the replay server in `cmd/swath-replay`, the experimental live library in `source/`, packages
+  the replay server in `cmd/swath-replay`, the experimental live library in `source/`, the command line as
+  a function for a host program in `command/` (a thin public package over `internal/command`), packages
   under `internal/`. `objfile/` and `reader/`
   are nested modules with their own `go.mod`; the root `go.mod` requires their released versions and
   carries no `replace`, and `go.work` at the root joins the three modules so that local builds and CI
