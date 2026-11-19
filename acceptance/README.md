@@ -63,8 +63,8 @@ Commands beside testscript's own:
 | `replay FLAGS...` | starts `swath-replay serve --port 0 FLAGS`, waits up to 30 s for its startup line, sets `$REPLAY` to its endpoint, and kills it when the script ends |
 | `dataset DIR SQL` | checks each part `DIR/manifest.json` names (bytes, SHA-256, rows, no other part in `data/`), then runs SQL in DuckDB over table `ds` (the parts' rows in stored order) and `ds_schema` (the first part's Parquet columns), printing rows tab-separated with LF line ends |
 | `json FILE PATH...` | prints the JSON value at each dotted PATH; `! json FILE PATH` requires PATH absent |
-| `cmpform FILE WANT` | compares FILE (or `stdout`, `stderr`) with WANT line by line, `$VAR` expanded, every character exactly except the placeholders `{int}`, `{time}` (a UTC timestamp) and `{path}` (a temporary path) |
-| `digests DIR` | prints every directory and file below DIR, each file with its size and SHA-256, to show that a command changed nothing |
+| `cmpform FILE WANT` | compares FILE (or `stdout`, `stderr`) with WANT line by line, `$VAR` expanded, every character exactly except the placeholders `{int}` (an integer, zero too), `{pos}` (a positive integer), `{time}` (a UTC timestamp in the years 2000 to 2099) and `{path}` (a temporary path) |
+| `digests DIR` | prints every directory and file below DIR, each file with its size and SHA-256, to show that a command changed nothing; fails if DIR is not a directory, so a file in place of an empty directory does not print nothing too |
 
 Conditions beside testscript's own: `[expect:v0.4.0]` and `[expect:current]`, true when `SWATH_EXPECT` names
 them. Beside testscript's variables, `$TESTDATA` is this directory, `$UID` the user the suite runs as (not on
@@ -85,6 +85,8 @@ and the exact value on each side.
 Values that differ from run to run or machine to machine are matched by their form, by name: times a run takes
 or records, the build revision, temporary paths, directories' own sizes, link counts and access times, allocated
 bytes, inode, device and group numbers, change and birth times, and the local time zone's name on Windows.
+Where the filesystem guarantees a positive value (on Unix, a directory's own size, a non-empty file's allocated
+bytes, an allocation total over one), the form is `{pos}`, so a zero there fails.
 
 ## What it relies on in DuckDB
 

@@ -385,17 +385,19 @@ func compact(v any) string {
 // from run to run or machine to machine.
 var forms = map[string]string{
 	"{int}":  `[0-9]+`,
-	"{time}": `[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z`,
+	"{pos}":  `[1-9][0-9]*`,
+	"{time}": `20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z`,
 	"{path}": `[^\t"\n]+`,
 }
 
-var formRE = regexp.MustCompile(`\{(int|time|path)\}`)
+var formRE = regexp.MustCompile(`\{(int|pos|time|path)\}`)
 
 // cmpform FILE WANT compares FILE (or stdout or stderr) with WANT, line by
 // line and every character exactly, after expanding $VAR in WANT as cmpenv
 // does, except that a placeholder in WANT stands for one value of its form:
-// {int} a decimal integer, {time} a UTC timestamp (2026-01-02T03:04:05Z,
-// any fraction), {path} a temporary path (no tab, quote or line feed).
+// {int} a decimal integer, {pos} a positive one (no leading zero), {time} a
+// UTC timestamp in the years 2000 to 2099 (2026-01-02T03:04:05Z, any
+// fraction), {path} a temporary path (no tab, quote or line feed).
 func cmdCmpform(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) != 2 {
 		ts.Fatalf("usage: cmpform file want")
@@ -439,15 +441,22 @@ func lineForm(want string) *regexp.Regexp {
 // digests DIR prints a line for each directory and file below DIR, in
 // lexical order: a directory's slash-separated path and a slash, a file's
 // path, size and SHA-256. Comparing two of its outputs shows whether a
-// command changed anything in DIR.
+// command changed anything in DIR. DIR must be a directory: an empty one
+// prints nothing, so a file in its place must not print nothing too.
 func cmdDigests(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) != 1 {
 		ts.Fatalf("usage: digests dir")
 	}
 	root := ts.MkAbs(args[0])
 	ts.Check(filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || path == root {
+		if err != nil {
 			return err
+		}
+		if path == root {
+			if !d.IsDir() {
+				return fmt.Errorf("%s is not a directory", args[0])
+			}
+			return nil
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {

@@ -6,7 +6,9 @@
 # never read (so accessed at its modification time). What the filesystem
 # decides (a directory's own size, link count and access time, the group,
 # inode, device, allocated bytes, change and birth times) is checked for its
-# form only: {int} and {time} in the cmpform blocks.
+# form only: {int} and {time} in the cmpform blocks, and {pos} where ext4 and
+# APFS give a positive value (a directory's own size, a non-empty file's
+# allocated bytes, a total over one).
 
 mktree t tree.spec
 
@@ -80,7 +82,7 @@ exec swath du t -d 1 --apparent-size --format jsonl
 [!windows] [expect:v0.4.0] cmp stdout want-du-table-v040.txt
 # #620: the table heads the newest time under a prefix newest, as the view does.
 [!windows] [expect:current] cmp stdout want-du-table.txt
-[!windows] stderr '^  53\.9 KiB in 9 files · [0-9.]+ [KMG]?i?B on disk$'
+[!windows] stderr '^  53\.9 KiB in 9 files · [1-9][0-9.]* [KMG]?i?B on disk$'
 
 # A filter leaves out the directories and the files it does not select.
 exec swath du t --include '*.txt' --apparent-size --format tsv --no-header
@@ -245,21 +247,21 @@ deep/er/z.bin	0	2026-02-01T00:00:00.000000Z
 ünïcødé/日本語/ファイル 名.txt	800	2026-06-01T00:00:00.000000Z
 -- want-bare.tsv --
 key	size	last_modified	kind	mode	uid	gid	nlink	inode	dev	allocated_bytes	metadata_changed_at	accessed_at	created_at	link_target
-B.txt	6	2026-01-06T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-01-06T00:00:00.000000Z	$BORN	\N
-a b	20	2026-01-02T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-01-02T00:00:00.000000Z	$BORN	\N
-a-b	300	2026-01-03T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-01-03T00:00:00.000000Z	$BORN	\N
-a.txt	4000	2026-01-04T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-01-04T00:00:00.000000Z	$BORN	\N
-a/	{int}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
-a/x	1	2026-03-01T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-03-01T00:00:00.000000Z	$BORN	\N
-a0	50000	2026-01-05T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-01-05T00:00:00.000000Z	$BORN	\N
-café crème.txt	70	2026-01-07T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-01-07T00:00:00.000000Z	$BORN	\N
-deep/	{int}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
-deep/er/	{int}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
+B.txt	6	2026-01-06T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-01-06T00:00:00.000000Z	$BORN	\N
+a b	20	2026-01-02T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-01-02T00:00:00.000000Z	$BORN	\N
+a-b	300	2026-01-03T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-01-03T00:00:00.000000Z	$BORN	\N
+a.txt	4000	2026-01-04T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-01-04T00:00:00.000000Z	$BORN	\N
+a/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
+a/x	1	2026-03-01T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-03-01T00:00:00.000000Z	$BORN	\N
+a0	50000	2026-01-05T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-01-05T00:00:00.000000Z	$BORN	\N
+café crème.txt	70	2026-01-07T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-01-07T00:00:00.000000Z	$BORN	\N
+deep/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
+deep/er/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
 deep/er/z.bin	0	2026-02-01T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-02-01T00:00:00.000000Z	$BORN	\N
-empty/	{int}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
-ünïcødé/	{int}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
-ünïcødé/日本語/	{int}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
-ünïcødé/日本語/ファイル 名.txt	800	2026-06-01T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{int}	{time}	2026-06-01T00:00:00.000000Z	$BORN	\N
+empty/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
+ünïcødé/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
+ünïcødé/日本語/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
+ünïcødé/日本語/ファイル 名.txt	800	2026-06-01T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-06-01T00:00:00.000000Z	$BORN	\N
 -- want-bare-windows.tsv --
 key	size	last_modified	kind	mode	uid	gid	nlink	inode	dev	allocated_bytes	metadata_changed_at	accessed_at	created_at	link_target
 B.txt	6	2026-01-06T00:00:00.000000Z	file	438	\N	\N	\N	\N	\N	\N	\N	2026-01-06T00:00:00.000000Z	{time}	\N
@@ -313,16 +315,16 @@ a.txt
 a0
 -- want-du.tsv --
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
-total	0	9	6	55197	0	{int}	0	2026-06-01T00:00:00.000000Z	$PRIMARY	name	true	
+total	0	9	6	55197	0	{pos}	0	2026-06-01T00:00:00.000000Z	$PRIMARY	name	true	
 -- want-du-windows.tsv --
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
 total	0	9	6	55197	0	\N	$NOBLOCKS	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false	
 -- want-du-1.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
-{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
+{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"deep/","objects":1,"dirs":1,"size":0,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-02-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":true}
-{"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 -- want-du-1-windows-v040.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":9,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
@@ -350,7 +352,7 @@ total	0	9	6	55197	0	\N	$NOBLOCKS	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false
    800 B      1     1  2026-06-01 00:00:00  ünïcødé/
 53.9 KiB      9     6  2026-06-01 00:00:00  t (total)
 -- want-du-txt.tsv --
-total	0	4	0	4876	0	{int}	0	2026-06-01T00:00:00.000000Z	size	name	true	
+total	0	4	0	4876	0	{pos}	0	2026-06-01T00:00:00.000000Z	size	name	true	
 -- want-du-txt-windows.tsv --
 total	0	4	0	4876	0	\N	4	2026-06-01T00:00:00.000000Z	size	name	false	
 -- want-schema.tsv --
@@ -386,21 +388,21 @@ accessed_at	TIMESTAMP WITH TIME ZONE
 created_at	TIMESTAMP WITH TIME ZONE
 link_target	BLOB
 -- want-rows.tsv --
-B.txt	file	6	1767657600000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1767657600000000	$BORN_US	NULL
-a b	file	20	1767312000000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1767312000000000	$BORN_US	NULL
-a-b	file	300	1767398400000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1767398400000000	$BORN_US	NULL
-a.txt	file	4000	1767484800000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1767484800000000	$BORN_US	NULL
-a/	dir	{int}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
-a/x	file	1	1772323200000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1772323200000000	$BORN_US	NULL
-a0	file	50000	1767571200000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1767571200000000	$BORN_US	NULL
-café crème.txt	file	70	1767744000000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1767744000000000	$BORN_US	NULL
-deep/	dir	{int}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
-deep/er/	dir	{int}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
+B.txt	file	6	1767657600000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1767657600000000	$BORN_US	NULL
+a b	file	20	1767312000000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1767312000000000	$BORN_US	NULL
+a-b	file	300	1767398400000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1767398400000000	$BORN_US	NULL
+a.txt	file	4000	1767484800000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1767484800000000	$BORN_US	NULL
+a/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
+a/x	file	1	1772323200000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1772323200000000	$BORN_US	NULL
+a0	file	50000	1767571200000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1767571200000000	$BORN_US	NULL
+café crème.txt	file	70	1767744000000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1767744000000000	$BORN_US	NULL
+deep/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
+deep/er/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
 deep/er/z.bin	file	0	1769904000000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1769904000000000	$BORN_US	NULL
-empty/	dir	{int}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
-ünïcødé/	dir	{int}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
-ünïcødé/日本語/	dir	{int}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
-ünïcødé/日本語/ファイル 名.txt	file	800	1780272000000000	420	$UID	{int}	1	{int}	{int}	{int}	{int}	1780272000000000	$BORN_US	NULL
+empty/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
+ünïcødé/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
+ünïcødé/日本語/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
+ünïcødé/日本語/ファイル 名.txt	file	800	1780272000000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1780272000000000	$BORN_US	NULL
 -- want-rows-windows.tsv --
 B.txt	file	6	1767657600000000	438	NULL	NULL	NULL	NULL	NULL	NULL	NULL	1767657600000000	{int}	NULL
 a b	file	20	1767312000000000	438	NULL	NULL	NULL	NULL	NULL	NULL	NULL	1767312000000000	{int}	NULL
@@ -451,7 +453,7 @@ true
 55197
 "swath/local-entries/v1"
 -- want-saved-du.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true,"dataset":{"path":"ds","source":"$WORK/t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true,"dataset":{"path":"ds","source":"$WORK/t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
 -- want-saved-du-windows.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":$NOBLOCKS,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"{path}\\t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
 -- refused.txt --
@@ -482,15 +484,15 @@ file f 10 2026-01-01T00:00:00Z
 link g f
 file o 5 2026-01-01T00:00:00Z
 -- want-du-h.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":15,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
+{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":15,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 -- want-du-h-l.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":0,"size":25,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":0,"size":25,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 -- want-h-rows.tsv --
 f	2	true
 g	2	true
 o	1	false
 -- want-saved-du-h.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":15,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true,"dataset":{"path":"hds","source":"$WORK/h","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"total","depth":0,"prefix":"","objects":2,"dirs":0,"size":15,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true,"dataset":{"path":"hds","source":"$WORK/h","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
 -- symlink.spec --
 file f 3 2026-01-01T00:00:00Z
 -- want-symlink.tsv --
