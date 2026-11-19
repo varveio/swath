@@ -80,8 +80,9 @@ Notable changes per release. The human summary of the current release is in the
 - `source.Source` also walks live on S3, GCS, Azure Blob Storage (a flat namespace
   only) and a local directory. `Walk` hands a callback every entry under a prefix once, listed flat and in
   parallel; it sets no limit, and a caller stops it by cancelling its context, when it returns the context's error
-  and a summary that says it did not finish. Each place a local walk cannot read reaches the callback as an
-  `Unread`, with a reason of the error classes, as the walk meets it, and the walk keeps none of them
+  (`ErrInvalidPage` when entries a store handed on had already failed the walk's own check) and a summary that says it did not finish. Each place a local
+  walk cannot read reaches the callback as an `Unread`, with a reason of the error classes, as the walk meets it,
+  and the walk keeps none of them
   ([library guide](docs/library.md#walks)).
 - `view.OpenDir` opens the inventory in a local dataset directory in one call.
 - `source.Open` opens a `Source` from an address (`s3://BUCKET`, `gs://BUCKET`, `az://ACCOUNT/CONTAINER`) with one

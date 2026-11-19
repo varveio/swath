@@ -35,8 +35,10 @@
 // parallel only when the scope is larger than a page; a page is not a walk
 // with parallelism off. It sets no limit: a caller stops a walk by
 // cancelling ctx, and Walk then returns the context's error with a
-// WalkSummary of what it handed on. A live walk spills nothing to disk and
-// retains no key, nor any Unread, after it hands it on.
+// WalkSummary of what it handed on; a live walk returns ErrInvalidPage
+// instead when entries a store handed on had already failed the walk's own
+// check. A live walk spills nothing to disk and retains no key, nor any
+// Unread, after it hands it on.
 //
 // Summarize counts an inventory's entries at or under each of several
 // targets and sums their sizes, space on disk and newest change, one
@@ -77,7 +79,8 @@
 // # Errors
 //
 // No call sets a bound of its own: a caller bounds any call with a ctx
-// deadline, and the call then returns context.DeadlineExceeded. A call that
+// deadline, and the call then returns context.DeadlineExceeded, but for
+// the one exception of a live walk given under Walk above. A call that
 // fails returns an error matching one of the classes ErrInvalidRequest to
 // ErrUnavailable with errors.Is, with two exceptions besides ctx's own
 // errors, which need not match a class: an error returned by the caller's

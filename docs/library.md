@@ -144,8 +144,10 @@ no NUL byte in its key, and a size (an object S3 lists without one is `listing.E
 zero). The ranges are checked too: no key range overlaps another, so no key reaches the function twice.
 
 A walk sets no limit of its own. To stop one, cancel its context: `Walk` then returns the context's error, even
-if the function took every batch, together with a `WalkSummary` that counts what the function took. A walk that
-returns no error finished.
+if the function took every batch, together with a `WalkSummary` that counts what the function took. A walk
+returns `listing.ErrInvalidPage` instead when entries a store handed on had already failed the walk's own check,
+whether before or after the context ended. Any other failure of a store once the context has ended still returns
+the context's error. A walk that returns no error finished.
 
 A walk that cannot read a place goes on past it and hands the function an `Unread` for it as it meets it, in a
 batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
@@ -211,14 +213,15 @@ scopes only, and on a tree that does not change during the walk.
 Every answer carries its evidence: it is live, and was read between the call's start and finish, which it gives.
 A walk that did not finish and a lookup left unknown have a nil `Evidence.Unlocated`, so their evidence never reads
 as complete. No call has a time limit of its own: bound any call with a context deadline, and it returns
-`context.DeadlineExceeded`.
+`context.DeadlineExceeded`, but for the one exception of a live walk ([Walks](#walks)).
 
 A call that fails returns an error that `errors.Is` matches to one of the contract's classes, read from the failure
 as swath's command reads it for its outcome: `ErrAuth` for credentials that do not load or a refusal,
 `ErrNotFound` for a bucket that is not there, `ErrInvalidRequest` for a request the contract refuses and for a
 bucket that is there but in another region than the source's (the message names the bucket's region),
 `ErrUnavailable` once the client's retries are spent (throttling included), `ErrInvalidPage`, `ErrInvalidToken` and
-`ErrUnsupported`. A call whose context ends returns the context's error. A walk has two exceptions, which need not
+`ErrUnsupported`. A call whose context ends returns the context's error, but a live walk returns `ErrInvalidPage`
+when entries a store handed on had already failed the walk's own check ([Walks](#walks)). A walk has two exceptions, which need not
 match a class: an error your function returns, which `Walk` returns unchanged, and a panic in the walk's own
 goroutines, which `Walk` recovers and returns as an error. A panic in your function is not recovered. Error messages
 pass through swath's redaction and carry no credential.
