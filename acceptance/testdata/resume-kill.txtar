@@ -10,8 +10,9 @@
 # rows, never by time.
 #
 # The replay server logs every request it answers (--slow-request-log-ms 0):
-# after the kill it must never again be asked for a page from the start of the
-# keyspace, which a resume that listed everything again would ask for.
+# no request of the resume without a continuation token may start below the
+# last key of the parts the killed run left in data/, which DuckDB reads
+# (saved.sql, witness.sql; deadline-resume says more).
 
 seq keys.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000'
 replay --fixture keys.tsv --bucket bkt
@@ -43,14 +44,19 @@ stdout '^  command   swath list --endpoint-url=http://127\.0\.0\.1:[0-9]+ --anon
 stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
 ! stderr .
 
-# The resume keeps the saved parts and lists the rest. The server saw it
-# list, and never from the start of the keyspace: no request without a
-# continuation token starts after nothing or after a string below the first
-# key, k/00001 (k, k/, k/0 .. k/00000).
+# The last key of the parts saved before the resume, read from their files.
+stdin saved.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''cut'''
+stdout '\Ak/[0-9]{5}\r?\n\z'
+
+# The resume keeps the saved parts and lists the rest, after the last saved
+# key: no request it sends without a continuation token starts below it.
 exec swath resume cut --report resumed.json
-replaylog $REPLAY resumed.log
-grep '^replay slow request shape=WORKER_PAGE ' resumed.log
-! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' resumed.log
+replaylog $REPLAY cut-resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' cut-resumed.log
+stdin witness.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''cut'''
+stdout '\Ak/[0-9]{5}\|[1-9][0-9]*\r?\n\z'
 json resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
 stdout '\A"ok"\n0\ntrue\n12000\n\z'
 ! exists cut/error.json
@@ -66,3 +72,27 @@ cmp stdout whole-parts.json
 dataset cut 'SELECT key, size, epoch_us(last_modified), etag, storage_class, owner_id, owner_display_name, checksum_algorithm, checksum_type FROM ds'
 seq want-rows.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL'
 cmp stdout want-rows.tsv
+-- saved.sql --
+-- The last key of the parts the stopped run left in RUN/data/ (a part is
+-- published there only once the journal has recorded it), kept in
+-- RUN-saved.parquet for witness.sql, and printed.
+COPY (SELECT max(key) AS key FROM read_parquet(getvariable('run') || '/data/*.parquet'))
+  TO (getvariable('run') || '-saved.parquet') (FORMAT parquet);
+FROM read_parquet(getvariable('run') || '-saved.parquet');
+-- witness.sql --
+-- The requests in RUN-resumed.log without a continuation token, whatever
+-- their shape, must not start below the last key saved before the resume
+-- (RUN-saved.parquet): the lowest key such a request can return is the
+-- greater of its prefix and its start-after ("-": none). A request with a
+-- token is left out: the log does not say where its token points. Prints the
+-- saved key and how many requests were checked.
+CREATE TEMP TABLE requests AS
+  SELECT line, greatest(
+      coalesce(nullif(regexp_extract(line, ' prefix=(\S*) ', 1), '-'), ''),
+      coalesce(nullif(regexp_extract(line, ' start_after=(\S*) ', 1), '-'), '')) AS lowest
+  FROM (SELECT unnest(string_split(content, chr(10))) AS line FROM read_text(getvariable('run') || '-resumed.log'))
+  WHERE line LIKE 'replay slow request % continuation=none %';
+CREATE TEMP TABLE saved AS FROM read_parquet(getvariable('run') || '-saved.parquet');
+SELECT error(printf('the resume asked for keys from %s, below %s, the last key saved before it: %s', lowest, saved.key, line))
+  FROM requests, saved WHERE lowest < saved.key;
+SELECT saved.key, count(*) FROM requests, saved GROUP BY saved.key;

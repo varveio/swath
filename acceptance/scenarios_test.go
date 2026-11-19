@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -69,6 +70,7 @@ type inputs struct {
 func TestScenarios(t *testing.T) {
 	in := readInputs(t)
 	bin := stageBinaries(t, in)
+	handleIgnoredSignals()
 	testdata, err := filepath.Abs("testdata")
 	if err != nil {
 		t.Fatal(err)
@@ -683,6 +685,31 @@ var signals = map[string]os.Signal{
 	"KILL": os.Kill,
 }
 
+// handleIgnoredSignals gives the programs the scripts start the default
+// disposition of the signals signal sends, whatever this process inherited.
+// Under nohup it inherits SIGHUP ignored, which would pass on to them (swath
+// leaves an ignored SIGHUP ignored, docs/reference/exit-codes.md). A Go
+// process starts its children with the signals it handles reset to the
+// default, so this process handles each signal it inherited ignored, and
+// goes on ignoring it.
+func handleIgnoredSignals() {
+	var ignored []os.Signal
+	for _, sig := range signals {
+		if sig != os.Kill && signal.Ignored(sig) {
+			ignored = append(ignored, sig)
+		}
+	}
+	if len(ignored) == 0 {
+		return
+	}
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, ignored...)
+	go func() {
+		for range c {
+		}
+	}()
+}
+
 // signal SIG PATH WANT PROGRAM [ARGS...] runs PROGRAM as exec does, waits
 // until PATH exists, sends PROGRAM the signal SIG (INT, TERM, HUP or KILL)
 // and requires it to end as WANT says: an exit status (130), or "killed"
@@ -759,28 +786,66 @@ func cmdHead(ts *testscript.TestScript, neg bool, args []string) {
 		close(done)
 	}()
 	defer func() { ts.Stderr().Write(stderr.Bytes()) }()
-	br := bufio.NewReader(r)
-	for i := 0; i < n; i++ {
-		line, err := br.ReadString('\n')
-		ts.Stdout().Write([]byte(line))
-		if err != nil {
-			r.Close()
-			<-done
-			ts.Fatalf("%s wrote %d lines, not %d (%v)", args[2], i, n, err)
+	// The lines are read aside, so that a program that writes fewer than N
+	// and neither ends nor closes its stdout is killed after processWait.
+	type read struct {
+		lines []byte
+		n     int
+		err   error
+	}
+	got := make(chan read, 1)
+	go func() {
+		br := bufio.NewReader(r)
+		var lines []byte
+		for i := 0; i < n; i++ {
+			line, err := br.ReadString('\n')
+			lines = append(lines, line...)
+			if err != nil {
+				got <- read{lines, i, err}
+				return
+			}
 		}
+		got <- read{lines, n, nil}
+	}()
+	var res read
+	select {
+	case res = <-got:
+	case <-time.After(processWait):
+		cmd.Process.Kill()
+		<-done
+		r.Close()
+		res = <-got
+		ts.Stdout().Write(res.lines)
+		ts.Fatalf("%s wrote %d lines within %v, not %d", args[2], res.n, processWait, n)
 	}
 	r.Close()
+	ts.Stdout().Write(res.lines)
+	if res.err != nil {
+		if !endWithin(cmd, done) {
+			ts.Fatalf("%s wrote %d lines, not %d (%v), and did not end within %v", args[2], res.n, n, res.err, processWait)
+		}
+		ts.Fatalf("%s wrote %d lines, not %d (%v)", args[2], res.n, n, res.err)
+	}
 	awaitEnd(ts, cmd, done, args[1], nil, "after its reader closed")
+}
+
+// endWithin waits, within processWait, for cmd to end (done closed), and
+// otherwise kills it and reports false once it has ended.
+func endWithin(cmd *exec.Cmd, done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(processWait):
+		cmd.Process.Kill()
+		<-done
+		return false
+	}
 }
 
 // awaitEnd waits, within processWait, for cmd to end and requires it to end
 // as want says: an exit status, or "killed" by the signal sig.
 func awaitEnd(ts *testscript.TestScript, cmd *exec.Cmd, done <-chan struct{}, want string, sig os.Signal, after string) {
-	select {
-	case <-done:
-	case <-time.After(processWait):
-		cmd.Process.Kill()
-		<-done
+	if !endWithin(cmd, done) {
 		ts.Fatalf("%s did not end within %v %s", filepath.Base(cmd.Path), processWait, after)
 	}
 	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
@@ -819,6 +884,9 @@ func command(ts *testscript.TestScript, program string, args []string) *exec.Cmd
 		}
 	}
 	cmd := exec.Command(path, args...)
+	// Wait returns at most this long after PROGRAM ends, even if a process
+	// it started still holds its stderr.
+	cmd.WaitDelay = processWait
 	cmd.Dir = ts.MkAbs(".")
 	for _, name := range state(ts).envNames {
 		cmd.Env = append(cmd.Env, name+"="+ts.Getenv(name))

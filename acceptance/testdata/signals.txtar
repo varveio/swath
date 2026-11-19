@@ -11,8 +11,9 @@
 # then. Parts close at 500 rows, never by time.
 #
 # The replay server logs every request it answers (--slow-request-log-ms 0):
-# after a stop it must never again be asked for a page from the start of the
-# keyspace, which a resume that listed everything again would ask for.
+# no request of a resume without a continuation token may start below the
+# last key of the parts the stopped run left in data/, which DuckDB reads
+# (saved.sql, witness.sql; deadline-resume says more).
 
 [!unix] skip 'SIGINT, SIGTERM and SIGHUP: Windows has none to send'
 
@@ -46,12 +47,17 @@ exec swath show int
 stdout '\Aint: interrupted run\n'
 stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
 
-# Resumed, it lists the rest, never from the start of the keyspace, and
-# gives the same parts as the run never stopped.
+# Resumed, it lists the rest, after the last key saved before it (read
+# from the parts' files), and gives the same parts as the run never stopped.
+stdin saved.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''int'''
+stdout '\Ak/[0-9]{5}\r?\n\z'
 exec swath resume int --report int-resumed.json
 replaylog $REPLAY int-resumed.log
 grep '^replay slow request shape=WORKER_PAGE ' int-resumed.log
-! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' int-resumed.log
+stdin witness.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''int'''
+stdout '\Ak/[0-9]{5}\|[1-9][0-9]*\r?\n\z'
 json int-resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
 stdout '\A"ok"\n0\ntrue\n12000\n\z'
 ! exists int/error.json
@@ -73,12 +79,17 @@ exec swath show term
 stdout '\Aterm: interrupted run\n'
 stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
 
-# Resumed, it lists the rest, never from the start of the keyspace, and
-# gives the same parts as the run never stopped.
+# Resumed, it lists the rest, after the last key saved before it (read
+# from the parts' files), and gives the same parts as the run never stopped.
+stdin saved.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''term'''
+stdout '\Ak/[0-9]{5}\r?\n\z'
 exec swath resume term --report term-resumed.json
 replaylog $REPLAY term-resumed.log
 grep '^replay slow request shape=WORKER_PAGE ' term-resumed.log
-! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' term-resumed.log
+stdin witness.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''term'''
+stdout '\Ak/[0-9]{5}\|[1-9][0-9]*\r?\n\z'
 json term-resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
 stdout '\A"ok"\n0\ntrue\n12000\n\z'
 ! exists term/error.json
@@ -100,12 +111,17 @@ exec swath show hup
 stdout '\Ahup: interrupted run\n'
 stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
 
-# Resumed, it lists the rest, never from the start of the keyspace, and
-# gives the same parts as the run never stopped.
+# Resumed, it lists the rest, after the last key saved before it (read
+# from the parts' files), and gives the same parts as the run never stopped.
+stdin saved.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''hup'''
+stdout '\Ak/[0-9]{5}\r?\n\z'
 exec swath resume hup --report hup-resumed.json
 replaylog $REPLAY hup-resumed.log
 grep '^replay slow request shape=WORKER_PAGE ' hup-resumed.log
-! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' hup-resumed.log
+stdin witness.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''hup'''
+stdout '\Ak/[0-9]{5}\|[1-9][0-9]*\r?\n\z'
 json hup-resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
 stdout '\A"ok"\n0\ntrue\n12000\n\z'
 ! exists hup/error.json
@@ -113,3 +129,27 @@ json hup/manifest.json parts
 cmp stdout whole-parts.json
 dataset hup 'SELECT count(*) FROM ds'
 stdout '\A12000\n\z'
+-- saved.sql --
+-- The last key of the parts the stopped run left in RUN/data/ (a part is
+-- published there only once the journal has recorded it), kept in
+-- RUN-saved.parquet for witness.sql, and printed.
+COPY (SELECT max(key) AS key FROM read_parquet(getvariable('run') || '/data/*.parquet'))
+  TO (getvariable('run') || '-saved.parquet') (FORMAT parquet);
+FROM read_parquet(getvariable('run') || '-saved.parquet');
+-- witness.sql --
+-- The requests in RUN-resumed.log without a continuation token, whatever
+-- their shape, must not start below the last key saved before the resume
+-- (RUN-saved.parquet): the lowest key such a request can return is the
+-- greater of its prefix and its start-after ("-": none). A request with a
+-- token is left out: the log does not say where its token points. Prints the
+-- saved key and how many requests were checked.
+CREATE TEMP TABLE requests AS
+  SELECT line, greatest(
+      coalesce(nullif(regexp_extract(line, ' prefix=(\S*) ', 1), '-'), ''),
+      coalesce(nullif(regexp_extract(line, ' start_after=(\S*) ', 1), '-'), '')) AS lowest
+  FROM (SELECT unnest(string_split(content, chr(10))) AS line FROM read_text(getvariable('run') || '-resumed.log'))
+  WHERE line LIKE 'replay slow request % continuation=none %';
+CREATE TEMP TABLE saved AS FROM read_parquet(getvariable('run') || '-saved.parquet');
+SELECT error(printf('the resume asked for keys from %s, below %s, the last key saved before it: %s', lowest, saved.key, line))
+  FROM requests, saved WHERE lowest < saved.key;
+SELECT saved.key, count(*) FROM requests, saved GROUP BY saved.key;

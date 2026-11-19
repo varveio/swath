@@ -5,7 +5,9 @@
 # (1 byte), logs/ (2), logs/a (3), logs/b/c (4), logs2/x (5), logs-old/y (6),
 # and log (7), logt (8) and m (9), which do not start with it. A trailing
 # slash makes the prefix logs/, which leaves out logs, logs-old/y and
-# logs2/x. Unsigned byte order: '-' < '/' < '2'.
+# logs2/x. Unsigned byte order: '-' < '/' < '2'. The listings to stdout, the
+# totals and swath show print nothing on stderr, except the warning for a
+# prefix no key starts with.
 
 replay --fixture keys.tsv --bucket bkt --protocols s3,gcs,azure
 
@@ -15,8 +17,10 @@ cmp stdout want-logs.tsv
 ! stderr .
 exec swath list s3://bkt/logs/ --endpoint-url $REPLAY --anonymous --columns key,size
 cmp stdout want-logs-slash.tsv
+! stderr .
 exec swath list s3://bkt/logs2 --endpoint-url $REPLAY --anonymous --columns key,size
 cmp stdout want-logs2.tsv
+! stderr .
 
 # GCS.
 exec swath list gs://bkt/logs --endpoint-url $REPLAY/storage/v1/ --anonymous --columns key,size
@@ -24,8 +28,10 @@ cmp stdout want-logs.tsv
 ! stderr .
 exec swath list gs://bkt/logs/ --endpoint-url $REPLAY/storage/v1/ --anonymous --columns key,size
 cmp stdout want-logs-slash.tsv
+! stderr .
 exec swath list gs://bkt/logs2 --endpoint-url $REPLAY/storage/v1/ --anonymous --columns key,size
 cmp stdout want-logs2.tsv
+! stderr .
 
 # Azure Blob.
 exec swath list az://replay/bkt/logs --endpoint-url $REPLAY --anonymous --columns key,size
@@ -33,8 +39,10 @@ cmp stdout want-logs.tsv
 ! stderr .
 exec swath list az://replay/bkt/logs/ --endpoint-url $REPLAY --anonymous --columns key,size
 cmp stdout want-logs-slash.tsv
+! stderr .
 exec swath list az://replay/bkt/logs2 --endpoint-url $REPLAY --anonymous --columns key,size
 cmp stdout want-logs2.tsv
+! stderr .
 
 # A prefix no key starts with lists nothing, and says so.
 exec swath list s3://bkt/nothing --endpoint-url $REPLAY --anonymous --columns key,size
@@ -45,8 +53,10 @@ cmp stderr want-nothing.txt
 # groups the rest by what follows the prefix up to its next slash.
 exec swath du s3://bkt/logs --endpoint-url $REPLAY --anonymous -d 1 --format jsonl
 cmp stdout want-du-logs.jsonl
+! stderr .
 exec swath du s3://bkt/logs/ --endpoint-url $REPLAY --anonymous -d 1 --format jsonl
 cmp stdout want-du-logs-slash.jsonl
+! stderr .
 
 # A dataset of a prefix holds those keys, and records the prefix as its scope.
 exec swath list s3://bkt/logs --endpoint-url $REPLAY --anonymous -o ds
@@ -57,6 +67,7 @@ stdout '\A{"container":"bkt","kind":"s3","uri":"s3://bkt/logs"}\n{"kind":"prefix
 exec swath show ds
 stdout '^  source    s3://bkt/logs$'
 stdout '^  contents  6 objects, 21 B; keys "logs" \.\. "logs2/x"$'
+! stderr .
 
 # A local SOURCE is a path, not a string prefix. A directory lists what is
 # below it, keys relative to it, with or without a trailing separator; a file
@@ -64,10 +75,13 @@ stdout '^  contents  6 objects, 21 B; keys "logs" \.\. "logs2/x"$'
 mktree t tree.spec
 exec swath list t --columns key,kind --no-stats
 cmp stdout want-tree.tsv
+! stderr .
 exec swath list t/ --columns key,kind --no-stats
 cmp stdout want-tree.tsv
+! stderr .
 exec swath list t/d --columns key,kind,size --no-stats
 stdout '\Akey\tkind\tsize\ng\tfile\t5\n\z'
+! stderr .
 exec swath list t/f --columns key,kind,size --no-stats
 stdout '\Akey\tkind\tsize\nf\tfile\t3\n\z'
 ! stderr .
@@ -76,6 +90,7 @@ stdout '\Akey\tkind\tsize\nf\tfile\t3\n\z'
 [symlink] symlink t/l -> f
 [symlink] exec swath list t/l --columns key,kind,link_target --no-stats
 [symlink] stdout '\Akey\tkind\tlink_target\nl\tsymlink\tf\n\z'
+[symlink] ! stderr .
 
 -- keys.tsv --
 m	9	1767225600000000

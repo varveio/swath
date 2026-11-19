@@ -18,11 +18,13 @@ cmp stderr show-notds.txt
 exits 1 swath show nosuch
 [!windows] cmp stderr show-nosuch.txt
 [windows] stderr '\Aswath: nosuch: [^\n]+\n\z'
+! stdout .
 exits 2 swath resume notds
 cmp stderr nothing-to-resume.txt
 ! stdout .
 exits 2 swath resume nosuch
 cmp stderr nothing-to-resume.txt
+! stdout .
 ! exists nosuch
 digests notds
 cmp stdout notds-before.txt
@@ -34,6 +36,7 @@ cmp stderr from-notds.txt
 ! stdout .
 exits 2 swath du --from-dataset nosuch
 cmp stderr from-nosuch.txt
+! stdout .
 digests notds
 cmp stdout notds-before.txt
 
@@ -45,6 +48,7 @@ exits 1 swath du nosuch
 exits 1 swath list nosuch -o ds
 [!windows] cmp stderr nosuch.txt
 [windows] stderr '\Aswath: nosuch: [^\n]+\n\z'
+! stdout .
 ! exists ds
 
 # --report into a directory that does not exist is refused before anything is
@@ -63,6 +67,7 @@ cmpform stderr report-missing.txt
 [!windows] chmod 0555 ro
 [!windows] exits 1 swath list t -o ro/ds
 [!windows] cmp stderr ro-ds.txt
+[!windows] ! stdout .
 [!windows] exits 1 swath list t -o ro/rows.tsv
 [!windows] stderr '\Aswath: [^\n]+\n\z'
 [!windows] ! stdout .
