@@ -26,6 +26,11 @@ MAIN_FILES = {'go.mod', 'go.sum', 'verify.py', 'dataset_schema.py', 'test_datase
 # not committed: .gitignore).
 WORKSPACE = 'go.work'
 GO_TREE = (*NESTED, *MAIN_DIRS, *MAIN_FILES, WORKSPACE)
+# The black-box acceptance suite: a module of its own outside go.work, which runs built binaries and
+# imports nothing of the repository, so no Go tier tests it. acceptance() selects its legs.
+ACCEPTANCE_DIR = 'acceptance/'
+ACCEPTANCE_MODULE = ACCEPTANCE_DIR + 'go.mod'
+ACCEPTANCE_WORKFLOW = '.github/workflows/acceptance.yml'
 
 
 def in_go_tree(path):
@@ -46,6 +51,8 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
     for path in paths:
         if path.startswith('.github/') or path.startswith('scripts/ci/'):
             out['full'] = True
+        elif path.startswith(ACCEPTANCE_DIR):
+            pass  # no Go tier: acceptance() runs the suite on the built binaries
         elif path in PACKAGING:
             out['go'] = out['images'] = out['platforms'] = True
         elif path.startswith('docs/replay-provider-'):
@@ -93,6 +100,18 @@ def select(paths, event, *, force_full=False, unknown=False, build_tags=False, t
     return out
 
 
+def acceptance(paths, out, event, *, unknown=False):
+    """The acceptance suite's legs (.github/workflows/acceptance.yml): `acceptance` the candidate's,
+    go-build's binaries of this commit (off, linux for linux-amd64, or all five targets), and
+    `acceptance_baseline` the published v0.4.0 archives' (off or all). A change to the suite or its
+    workflow runs both on every target; a full run (main, dispatch, ci:full, CI changes) the
+    candidate on every target; a pull request that selects the main module the candidate on Linux."""
+    suite = (unknown or event == 'workflow_dispatch'
+             or any(path.startswith(ACCEPTANCE_DIR) or path == ACCEPTANCE_WORKFLOW for path in paths))
+    candidate = 'all' if suite or out['full'] else 'linux' if out['go'] else 'off'
+    return {'acceptance': candidate, 'acceptance_baseline': 'all' if suite else 'off'}
+
+
 def git(*args):
     return subprocess.check_output(['git', *args])
 
@@ -137,7 +156,8 @@ def detect(event, base, labels):
                                           for line in file.stdout.splitlines())
         toolchain = any(re.match(r'(?:go\s+\d|toolchain\s+go\d)', line) for line in changed_lines)
     tracked = {path for path in git('ls-files', '-z', 'go.mod', '**/go.mod')
-               .decode(errors='surrogateescape').split('\0') if path and not fixture_module(path)}
+               .decode(errors='surrogateescape').split('\0')
+               if path and not fixture_module(path) and path != ACCEPTANCE_MODULE}
     if tracked != set(MODULES.values()):
         raise RuntimeError('Go modules changed: update CI module ownership and jobs before merging')
     outputs = select(paths, event, force_full='ci:full' in labels, unknown=unknown,
@@ -145,7 +165,7 @@ def detect(event, base, labels):
     outputs = dependants(outputs, {key: Path(path).read_text() for key, path in MODULES.items()})
     if outputs['go'] and any(Path(path).name in {'go.mod', 'go.sum'} for path in paths):
         outputs['images'] = True
-    return outputs
+    return {**outputs, **acceptance(paths, outputs, event, unknown=unknown)}
 
 
 def main():
