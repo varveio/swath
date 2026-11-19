@@ -83,7 +83,7 @@ suites for changed modules and their dependants, not a guessed subset of individ
 |---|---|
 | `reader/**` | reader and main (main builds the local reader through `go.work`) |
 | `objfile/**` | object-file module; main only if a local module dependency is added |
-| `cmd/**`, `internal/**`, `source/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
+| `cmd/**`, `command/**`, `internal/**`, `source/**`, `bench/**`, `testdata/**`, `go.mod`, `go.sum`, `verify.py` and its Python siblings, including testdata and embeds; every file under `docs/` that is not a page (the `docs` package's Go files, data) | main |
 | Pages under `docs/` (`docs/**/*.md`) but the light ones below and the provider evidence | the [docs tier](#docs-tier) (`go-docs`) alone; with a main-module input, main instead, whose race shards run the same tests |
 | Root prose (`README.md`, `AGENTS.md`, ...), `site/**`, `docs/assets/**`, `docs/style.md`, `docs/ops/**` | none; `go-lint` checks every Markdown file's links on every event |
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |

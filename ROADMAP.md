@@ -51,5 +51,5 @@ answers about a listed location (`reader/listing`: Page, Lookup and Walk, an inv
 Summarize, their evidence and error classes) and an inventory view that answers them from a dataset
 (`reader/view`). The root module's package `source` answers the same contract live, from an S3 or GCS
 bucket, an Azure Blob Storage container or a local directory ([the Go library](docs/library.md)). All
-three may change in any release. A whole run, with its output and exit codes, is reachable only through
-the CLI.
+three may change in any release. A whole run, with its output and exit codes, is reachable through the CLI, or
+from a Go program that runs the command line in a child process it starts (package `command`, experimental).

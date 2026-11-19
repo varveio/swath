@@ -13,6 +13,10 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Changed
 
+- Package `github.com/varveio/swath/command` (experimental) is public again: a Go program can build the swath
+  command line into its own binary and run it in a child process dedicated to the call with
+  `command.Exit(command.Main(...))` ([library guide](docs/library.md#run-the-command-line)).
+
 - `swath du` on a local tree leads with the space on disk, as `du`, ncdu, gdu and dust do: the table's and the
   view's figure is `on disk`, `--sort size` orders by it, and the closing line gives it. A directory's own blocks
   count in it, as `du` counts them, so a tree's total is `du -s`'s less the source directory's own blocks
