@@ -14,9 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -56,6 +58,9 @@ func TestScenarios(t *testing.T) {
 				for _, name := range []string{"SYSTEMROOT", "WINDIR"} {
 					env.Setenv(name, os.Getenv(name))
 				}
+			} else {
+				// The owner of every file a script creates.
+				env.Setenv("UID", strconv.Itoa(os.Getuid()))
 			}
 			return nil
 		},
@@ -75,6 +80,8 @@ func TestScenarios(t *testing.T) {
 			"mktree":  cmdMktree,
 			"seq":     cmdSeq,
 			"json":    cmdJSON,
+			"cmpform": cmdCmpform,
+			"digests": cmdDigests,
 			"dataset": func(ts *testscript.TestScript, neg bool, args []string) { cmdDataset(ts, neg, args, in.duckdb) },
 			"replay":  func(ts *testscript.TestScript, neg bool, args []string) { cmdReplay(ts, neg, args, in.replay) },
 		},
@@ -198,7 +205,8 @@ func cmdExits(ts *testscript.TestScript, neg bool, args []string) {
 //	link PATH TARGET          (a hard link to the file TARGET)
 //
 // PATH is slash-separated below DIR, quoted as a Go string when it holds
-// spaces; MTIME is RFC 3339. A file holds SIZE bytes. Every time is set
+// spaces; MTIME is RFC 3339. A file holds SIZE bytes. Files get mode 0644
+// and directories 0755, whatever the umask. Every mode and time is set
 // after every entry exists, so creating entries does not move them.
 func cmdMktree(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) != 2 {
@@ -208,6 +216,7 @@ func cmdMktree(ts *testscript.TestScript, neg bool, args []string) {
 	ts.Check(os.MkdirAll(root, 0o755))
 	dirs := map[string]bool{"": true}
 	times := map[string]time.Time{}
+	modes := map[string]os.FileMode{}
 	var order []string
 	for i, line := range strings.Split(ts.ReadFile(args[1]), "\n") {
 		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
@@ -239,14 +248,14 @@ func cmdMktree(ts *testscript.TestScript, neg bool, args []string) {
 		case f[0] == "dir" && len(f) == 3:
 			ts.Check(os.MkdirAll(path, 0o755))
 			dirs[rel] = true
-			times[path] = mtime(f[2])
+			times[path], modes[path] = mtime(f[2]), 0o755
 		case f[0] == "file" && len(f) == 4:
 			size, err := strconv.Atoi(f[2])
 			if err != nil {
 				bad("%v", err)
 			}
 			ts.Check(os.WriteFile(path, bytes.Repeat([]byte{'.'}, size), 0o644))
-			times[path] = mtime(f[3])
+			times[path], modes[path] = mtime(f[3]), 0o644
 		case f[0] == "link" && len(f) == 3:
 			ts.Check(os.Link(filepath.Join(root, filepath.FromSlash(f[2])), path))
 		default:
@@ -255,6 +264,9 @@ func cmdMktree(ts *testscript.TestScript, neg bool, args []string) {
 		order = append(order, path)
 	}
 	for _, path := range order {
+		if mode, ok := modes[path]; ok {
+			ts.Check(os.Chmod(path, mode))
+		}
 		if t, ok := times[path]; ok {
 			ts.Check(os.Chtimes(path, t, t))
 		}
@@ -369,6 +381,92 @@ func compact(v any) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// forms are the placeholders cmpform accepts, each for a value that differs
+// from run to run or machine to machine.
+var forms = map[string]string{
+	"{int}":  `[0-9]+`,
+	"{time}": `[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z`,
+	"{path}": `[^\t"\n]+`,
+}
+
+var formRE = regexp.MustCompile(`\{(int|time|path)\}`)
+
+// cmpform FILE WANT compares FILE (or stdout or stderr) with WANT, line by
+// line and every character exactly, after expanding $VAR in WANT as cmpenv
+// does, except that a placeholder in WANT stands for one value of its form:
+// {int} a decimal integer, {time} a UTC timestamp (2026-01-02T03:04:05Z,
+// any fraction), {path} a temporary path (no tab, quote or line feed).
+func cmdCmpform(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) != 2 {
+		ts.Fatalf("usage: cmpform file want")
+	}
+	got := strings.Split(ts.ReadFile(args[0]), "\n")
+	want := strings.Split(os.Expand(ts.ReadFile(args[1]), ts.Getenv), "\n")
+	var diffs []string
+	for i := range max(len(got), len(want)) {
+		var g, w string
+		if i < len(got) {
+			g = got[i]
+		}
+		if i < len(want) {
+			w = want[i]
+		}
+		if i >= len(got) || i >= len(want) || !lineForm(w).MatchString(g) {
+			diffs = append(diffs, fmt.Sprintf("line %d:\n  want %q\n  got  %q", i+1, w, g))
+		}
+	}
+	if len(diffs) > 0 {
+		ts.Fatalf("%s and %s differ (%d lines and %d):\n%s", args[0], args[1], len(got), len(want), strings.Join(diffs, "\n"))
+	}
+}
+
+// lineForm reads a line of cmpform's WANT as an anchored expression: its
+// placeholders by their forms, everything else literally.
+func lineForm(want string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString(`\A`)
+	last := 0
+	for _, m := range formRE.FindAllStringIndex(want, -1) {
+		b.WriteString(regexp.QuoteMeta(want[last:m[0]]))
+		b.WriteString(forms[want[m[0]:m[1]]])
+		last = m[1]
+	}
+	b.WriteString(regexp.QuoteMeta(want[last:]))
+	b.WriteString(`\z`)
+	return regexp.MustCompile(b.String())
+}
+
+// digests DIR prints a line for each directory and file below DIR, in
+// lexical order: a directory's slash-separated path and a slash, a file's
+// path, size and SHA-256. Comparing two of its outputs shows whether a
+// command changed anything in DIR.
+func cmdDigests(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) != 1 {
+		ts.Fatalf("usage: digests dir")
+	}
+	root := ts.MkAbs(args[0])
+	ts.Check(filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			fmt.Fprintf(ts.Stdout(), "%s/\n", rel)
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(ts.Stdout(), "%s %d %x\n", rel, len(b), sha256.Sum256(b))
+		return nil
+	}))
+}
+
 // dataset DIR SQL runs SQL in DuckDB over the committed dataset in DIR and
 // prints the rows tab-separated, without a header, NULL as NULL. Before
 // the query it checks the manifest's claims against the files: each part
@@ -437,7 +535,9 @@ func cmdDataset(ts *testscript.TestScript, neg bool, args []string, duckdb strin
 	if err := cmd.Run(); err != nil || stderr.Len() > 0 {
 		ts.Fatalf("duckdb: %v\n%s", err, stderr.String())
 	}
-	ts.Stdout().Write(stdout.Bytes())
+	// DuckDB's list mode ends its lines with CRLF on Windows; the scripts
+	// compare LF, as swath writes.
+	ts.Stdout().Write(bytes.ReplaceAll(stdout.Bytes(), []byte("\r\n"), []byte("\n")))
 }
 
 func sqlString(s string) string {
