@@ -76,9 +76,8 @@ func liveHeap() int64 {
 // 100 ms, so a collection that lands while the pages in flight and the spill
 // writers' buffers peak together reads high for one sample. Under -race,
 // ten runs read +30 to +47 MiB (2026-11-08), one over the bound. That noise
-// is transient and the defect is systematic, so the run is repeated and the
-// smallest of the peaks is held to the bound: a pinned page shows in every
-// run, a transient high in rarely more than one.
+// is transient, so the run is repeated and the smallest of the peaks is held
+// to the bound: a transient high shows in rarely more than one run.
 func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a 400,000-key listing")

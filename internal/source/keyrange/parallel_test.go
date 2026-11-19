@@ -502,6 +502,10 @@ func TestRetainedBoundsAreCopies(t *testing.T) {
 	if lo, want := e.children[0].lo, keys[len(bufs)*page-1]; lo != want {
 		t.Fatalf("the lower child starts after %q, want the cursor %q", lo, want)
 	}
+	// The bounded chain's anchor is the copy of the first key it listed.
+	if a := e.children[1].anchor; a != keys[0] {
+		t.Fatalf("the upper child's anchor is %q, want the first key %q", a, keys[0])
+	}
 	inPage := func(s string) bool {
 		if s == "" {
 			return false
