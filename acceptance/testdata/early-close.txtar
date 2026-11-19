@@ -1,0 +1,37 @@
+# A reader that stops reading (swath list ... | head): swath stops listing,
+# writes nothing on stderr and exits 0, its report saying the output is not
+# complete because the reader closed it (docs/reference/exit-codes.md, exit
+# 0). The bucket holds 12,000 keys k/00001..k/12000 whose sizes are
+# 1..12000. Served with 300 ms per listing page of 1,000 keys to one worker,
+# which lists them in order, the whole listing takes at least 3.6 s; the
+# replay server logs every request it answers (--slow-request-log-ms 0), and
+# a listing that stopped never asks for the last page (truncated=false).
+
+seq keys.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=300ms,pivot_probe=100ms,structure_probe=100ms --slow-request-log-ms 0
+
+# TSV: the reader takes the header and the first row, then closes the pipe.
+head 2 0 swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 1 --report tsv.json
+cmp stdout want-2.tsv
+! stderr .
+replaylog $REPLAY tsv.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' tsv.log
+! grep '^replay slow request shape=WORKER_PAGE .* truncated=false$' tsv.log
+json tsv.json outcome.class outcome.exit_code outcome.status outcome.complete outcome.stop_reason
+stdout '\A"ok"\n0\n"stopped"\nfalse\n"downstream_closed"\n\z'
+
+# JSONL: the reader takes one row.
+head 1 0 swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 1 --format jsonl --columns key,size --report jsonl.json
+cmp stdout want-1.jsonl
+! stderr .
+replaylog $REPLAY jsonl.log
+grep '^replay slow request shape=WORKER_PAGE ' jsonl.log
+! grep '^replay slow request shape=WORKER_PAGE .* truncated=false$' jsonl.log
+json jsonl.json outcome.class outcome.exit_code outcome.status outcome.complete outcome.stop_reason
+stdout '\A"ok"\n0\n"stopped"\nfalse\n"downstream_closed"\n\z'
+
+-- want-2.tsv --
+key	size	last_modified	etag	storage_class	owner_id	owner_display_name	checksum_algorithm	checksum_type
+k/00001	1	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+-- want-1.jsonl --
+{"key":"k/00001","size":1}

@@ -7,6 +7,8 @@ how it builds its input (a file tree, a key list served by `swath-replay`, a dat
 datasets are read by DuckDB, not by swath. A few checks compare swath with itself on purpose, where agreement
 is the behaviour under test: the command aliases (`swath version` and `-V` print what `--version` prints, bare `swath`
 what `-h` prints, `swath help list` what `list --help` prints) and the resumed run, whose parts must equal those of a run never stopped.
+That a resume reuses what the stopped run saved is witnessed by the replay server, which logs every request it answers:
+after a stop it is never again asked for a page from the start of the keyspace.
 
 ## Changing it
 
@@ -50,7 +52,15 @@ script: commands as a user types them, then the files they use.
 | `local` | a tree with hostile names (spaces, non-ASCII, byte-order traps, an empty directory, a hard link, a symbolic link, a non-UTF-8 name on Linux, a path over 260 characters) as text, totals and a dataset |
 | `local-permissions` | an unreadable directory: exit 3, the entries left out, the dataset's coverage (not on Windows) |
 | `s3-replay`, `gcs-replay`, `azure-replay` | a key list served over each provider's API: the listing equals it exactly and in byte order, filters, columns, formats, totals, the dataset's schema, rows, manifest and report |
-| `deadline-resume` | a run stopped by `--max-duration` (exit 124) after committing parts, then resumed, gives the same parts byte for byte as a run never stopped |
+| `deadline-resume` | a run stopped by `--max-duration` (exit 124) after committing parts, then resumed, gives the same parts byte for byte as a run never stopped; the server is never again asked for the first page |
+| `resume-kill` | a run killed outright (SIGKILL; TerminateProcess on Windows) once a part is in `data/`: `swath show`, then `swath resume` gives the same parts as a run never stopped, never listing from the start |
+| `signals` | SIGINT, SIGTERM and SIGHUP (Unix): exit by the signal, `error.json` with 130, 143 or 129, then a resume as in `resume-kill` |
+| `resume-spill` | a resume reads back the stopped run's sealed durable spill (its report's `replayed_rows`) and gives the same parts as a run never stopped |
+| `early-close` | a reader that closes the pipe (`\| head`): exit 0, nothing on stderr, the report's `downstream_closed`, and the server never asked for the last page |
+| `prefix` | `s3://`, `gs://` and `az://` sources naming a prefix list the keys that start with that string (a trailing slash makes it a directory's); a local directory with and without a trailing separator, a file and a symbolic link as SOURCE |
+| `local-options` | `--metadata names`, `stat`, `statx` (Linux), `--no-link-target`, `--max-prefixes`, `--max-inodes`, `--allocated` and `--work-dir` on a local tree |
+| `s3-owner` | `--s3-fetch-owner` fills the owner columns from the server, and their absence leaves them null (the replay server serves no versioned listing and no Azure metadata, so `--all-versions` and `--azure-fetch-*` are not checked) |
+| `errors` | the first errors a new user meets offline: `show`, `resume` and `du --from-dataset` on what is not a dataset, a missing source, `--report` into a missing directory, an output into an unwritable one: each exit code and its one message |
 | `compat-v040` | a dataset written by 0.4.0 (`testdata/compat-v040/`, provenance in the script) is read by `swath show`, `swath du --from-dataset` and `--seed-from`, and replaced by `--overwrite` |
 
 Commands beside testscript's own:
@@ -60,11 +70,17 @@ Commands beside testscript's own:
 | `exits N PROGRAM ARGS...` | runs PROGRAM and requires exit status N (`! exec` only says it failed) |
 | `mktree DIR SPEC` | builds a tree from SPEC (`dir PATH MTIME`, `file PATH SIZE MTIME`, `link PATH TARGET`): files mode 0644, directories 0755, modes and times set last |
 | `seq FILE N FORMAT` | appends N lines `fmt.Sprintf(FORMAT, i)` to FILE, for key lists and expected rows too long to write out |
-| `replay FLAGS...` | starts `swath-replay serve --port 0 FLAGS`, waits up to 30 s for its startup line, sets `$REPLAY` to its endpoint, and kills it when the script ends |
-| `dataset DIR SQL` | checks each part `DIR/manifest.json` names (bytes, SHA-256, rows, no other part in `data/`), then runs SQL in DuckDB over table `ds` (the parts' rows in stored order) and `ds_schema` (the first part's Parquet columns), printing rows tab-separated with LF line ends |
+| `replay FLAGS...` | starts `swath-replay serve --port 0 FLAGS` with its stderr written straight into a file, waits up to 30 s for its startup line, sets `$REPLAY` to its endpoint, and kills it when the script ends |
+| `replaylog ENDPOINT FILE` | writes to FILE the whole lines the server at ENDPOINT logged since it started or since the previous `replaylog` of it; with `--slow-request-log-ms 0` the server logs every listing request before answering it |
+| `signal SIG PATH WANT PROGRAM ARGS...` | runs PROGRAM as `exec` does, waits up to 60 s for PATH to exist, sends SIG (`INT`, `TERM`, `HUP` or `KILL`), and requires PROGRAM to end within 60 s as WANT says: an exit status, or `killed` (ended by that signal; Unix) |
+| `head N WANT PROGRAM ARGS...` | runs PROGRAM as `exec` does with stdout on a pipe, reads N lines and closes the pipe (`\| head -n N`), and requires PROGRAM to end with exit status WANT within 60 s; the N lines are its stdout |
+| `dataset DIR SQL` | checks each part `DIR/manifest.json` names (bytes, SHA-256, rows, no other part in `data/`, every part with the first part's Parquet schema), then runs SQL in DuckDB over table `ds` (the parts' rows in stored order) and `ds_schema` (the parts' Parquet columns), printing rows tab-separated with LF line ends |
 | `json FILE PATH...` | prints the JSON value at each dotted PATH; `! json FILE PATH` requires PATH absent |
 | `cmpform FILE WANT` | compares FILE (or `stdout`, `stderr`) with WANT line by line, `$VAR` expanded, every character exactly except the placeholders `{int}` (an integer, zero too), `{pos}` (a positive integer), `{time}` (a UTC timestamp in the years 2000 to 2099) and `{path}` (a temporary path) |
 | `digests DIR` | prints every directory and file below DIR, each file with its size and SHA-256, to show that a command changed nothing; fails if DIR is not a directory, so a file in place of an empty directory does not print nothing too |
+
+`signal` and `head` run PROGRAM with the variables the script started with, as `env` has changed them; a variable
+the script adds with `env` does not reach PROGRAM.
 
 Conditions beside testscript's own: `[expect:v0.4.0]` and `[expect:current]`, true when `SWATH_EXPECT` names
 them. Beside testscript's variables, `$TESTDATA` is this directory, `$UID` the user the suite runs as (not on
@@ -79,7 +95,7 @@ which side to check through `SWATH_EXPECT`: `v0.4.0` for the published 0.4.0 bin
 `main`. Nothing parses `swath --version`. When the next release ships, it becomes the baseline: its side stays,
 unmarked, and the 0.4.0 side is deleted.
 
-Platform differences are conditions too (`[windows]`, `[darwin]`, `[linux]`, `[symlink]`), each with its reason
+Platform differences are conditions too (`[windows]`, `[darwin]`, `[linux]`, `[unix]`, `[symlink]`), each with its reason
 and the exact value on each side.
 
 Values that differ from run to run or machine to machine are matched by their form, by name: times a run takes
@@ -90,8 +106,9 @@ bytes, an allocation total over one), the form is `{pos}`, so a zero there fails
 
 ## What it relies on in DuckDB
 
-`read_parquet` with `file_row_number`, `parquet_schema` (`name`, `type`, `repetition_type`, `converted_type`,
-`num_children`), `DESCRIBE`, `SELECT * REPLACE`, `decode`, `hex`, `epoch_us`, `regexp_matches`, `error` and
+`read_parquet` with `file_row_number`, `parquet_schema` (`file_name`, `name`, `type`, `repetition_type`,
+`converted_type`, `num_children`, its other columns compared as a whole), `list` over rows, `IS DISTINCT FROM`,
+`DESCRIBE`, `SELECT * REPLACE`, `decode`, `hex`, `replace`, `chr`, `epoch_us`, `regexp_matches`, `error` and
 `printf`, and the CLI
 flags `-no-init -batch -bail -list -noheader -nullvalue -separator`. Rows come back in the order the table was
 built in, the manifest's part order and each part's row order.

@@ -1,0 +1,47 @@
+# --s3-fetch-owner asks S3 for each object's owner and fills owner_id and
+# owner_display_name; without it they are null whatever the bucket holds.
+# swath-replay serves owners from its key list, and only to a request that
+# asks for them (fetch-owner=true). keys.tsv: a is owned by id-1 (Alice), a/b
+# by id-2 with no display name, c has no owner, and d e has only a display
+# name, which holds a tab. (swath-replay serves no versioned listing and no
+# Azure metadata, tags or immutability, so --all-versions and the
+# --azure-fetch-* options are not checked here.)
+
+replay --fixture keys.tsv --bucket bkt --protocols s3
+
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --s3-fetch-owner --columns key,owner_id,owner_display_name
+cmp stdout want-owners.tsv
+! stderr .
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --columns key,owner_id,owner_display_name
+cmp stdout want-no-owners.tsv
+
+# The dataset holds the owners, and records the columns as collected.
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --s3-fetch-owner -o ds
+dataset ds 'SELECT key, owner_id, replace(owner_display_name, chr(9), ''<TAB>'') FROM ds'
+cmp stdout want-owner-rows.tsv
+json ds/manifest.json extensions.swath.collected
+stdout '\A{"columns":\["owner_id","owner_display_name"\]}\n\z'
+
+-- keys.tsv --
+# key	size	last_modified_us	etag	storage_class	owner_id	owner_display_name
+c	3	1767225600000000
+d%20e	4	1767225600000000	\N	\N	\N	Bob%09Tab
+a/b	2	1767225600000000	\N	\N	id-2	\N
+a	1	1767225600000000	e1	STANDARD	id-1	Alice
+-- want-owners.tsv --
+key	owner_id	owner_display_name
+a	id-1	Alice
+a/b	id-2	\N
+c	\N	\N
+d e	\N	Bob\tTab
+-- want-no-owners.tsv --
+key	owner_id	owner_display_name
+a	\N	\N
+a/b	\N	\N
+c	\N	\N
+d e	\N	\N
+-- want-owner-rows.tsv --
+a	id-1	Alice
+a/b	id-2	NULL
+c	NULL	NULL
+d e	NULL	Bob<TAB>Tab

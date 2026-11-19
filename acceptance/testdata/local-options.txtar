@@ -1,0 +1,165 @@
+# The local-tree options whose results follow from the tree alone. t holds
+# a/b/x (7 bytes), c/y (2) and e (3) below the directories a/, a/b/ and c/:
+# 3 files, 12 bytes, 3 directories, every time 2026-01-01. h holds the same
+# files with a second name each for x and y (hard links: a/b/w, c/z), and sl a
+# file f with a symbolic link l to it.
+
+mktree t tree.spec
+
+# --metadata names reads no stat: every column but the key and the kind is
+# null, and the dataset records the tier and no optional column. stat is the
+# default and reads the link targets. statx (Linux) adds the birth time, which
+# the stat tier leaves null on Linux.
+exec swath list t --metadata names --no-stats
+cmp stdout want-names.tsv
+! stderr .
+exec swath list t --metadata names -o names
+dataset names 'SELECT key, kind, size, last_modified, mode FROM ds'
+cmp stdout want-names-rows.tsv
+json names/manifest.json extensions.swath.collected
+stdout '\A{"columns":\[\],"metadata":"names"}\n\z'
+exec swath list t --metadata stat -o stat
+json stat/manifest.json extensions.swath.collected
+stdout '\A{"columns":\["link_target"\],"metadata":"stat"}\n\z'
+[linux] exec swath list t --metadata stat --columns key,size,created_at --no-stats
+[linux] cmpform stdout want-stat-linux.tsv
+[linux] exec swath list t --metadata statx --columns key,size,created_at --no-stats
+[linux] cmpform stdout want-statx.tsv
+[linux] exec swath list t --metadata statx -o statx
+[linux] json statx/manifest.json extensions.swath.collected
+[linux] stdout '\A{"columns":\["link_target"\],"metadata":"statx"}\n\z'
+
+# --no-link-target: a symbolic link's row without its target, and a dataset
+# that does not record the column as collected.
+[symlink] mktree sl symlink.spec
+[symlink] symlink sl/l -> f
+[symlink] exec swath list sl --columns key,kind,link_target --no-stats
+[symlink] stdout '\Akey\tkind\tlink_target\nf\tfile\t\\N\nl\tsymlink\tf\n\z'
+[symlink] exec swath list sl --columns key,kind,link_target --no-link-target --no-stats
+[symlink] stdout '\Akey\tkind\tlink_target\nf\tfile\t\\N\nl\tsymlink\t\\N\n\z'
+[symlink] exec swath list sl --no-link-target -o nolink
+[symlink] dataset nolink 'SELECT key, kind, link_target FROM ds'
+[symlink] stdout '\Af\tfile\tNULL\nl\tsymlink\tNULL\n\z'
+[symlink] json nolink/manifest.json extensions.swath.collected
+[symlink] stdout '\A{"columns":\[\],"metadata":"stat"}\n\z'
+
+[expect:v0.4.0] env PRIMARY=size
+# #660: swath du leads with the space on disk for a local tree.
+[expect:current] env PRIMARY=allocated_bytes
+
+# --max-prefixes bounds the prefixes swath du holds: three below t at -d 2
+# (a/, a/b/, c/) are more than 2, a failure a person fixes (exit 1, cause
+# prefix_limit); 4 holds them.
+exits 1 swath du t -d 2 --max-prefixes 2 --no-stats --report prefixes.json
+cmp stderr want-prefix-limit.txt
+! stdout .
+json prefixes.json outcome.class outcome.exit_code outcome.cause
+stdout '\A"fatal"\n1\n"prefix_limit"\n\z'
+exec swath du t -d 2 --max-prefixes 4 --format jsonl --no-stats
+[!windows] cmpform stdout want-du-2.jsonl
+[windows] stdout -count=4 '^\{"row_type":"(total|prefix)",'
+
+# --work-dir belongs to a dataset in a bucket: with a local dataset it is
+# refused (exit 2) and nothing is created.
+exits 2 swath list t -o ds --work-dir w
+cmp stderr want-work-dir.txt
+! exists ds
+! exists w
+
+# Hard links and blocks (not on Windows, which reads neither). --max-inodes
+# bounds the hard-linked files swath du remembers to count once: h has two,
+# so 1 fails (exit 1, cause inode_limit) and 2 counts each file once.
+[!windows] mktree h hardlink.spec
+[!windows] exits 1 swath du h --max-inodes 1 --no-stats --report inodes.json
+[!windows] cmp stderr want-inode-limit.txt
+[!windows] json inodes.json outcome.class outcome.exit_code outcome.cause
+[!windows] stdout '\A"fatal"\n1\n"inode_limit"\n\z'
+[!windows] exec swath du h --max-inodes 2 -d 1 --format jsonl --no-stats
+[!windows] cmpform stdout want-du-h.jsonl
+
+# --allocated requires the space on disk and leads with it; with the names
+# tier, which reads no blocks, it is refused (exit 2).
+[!windows] exec swath du t --allocated -d 1 --format jsonl --no-stats
+[!windows] env PRIMARY=allocated_bytes
+[!windows] cmpform stdout want-du-1.jsonl
+exits 2 swath du t --allocated --metadata names
+cmp stderr want-allocated-names.txt
+# #660 added -A (--apparent-size), which --allocated contradicts.
+[expect:current] exits 2 swath du t --allocated -A
+[expect:current] cmp stderr want-allocated-apparent.txt
+
+-- tree.spec --
+dir a 2026-01-01T00:00:00Z
+dir a/b 2026-01-01T00:00:00Z
+dir c 2026-01-01T00:00:00Z
+file a/b/x 7 2026-01-01T00:00:00Z
+file c/y 2 2026-01-01T00:00:00Z
+file e 3 2026-01-01T00:00:00Z
+-- hardlink.spec --
+dir a 2026-01-01T00:00:00Z
+dir a/b 2026-01-01T00:00:00Z
+dir c 2026-01-01T00:00:00Z
+file a/b/x 7 2026-01-01T00:00:00Z
+link a/b/w a/b/x
+file c/y 2 2026-01-01T00:00:00Z
+link c/z c/y
+file e 3 2026-01-01T00:00:00Z
+-- symlink.spec --
+file f 3 2026-01-01T00:00:00Z
+-- want-names.tsv --
+key	size	last_modified	kind	mode	uid	gid	nlink	inode	dev	allocated_bytes	metadata_changed_at	accessed_at	created_at	link_target
+a/	\N	\N	dir	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+a/b/	\N	\N	dir	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+a/b/x	\N	\N	file	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+c/	\N	\N	dir	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+c/y	\N	\N	file	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+e	\N	\N	file	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+-- want-names-rows.tsv --
+a/	dir	NULL	NULL	NULL
+a/b/	dir	NULL	NULL	NULL
+a/b/x	file	NULL	NULL	NULL
+c/	dir	NULL	NULL	NULL
+c/y	file	NULL	NULL	NULL
+e	file	NULL	NULL	NULL
+-- want-stat-linux.tsv --
+key	size	created_at
+a/	{pos}	\N
+a/b/	{pos}	\N
+a/b/x	7	\N
+c/	{pos}	\N
+c/y	2	\N
+e	3	\N
+-- want-statx.tsv --
+key	size	created_at
+a/	{pos}	{time}
+a/b/	{pos}	{time}
+a/b/x	7	{time}
+c/	{pos}	{time}
+c/y	2	{time}
+e	3	{time}
+-- want-prefix-limit.txt --
+swath: totals: more than 2 distinct prefixes at depth 2 (lower --depth, or raise --max-prefixes if memory allows: about 150 bytes a prefix)
+-- want-du-2.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":3,"size":12,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":1,"size":7,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":2,"prefix":"a/b/","objects":1,"dirs":0,"size":7,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+-- want-work-dir.txt --
+swath: --work-dir is the work directory of a dataset in a bucket; a dataset directory is its own
+See 'swath list --help'.
+-- want-inode-limit.txt --
+swath: the tree has more than 1 file with several hard links, which swath du counts once each: run it again with -l to count every name, or with --max-inodes N to remember more of them (about 100 MB a million)
+-- want-du-h.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":3,"size":12,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":1,"size":7,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+-- want-du-1.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":3,"size":12,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":1,"size":7,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":true}
+-- want-allocated-names.txt --
+swath: --allocated reads each entry's stat: not with --metadata names
+See 'swath du --help'.
+-- want-allocated-apparent.txt --
+swath: --allocated and --apparent-size each choose the figure that comes first: give one
+See 'swath du --help'.

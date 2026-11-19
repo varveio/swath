@@ -1,0 +1,68 @@
+# A dataset run killed outright (SIGKILL; on Windows TerminateProcess) once it
+# has committed a part loses nothing it saved: swath show reports the
+# interrupted run, swath resume continues it, and the result is the parts,
+# byte for byte, of a run never stopped. The bucket holds 12,000 keys
+# k/00001..k/12000 whose sizes are 1..12000 (72,006,000 bytes). Served with
+# 300 ms per listing page of 1,000 keys to one worker, the 12 pages take at
+# least 3.6 s (4.7 s measured), and the first part is published after about
+# 1.4 s: a part reaches data/ only once the journal has recorded it, so its
+# file is the signal that the run has committed progress. Parts close at 500
+# rows, never by time.
+#
+# The replay server logs every request it answers (--slow-request-log-ms 0):
+# after the kill it must never again be asked for a page from the start of the
+# keyspace, which a resume that listed everything again would ask for.
+
+seq keys.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt
+env FAST=$REPLAY
+replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=300ms,pivot_probe=100ms,structure_probe=100ms --slow-request-log-ms 0
+
+# The run that is never stopped, against a server without delays.
+exec swath list s3://bkt --endpoint-url $FAST --anonymous -j 1 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o whole
+json whole/manifest.json parts.23.rows extensions.swath.committed_object_bytes
+stdout '\A500\n72006000\n\z'
+! json whole/manifest.json parts.24
+
+# The killed run: killed as soon as its first part is in data/. A kill leaves
+# no closing lines, no error.json and no manifest.
+[!windows] env KILLED=killed
+# Windows: TerminateProcess ends the process with exit status 1.
+[windows] env KILLED=1
+signal KILL cut/data/part-00000.parquet $KILLED swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 1 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o cut
+! stdout .
+! stderr .
+! exists cut/manifest.json
+! exists cut/error.json
+replaylog $REPLAY killed.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' killed.log
+
+exec swath show cut
+stdout '\Acut: interrupted run\n'
+stdout '^  command   swath list --endpoint-url=http://127\.0\.0\.1:[0-9]+ --anonymous --workers=1 --part-interval=0 --part-max-rows=500 --sort-buffer=128KiB --output=cut s3://bkt$'
+stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
+! stderr .
+
+# The resume keeps the saved parts and lists the rest. The server saw it
+# list, and never from the start of the keyspace: no request without a
+# continuation token starts after nothing or after a string below the first
+# key, k/00001 (k, k/, k/0 .. k/00000).
+exec swath resume cut --report resumed.json
+replaylog $REPLAY resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' resumed.log
+! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' resumed.log
+json resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n12000\n\z'
+! exists cut/error.json
+exec swath show cut
+stdout '\Acut: complete\n'
+stdout '^  contents  12,000 objects, 68\.7 MiB; keys "k/00001" \.\. "k/12000"$'
+
+# The same parts as the run that was never stopped, and every row.
+json whole/manifest.json parts
+cp stdout whole-parts.json
+json cut/manifest.json parts
+cmp stdout whole-parts.json
+dataset cut 'SELECT key, size, epoch_us(last_modified), etag, storage_class, owner_id, owner_display_name, checksum_algorithm, checksum_type FROM ds'
+seq want-rows.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL'
+cmp stdout want-rows.tsv

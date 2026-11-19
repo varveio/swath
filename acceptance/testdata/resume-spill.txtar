@@ -1,0 +1,53 @@
+# A resume reads back what the stopped run kept in its durable spill files
+# instead of listing it again (docs/resume-and-refresh.md, "What a resume
+# keeps and lists again"), and still gives the parts, byte for byte, of a run
+# never stopped. The bucket holds 30,000 keys k/00001..k/30000 whose sizes
+# are 1..30000 (450,015,000 bytes). Served with 1 s per listing page of 1,000
+# keys to 8 workers and a 128 KiB sort buffer, the ranges ahead of the output
+# spill, and several of them finish listing, which seals their spill files,
+# before the run is stopped at 6 s (3 or 4 sealed on every run measured; the
+# whole listing takes about 12 s). Parts close at 500 rows, never by time.
+#
+# The resume's report is the only witness of the read-back here: the replay
+# server's page log cannot tell keys listed again from the keys past a range's
+# end that every page carries. The server still witnesses that the resume
+# never lists from the start of the keyspace.
+
+seq keys.tsv 30000 'k/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt
+env FAST=$REPLAY
+replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=1000ms,pivot_probe=200ms,structure_probe=200ms --slow-request-log-ms 0
+
+# The run that is never stopped, against a server without delays.
+exec swath list s3://bkt --endpoint-url $FAST --anonymous -j 8 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o whole
+json whole/manifest.json parts.59.rows extensions.swath.committed_object_bytes
+stdout '\A500\n450015000\n\z'
+! json whole/manifest.json parts.60
+
+# The stopped run: stopped at the deadline (exit 124), with parts saved and
+# spill files sealed.
+exits 124 swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 8 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o cut --max-duration 6s --report stopped.json
+json stopped.json outcome.class output.parts_written diagnostics.resources.spill.durable.sealed_durable
+stdout '\A"deadline"\n[1-9][0-9]*\n[1-9][0-9]*\n\z'
+replaylog $REPLAY stopped.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' stopped.log
+
+# The resume reads sealed spill back (rows it did not list), lists the rest,
+# never from the start of the keyspace, and commits all 30,000 rows.
+exec swath resume cut --max-duration 0 --report resumed.json
+replaylog $REPLAY resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' resumed.log
+! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' resumed.log
+json resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n30000\n\z'
+json resumed.json diagnostics.resources.spill.durable.resume.replayed_certificates diagnostics.resources.spill.durable.resume.replayed_rows
+stdout '\A[1-9][0-9]*\n[1-9][0-9]*\n\z'
+
+# The same parts as the run that was never stopped, and every row.
+json whole/manifest.json parts
+cp stdout whole-parts.json
+json cut/manifest.json parts
+cmp stdout whole-parts.json
+dataset cut 'SELECT key, size, epoch_us(last_modified) FROM ds'
+seq want-rows.tsv 30000 'k/%05[1]d\t%[1]d\t1767225600000000'
+cmp stdout want-rows.tsv

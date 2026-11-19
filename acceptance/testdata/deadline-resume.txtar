@@ -8,11 +8,16 @@
 # first commit, and 6 s before it could possibly finish. Parts close at 500
 # rows, never by time (--part-interval 0), so their boundaries do not depend
 # on timing.
+#
+# The replay server is the witness that the resume reuses what the stopped
+# run saved: it logs every request it answers (--slow-request-log-ms 0), and
+# after the stop it must never again be asked for a page from the start of
+# the keyspace, which a resume that listed everything again would ask for.
 
 seq keys.tsv 30000 'k/%05[1]d\t%[1]d\t1767225600000000'
 replay --fixture keys.tsv --bucket bkt
 env FAST=$REPLAY
-replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=1000ms,pivot_probe=200ms,structure_probe=200ms
+replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=1000ms,pivot_probe=200ms,structure_probe=200ms --slow-request-log-ms 0
 
 # The run that is never stopped, against a server without delays.
 exec swath list s3://bkt --endpoint-url $FAST --anonymous -j 2 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o whole
@@ -32,6 +37,11 @@ stdout '\A[1-9][0-9]*\n[1-9][0-9]*\n\z'
 ! exists cut/manifest.json
 json cut/error.json class exit_code resumable status complete stop_source message
 stdout '\A"deadline"\n124\ntrue\n"failed"\nfalse\n"timebox"\n"deadline: --max-duration reached"\n\z'
+# The stopped run asked for the first page: no start-after, no continuation
+# token. The server logs such a request in this form, so its absence later
+# means something.
+replaylog $REPLAY stopped.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' stopped.log
 
 exec swath show cut
 stdout '\Acut: interrupted run\n'
@@ -55,9 +65,18 @@ exits 2 swath list s3://bkt --endpoint-url $REPLAY --anonymous -o cut
 cmp stderr refused.txt
 digests cut
 cmp stdout cut-before.txt
+# It is refused before it sends any request.
+replaylog $REPLAY refused.log
+! grep . refused.log
 
-# The resume keeps the committed parts and lists the rest.
+# The resume keeps the committed parts and lists the rest. The server saw it
+# list, and never from the start of the keyspace: no request without a
+# continuation token starts after nothing or after a string below the first
+# key, k/00001 (k, k/, k/0 .. k/00000), whatever its shape or delimiter.
 exec swath resume cut --max-duration 0 --report resumed.json
+replaylog $REPLAY resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' resumed.log
+! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' resumed.log
 json resumed.json outcome.class outcome.exit_code outcome.complete output.parts_retained output.rows_retained output.rows_committed
 stdout '\A"ok"\n0\ntrue\n[1-9][0-9]*\n[1-9][0-9]*\n30000\n\z'
 ! exists cut/error.json

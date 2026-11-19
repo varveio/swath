@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -22,7 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -35,6 +34,33 @@ var expectations = []string{"v0.4.0", "current"}
 
 // replayStartup bounds the wait for swath-replay's startup line.
 const replayStartup = 30 * time.Second
+
+// processWait bounds each wait of signal and head: for the path that says
+// when to signal, and for the program to end after the signal or after its
+// reader closed.
+const processWait = 60 * time.Second
+
+// pollEvery is how often a bounded wait looks at what it waits for.
+const pollEvery = 10 * time.Millisecond
+
+// script is a script's own state for the harness commands: the names of the
+// environment variables it started with, and the log of each replay server
+// it started, by endpoint.
+type script struct {
+	envNames []string
+	logs     map[string]*replayLog
+}
+
+// replayLog is a replay server's stderr, written by the server into a file,
+// and how much of it replaylog has handed out.
+type replayLog struct {
+	path   string
+	offset int64
+}
+
+type scriptKey struct{}
+
+func state(ts *testscript.TestScript) *script { return ts.Value(scriptKey{}).(*script) }
 
 type inputs struct {
 	swath, replay, duckdb, expect string
@@ -62,6 +88,13 @@ func TestScenarios(t *testing.T) {
 				// The owner of every file a script creates.
 				env.Setenv("UID", strconv.Itoa(os.Getuid()))
 			}
+			st := &script{logs: map[string]*replayLog{}}
+			for _, kv := range env.Vars {
+				if name, _, ok := strings.Cut(kv, "="); ok && name != "" {
+					st.envNames = append(st.envNames, name)
+				}
+			}
+			env.Values[scriptKey{}] = st
 			return nil
 		},
 		Condition: func(cond string) (bool, error) {
@@ -76,14 +109,17 @@ func TestScenarios(t *testing.T) {
 			return false, fmt.Errorf("unknown condition %q", cond)
 		},
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
-			"exits":   cmdExits,
-			"mktree":  cmdMktree,
-			"seq":     cmdSeq,
-			"json":    cmdJSON,
-			"cmpform": cmdCmpform,
-			"digests": cmdDigests,
-			"dataset": func(ts *testscript.TestScript, neg bool, args []string) { cmdDataset(ts, neg, args, in.duckdb) },
-			"replay":  func(ts *testscript.TestScript, neg bool, args []string) { cmdReplay(ts, neg, args, in.replay) },
+			"exits":     cmdExits,
+			"mktree":    cmdMktree,
+			"seq":       cmdSeq,
+			"json":      cmdJSON,
+			"cmpform":   cmdCmpform,
+			"digests":   cmdDigests,
+			"dataset":   func(ts *testscript.TestScript, neg bool, args []string) { cmdDataset(ts, neg, args, in.duckdb) },
+			"replay":    func(ts *testscript.TestScript, neg bool, args []string) { cmdReplay(ts, neg, args, in.replay) },
+			"replaylog": cmdReplaylog,
+			"signal":    cmdSignal,
+			"head":      cmdHead,
 		},
 	})
 }
@@ -480,9 +516,11 @@ func cmdDigests(ts *testscript.TestScript, neg bool, args []string) {
 // prints the rows tab-separated, without a header, NULL as NULL. Before
 // the query it checks the manifest's claims against the files: each part
 // it names exists with its byte count, SHA-256 and row count, and data/
-// holds no other part. SQL sees two tables: ds, every column of the parts
-// in the manifest's order and each part's row order (the physical order:
-// a query without ORDER BY returns it), and ds_schema, the first part's
+// holds no other part, and every part has the first part's Parquet schema
+// (each node's name, types, repetition and the rest of DuckDB's
+// parquet_schema, in order). SQL sees two tables: ds, every column of the
+// parts in the manifest's order and each part's row order (the physical
+// order: a query without ORDER BY returns it), and ds_schema, the parts'
 // Parquet columns (name, type, repetition_type, converted_type).
 func cmdDataset(ts *testscript.TestScript, neg bool, args []string, duckdb string) {
 	if neg || len(args) != 2 {
@@ -504,7 +542,7 @@ func cmdDataset(ts *testscript.TestScript, neg bool, args []string, duckdb strin
 		ts.Fatalf("%s/manifest.json names no part", args[0])
 	}
 	listed := map[string]bool{}
-	var scans, counts []string
+	var scans, counts, schemas []string
 	for i, p := range m.Parts {
 		path := filepath.Join(dir, filepath.FromSlash(p.Path))
 		listed[path] = true
@@ -520,6 +558,8 @@ func cmdDataset(ts *testscript.TestScript, neg bool, args []string, duckdb strin
 		scans = append(scans, fmt.Sprintf("SELECT %d AS __part, file_row_number AS __row, * FROM read_parquet(%s, file_row_number = true)",
 			i, sqlString(filepath.ToSlash(path))))
 		counts = append(counts, fmt.Sprintf("(%d, %s, %d)", i, sqlString(p.Path), p.Rows))
+		schemas = append(schemas, fmt.Sprintf("SELECT %d AS part, %s AS path, list(s) AS nodes FROM (SELECT * EXCLUDE (file_name) FROM parquet_schema(%s)) s",
+			i, sqlString(p.Path), sqlString(filepath.ToSlash(path))))
 	}
 	others, _ := filepath.Glob(filepath.Join(dir, "data", "*.parquet"))
 	for _, p := range others {
@@ -529,6 +569,11 @@ func cmdDataset(ts *testscript.TestScript, neg bool, args []string, duckdb strin
 	}
 	first := sqlString(filepath.ToSlash(filepath.Join(dir, filepath.FromSlash(m.Parts[0].Path))))
 	setup := strings.Join([]string{
+		"CREATE TEMP TABLE __schemas AS " + strings.Join(schemas, " UNION ALL "),
+		"CREATE TEMP TABLE __check AS SELECT error(printf('part %s has another Parquet schema than part %s: %s; %s', b.path, a.path, CAST(b.nodes AS VARCHAR), CAST(a.nodes AS VARCHAR))) " +
+			"FROM __schemas a, __schemas b WHERE a.part = 0 AND b.nodes IS DISTINCT FROM a.nodes",
+		"DROP TABLE __check",
+		"DROP TABLE __schemas",
 		"CREATE TEMP TABLE __rows AS " + strings.Join(scans, " UNION ALL ") + " ORDER BY __part, __row",
 		"CREATE TEMP TABLE __check AS SELECT error(printf('part %s has %d rows; the manifest says %d', m.path, coalesce(c.n, 0), m.n)) " +
 			"FROM (VALUES " + strings.Join(counts, ", ") + ") m(part, path, n) " +
@@ -555,47 +600,229 @@ func sqlString(s string) string {
 
 // replay FLAGS... starts swath-replay serve --port 0 FLAGS in the current
 // directory, waits for its startup line and sets $REPLAY to the endpoint
-// it reports. The server is killed when the script ends.
+// it reports. The server writes its stderr straight into a file, so a line
+// it logs before answering a request is there once the answer arrives
+// (replaylog reads it). The server is killed when the script ends.
 func cmdReplay(ts *testscript.TestScript, neg bool, args []string, bin string) {
 	if neg {
 		ts.Fatalf("unsupported: ! replay")
 	}
+	logf, err := os.CreateTemp(filepath.Join(ts.Getenv("WORK"), ".tmp"), "replay-*.log")
+	ts.Check(err)
 	cmd := exec.Command(bin, append([]string{"serve", "--port", "0"}, args...)...)
 	cmd.Dir = ts.MkAbs(".")
-	pipe, err := cmd.StderrPipe()
+	cmd.Stderr = logf
+	err = cmd.Start()
+	logf.Close()
 	ts.Check(err)
-	ts.Check(cmd.Start())
 	exited := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(exited)
+	}()
 	ts.Defer(func() {
 		cmd.Process.Kill()
 		<-exited
 	})
-	var mu sync.Mutex
-	var log strings.Builder
-	startup := make(chan string, 1)
+	stderr := func() string {
+		b, _ := os.ReadFile(logf.Name())
+		return string(b)
+	}
+	deadline := time.After(replayStartup)
+	tick := time.NewTicker(pollEvery)
+	defer tick.Stop()
+	for {
+		for _, line := range strings.SplitAfter(stderr(), "\n") {
+			rest, ok := strings.CutPrefix(line, "swath_replay endpoint=")
+			if !ok || !strings.HasSuffix(line, "\n") {
+				continue
+			}
+			endpoint, _, _ := strings.Cut(rest, " ")
+			ts.Logf("swath-replay: %s", strings.TrimSuffix(line, "\n"))
+			ts.Setenv("REPLAY", endpoint)
+			state(ts).logs[endpoint] = &replayLog{path: logf.Name()}
+			return
+		}
+		select {
+		case <-exited:
+			ts.Fatalf("swath-replay exited before its startup line (%v):\n%s", cmd.ProcessState, stderr())
+		case <-deadline:
+			ts.Fatalf("swath-replay printed no startup line within %v:\n%s", replayStartup, stderr())
+		case <-tick.C:
+		}
+	}
+}
+
+// replaylog ENDPOINT FILE writes to FILE the lines the replay server at
+// ENDPOINT has logged since it started, or since the previous replaylog of
+// it: whole lines only, in the order the server wrote them. Started with
+// --slow-request-log-ms 0, the server logs every listing request it
+// answers, before the answer, with its shape, prefix, start-after, whether
+// it carried a continuation token and the entries it returned.
+func cmdReplaylog(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) != 2 {
+		ts.Fatalf("usage: replaylog endpoint file")
+	}
+	l := state(ts).logs[args[0]]
+	if l == nil {
+		ts.Fatalf("replaylog: no replay server was started at %s", args[0])
+	}
+	b, err := os.ReadFile(l.path)
+	ts.Check(err)
+	b = b[l.offset:]
+	b = b[:bytes.LastIndexByte(b, '\n')+1]
+	l.offset += int64(len(b))
+	ts.Check(os.WriteFile(ts.MkAbs(args[1]), b, 0o644))
+}
+
+// signals are the signals signal sends.
+var signals = map[string]os.Signal{
+	"INT":  os.Interrupt,
+	"TERM": syscall.SIGTERM,
+	"HUP":  syscall.SIGHUP,
+	"KILL": os.Kill,
+}
+
+// signal SIG PATH WANT PROGRAM [ARGS...] runs PROGRAM as exec does, waits
+// until PATH exists, sends PROGRAM the signal SIG (INT, TERM, HUP or KILL)
+// and requires it to end as WANT says: an exit status (130), or "killed"
+// for a process the signal ended (on Unix; Windows has no such status).
+// Each wait is bounded; PROGRAM ending before PATH exists fails.
+func cmdSignal(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) < 4 {
+		ts.Fatalf("usage: signal INT|TERM|HUP|KILL path want program [args...]")
+	}
+	sig, ok := signals[args[0]]
+	if !ok {
+		ts.Fatalf("signal: unknown signal %q", args[0])
+	}
+	path := ts.MkAbs(args[1])
+	cmd := command(ts, args[3], args[4:])
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	ts.Check(cmd.Start())
+	done := make(chan struct{})
 	go func() {
-		sc := bufio.NewScanner(pipe)
-		for sc.Scan() {
-			mu.Lock()
-			log.WriteString(sc.Text() + "\n")
-			mu.Unlock()
-			if strings.HasPrefix(sc.Text(), "swath_replay endpoint=") {
-				startup <- sc.Text()
+		cmd.Wait()
+		close(done)
+	}()
+	defer func() {
+		ts.Stdout().Write(stdout.Bytes())
+		ts.Stderr().Write(stderr.Bytes())
+	}()
+	deadline := time.After(processWait)
+	tick := time.NewTicker(pollEvery)
+	defer tick.Stop()
+	for waiting := true; waiting; {
+		select {
+		case <-done:
+			ts.Fatalf("%s ended (%v) before %s existed\n%s", args[3], cmd.ProcessState, args[1], stderr.String())
+		case <-deadline:
+			cmd.Process.Kill()
+			<-done
+			ts.Fatalf("%s did not exist within %v", args[1], processWait)
+		case <-tick.C:
+			_, err := os.Stat(path)
+			waiting = err != nil
+		}
+	}
+	ts.Check(cmd.Process.Signal(sig))
+	awaitEnd(ts, cmd, done, args[2], sig, "after SIG"+args[0])
+}
+
+// head N WANT PROGRAM [ARGS...] runs PROGRAM as exec does with its stdout
+// on a pipe, reads N lines from it and closes it, as head -n N does, and
+// requires PROGRAM to end as WANT says (an exit status) within a bound.
+// The N lines are head's stdout, and PROGRAM's stderr its stderr.
+func cmdHead(ts *testscript.TestScript, neg bool, args []string) {
+	if neg || len(args) < 3 {
+		ts.Fatalf("usage: head n want program [args...]")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n < 1 {
+		ts.Fatalf("head: want a positive line count, got %q", args[0])
+	}
+	r, w, err := os.Pipe()
+	ts.Check(err)
+	cmd := command(ts, args[2], args[3:])
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = w, &stderr
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
+		r.Close()
+		ts.Fatalf("%s: %v", args[2], err)
+	}
+	done := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(done)
+	}()
+	defer func() { ts.Stderr().Write(stderr.Bytes()) }()
+	br := bufio.NewReader(r)
+	for i := 0; i < n; i++ {
+		line, err := br.ReadString('\n')
+		ts.Stdout().Write([]byte(line))
+		if err != nil {
+			r.Close()
+			<-done
+			ts.Fatalf("%s wrote %d lines, not %d (%v)", args[2], i, n, err)
+		}
+	}
+	r.Close()
+	awaitEnd(ts, cmd, done, args[1], nil, "after its reader closed")
+}
+
+// awaitEnd waits, within processWait, for cmd to end and requires it to end
+// as want says: an exit status, or "killed" by the signal sig.
+func awaitEnd(ts *testscript.TestScript, cmd *exec.Cmd, done <-chan struct{}, want string, sig os.Signal, after string) {
+	select {
+	case <-done:
+	case <-time.After(processWait):
+		cmd.Process.Kill()
+		<-done
+		ts.Fatalf("%s did not end within %v %s", filepath.Base(cmd.Path), processWait, after)
+	}
+	ws, _ := cmd.ProcessState.Sys().(syscall.WaitStatus)
+	got := strconv.Itoa(cmd.ProcessState.ExitCode())
+	if ws.Signaled() {
+		got = "killed"
+		if sig == nil || ws.Signal() != sig {
+			got = "killed by " + ws.Signal().String()
+		}
+	}
+	if got != want {
+		ts.Fatalf("%s ended %s (%v), want %s", filepath.Base(cmd.Path), got, cmd.ProcessState, want)
+	}
+}
+
+// command is PROGRAM ARGS as exec would run it: found on the script's PATH,
+// in the script's directory, with the script's environment (the variables
+// it started with, as env has set them since).
+func command(ts *testscript.TestScript, program string, args []string) *exec.Cmd {
+	path := program
+	if filepath.Base(program) == program {
+		path = ""
+		for _, dir := range filepath.SplitList(ts.Getenv("PATH")) {
+			for _, ext := range []string{"", ".exe"} {
+				if fi, err := os.Stat(filepath.Join(dir, program+ext)); err == nil && fi.Mode().IsRegular() {
+					path = filepath.Join(dir, program+ext)
+					break
+				}
+			}
+			if path != "" {
+				break
 			}
 		}
-		io.Copy(io.Discard, pipe)
-		cmd.Wait()
-		close(exited)
-	}()
-	stderr := func() string { mu.Lock(); defer mu.Unlock(); return log.String() }
-	select {
-	case line := <-startup:
-		endpoint, _, _ := strings.Cut(strings.TrimPrefix(line, "swath_replay endpoint="), " ")
-		ts.Logf("swath-replay: %s", line)
-		ts.Setenv("REPLAY", endpoint)
-	case <-exited:
-		ts.Fatalf("swath-replay exited before its startup line (%v):\n%s", cmd.ProcessState, stderr())
-	case <-time.After(replayStartup):
-		ts.Fatalf("swath-replay printed no startup line within %v:\n%s", replayStartup, stderr())
+		if path == "" {
+			ts.Fatalf("%s: not found on the script's PATH", program)
+		}
 	}
+	cmd := exec.Command(path, args...)
+	cmd.Dir = ts.MkAbs(".")
+	for _, name := range state(ts).envNames {
+		cmd.Env = append(cmd.Env, name+"="+ts.Getenv(name))
+	}
+	cmd.Env = append(cmd.Env, "PWD="+cmd.Dir)
+	return cmd
 }

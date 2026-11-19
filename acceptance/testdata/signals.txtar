@@ -1,0 +1,115 @@
+# SIGINT, SIGTERM and SIGHUP each stop a dataset run of an object store as
+# docs/reference/exit-codes.md says: swath records the outcome (error.json:
+# class, exit code 130, 143 or 129, stop source), says how to continue, and
+# then dies by that signal, as a command a signal stops does. The run can be
+# resumed, and the resume gives the parts, byte for byte, of a run never
+# stopped. Unix only: Windows has no such signals to send. The bucket holds
+# 12,000 keys k/00001..k/12000 whose sizes are 1..12000 (72,006,000 bytes).
+# Served with 300 ms per listing page of 1,000 keys to one worker, the 12
+# pages take at least 3.6 s (4.7 s measured); each run is signalled once its
+# first part is in data/ (about 1.4 s), which the journal has recorded by
+# then. Parts close at 500 rows, never by time.
+#
+# The replay server logs every request it answers (--slow-request-log-ms 0):
+# after a stop it must never again be asked for a page from the start of the
+# keyspace, which a resume that listed everything again would ask for.
+
+[!unix] skip 'SIGINT, SIGTERM and SIGHUP: Windows has none to send'
+
+seq keys.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt
+env FAST=$REPLAY
+replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=300ms,pivot_probe=100ms,structure_probe=100ms --slow-request-log-ms 0
+
+# The run that is never stopped, against a server without delays, and its
+# rows.
+exec swath list s3://bkt --endpoint-url $FAST --anonymous -j 1 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o whole
+json whole/manifest.json parts.23.rows extensions.swath.committed_object_bytes
+stdout '\A500\n72006000\n\z'
+! json whole/manifest.json parts.24
+json whole/manifest.json parts
+cp stdout whole-parts.json
+dataset whole 'SELECT key, size, epoch_us(last_modified) FROM ds'
+seq want-rows.tsv 12000 'k/%05[1]d\t%[1]d\t1767225600000000'
+cmp stdout want-rows.tsv
+
+# SIGINT: the run stops, records exit 130 and dies by the signal.
+signal INT int/data/part-00000.parquet killed swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 1 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o int
+! stdout .
+stderr '\A  interrupted: [0-9,]+ saved, [0-9,]+ listed in [0-9.]+s( · [0-9,]+ keys/s)? → int \([1-9][0-9]* parts?, [0-9.]+ KiB\)\n  next: swath resume int\nswath: stopped by interrupt\n\z'
+! exists int/manifest.json
+json int/error.json class exit_code resumable status complete stop_source message
+stdout '\A"interrupted"\n130\ntrue\n"failed"\nfalse\n"sigint"\n"stopped by interrupt"\n\z'
+replaylog $REPLAY int-stopped.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' int-stopped.log
+exec swath show int
+stdout '\Aint: interrupted run\n'
+stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
+
+# Resumed, it lists the rest, never from the start of the keyspace, and
+# gives the same parts as the run never stopped.
+exec swath resume int --report int-resumed.json
+replaylog $REPLAY int-resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' int-resumed.log
+! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' int-resumed.log
+json int-resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n12000\n\z'
+! exists int/error.json
+json int/manifest.json parts
+cmp stdout whole-parts.json
+dataset int 'SELECT count(*) FROM ds'
+stdout '\A12000\n\z'
+
+# SIGTERM: the run stops, records exit 143 and dies by the signal.
+signal TERM term/data/part-00000.parquet killed swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 1 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o term
+! stdout .
+stderr '\A  interrupted: SIGTERM; [0-9,]+ saved, [0-9,]+ listed in [0-9.]+s( · [0-9,]+ keys/s)? → term \([1-9][0-9]* parts?, [0-9.]+ KiB\)\n  next: swath resume term\nswath: stopped by SIGTERM\n\z'
+! exists term/manifest.json
+json term/error.json class exit_code resumable status complete stop_source message
+stdout '\A"terminated"\n143\ntrue\n"failed"\nfalse\n"sigterm"\n"stopped by SIGTERM"\n\z'
+replaylog $REPLAY term-stopped.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' term-stopped.log
+exec swath show term
+stdout '\Aterm: interrupted run\n'
+stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
+
+# Resumed, it lists the rest, never from the start of the keyspace, and
+# gives the same parts as the run never stopped.
+exec swath resume term --report term-resumed.json
+replaylog $REPLAY term-resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' term-resumed.log
+! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' term-resumed.log
+json term-resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n12000\n\z'
+! exists term/error.json
+json term/manifest.json parts
+cmp stdout whole-parts.json
+dataset term 'SELECT count(*) FROM ds'
+stdout '\A12000\n\z'
+
+# SIGHUP: the run stops, records exit 129 and dies by the signal.
+signal HUP hup/data/part-00000.parquet killed swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 1 --part-interval 0 --part-max-rows 500 --sort-buffer 128KiB -o hup
+! stdout .
+stderr '\A  interrupted: SIGHUP; [0-9,]+ saved, [0-9,]+ listed in [0-9.]+s( · [0-9,]+ keys/s)? → hup \([1-9][0-9]* parts?, [0-9.]+ KiB\)\n  next: swath resume hup\nswath: stopped by hangup\n\z'
+! exists hup/manifest.json
+json hup/error.json class exit_code resumable status complete stop_source message
+stdout '\A"terminated"\n129\ntrue\n"failed"\nfalse\n"sighup"\n"stopped by hangup"\n\z'
+replaylog $REPLAY hup-stopped.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' hup-stopped.log
+exec swath show hup
+stdout '\Ahup: interrupted run\n'
+stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after "k/[0-9]{5}"$'
+
+# Resumed, it lists the rest, never from the start of the keyspace, and
+# gives the same parts as the run never stopped.
+exec swath resume hup --report hup-resumed.json
+replaylog $REPLAY hup-resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' hup-resumed.log
+! grep ' start_after=(-|k|k/0{0,5}) continuation=none ' hup-resumed.log
+json hup-resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n12000\n\z'
+! exists hup/error.json
+json hup/manifest.json parts
+cmp stdout whole-parts.json
+dataset hup 'SELECT count(*) FROM ds'
+stdout '\A12000\n\z'
