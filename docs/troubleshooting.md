@@ -14,7 +14,7 @@ Start from the exit code and the last line on stderr. With `--report FILE`, the 
 
 <!-- The first lines of the messages quoted under Unknown flag, The output directory is refused and
 -o names a format are checked against the binary, with their exit code 2, by TestDocsTroubleshootingMessages
-in go test ./internal/command; the others are not. -->
+in go test ./command; the others are not. -->
 
 ## Credentials could not be loaded
 

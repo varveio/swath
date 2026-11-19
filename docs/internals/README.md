@@ -34,7 +34,7 @@ manifest's `extensions.swath`, typed rows and current-object streaming);
 
 | Path | What it is |
 |---|---|
-| `cmd/swath` | the swath binary, which runs the command line in `internal/command` |
+| `cmd/swath` | the swath binary, which runs `command` |
 | `source/` | the experimental Go library: a live `Source` ([library](../library.md)) |
 | `source/s3`, `source/gcs`, `source/azblob`, `source/local` | the library's providers, each opening a `Source`: an S3 bucket, a Google Cloud Storage bucket, an Azure Blob Storage container, a directory the caller opened ([library](../library.md)) |
 | `cmd/swath-replay` | the replay server ([swath-replay.md](swath-replay.md)) |

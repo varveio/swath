@@ -206,8 +206,8 @@ The race shards are the table in [`scripts/ci/go-race-shards.sh`](../../scripts/
 | `durable` | `-run '^(TestDurable.*\|TestDiskFaultMatrix)$' ./internal/inventory` | ubuntu-24.04-arm | `inventory-rest`'s |
 | `remote-crash` | `-run '^TestRemoteCrashMatrix$' ./internal/inventory` | ubuntu-24.04-arm | `inventory-rest`'s |
 | `inventory-rest` | `-skip` the three patterns above, `./internal/inventory` | ubuntu-24.04-arm | `go-race-inventory-rest` |
-| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./internal/command` | ubuntu-24.04-arm | `cmd`'s |
-| `cmd` | `-skip` the pattern above, `./internal/command` | ubuntu-24.04-arm | `go-race-cmd` |
+| `cmd-kill` | `-run '^(TestSIGKILL.*\|TestForcedExit.*)$' ./command` | ubuntu-24.04-arm | `cmd`'s |
+| `cmd` | `-skip` the pattern above, `./command` | ubuntu-24.04-arm | `go-race-cmd` |
 | `rest-replay` | `./internal/replay/...`, `./bench/replaydiff` | ubuntu-latest | `go-race-rest-replay` |
 | `rest-source` | `./internal/source/...` | ubuntu-latest | `go-race-rest-source` |
 | `rest` | every package no row names (a new package lands here) | ubuntu-latest | `go-race-rest` |
@@ -478,7 +478,7 @@ only the two named.
 | `SWATH_GROWTH=1` | the 10,000-part arm of `TestPartCountGrowth` | `internal/inventory` | never |
 | `SWATH_VERIFY_DIR=DIR` | `TestVerifyThroughput` | `internal/inventory` | never |
 | `SWATH_VERIFIER_FIXTURES=DIR` | `TestVerifierFixtures`, run by `test_dataset_readers.py` | `internal/inventory` | never |
-| `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `internal/command/testdata`, `docs/internals/counters.md`, the report schema | `internal/command`, `internal/source/s3`, `internal/inventory` | never; the comparisons run in the default suite |
+| `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `command/testdata`, `docs/internals/counters.md`, the report schema | `command`, `internal/source/s3`, `internal/inventory` | never; the comparisons run in the default suite |
 | `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in the default suite |
 
 The heap tier exists because the full arms allocate hundreds of MiB and measure the live heap, which `-race`

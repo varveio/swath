@@ -20,7 +20,7 @@ LIGHT_DOCS = ('docs/assets/', 'docs/style.md', 'docs/ops/')
 # The Go tree: the nested modules' directories, and the main module's directories and root files
 # (a .go file at the root too: in_go_tree).
 NESTED = ('objfile/', 'reader/')
-MAIN_DIRS = ('cmd/', 'internal/', 'bench/', 'testdata/', 'docs/', 'source/')
+MAIN_DIRS = ('cmd/', 'command/', 'internal/', 'bench/', 'testdata/', 'docs/', 'source/')
 MAIN_FILES = {'go.mod', 'go.sum', 'verify.py', 'dataset_schema.py', 'test_dataset_readers.py'}
 # The workspace that joins the three modules for every build in the repository (go.work.sum is
 # not committed: .gitignore).

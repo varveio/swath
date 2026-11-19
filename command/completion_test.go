@@ -44,7 +44,7 @@ func TestCompletionGolden(t *testing.T) {
 			t.Fatal(err)
 		}
 		if string(want) != got {
-			t.Errorf("%s is stale; run UPDATE=1 go test ./internal/command -run TestCompletion", path)
+			t.Errorf("%s is stale; run UPDATE=1 go test ./command -run TestCompletion", path)
 		}
 	}
 }
