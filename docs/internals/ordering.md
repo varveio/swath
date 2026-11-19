@@ -145,10 +145,12 @@ page's), a resume's `after` (read from the journal, never from a page), and pivo
 encode fresh strings). GCS pages are decoded by `encoding/json`, which allocates each string on its own: a
 retained GCS key pins only itself, and the engine's copy covers it anyway. The order stage itself keeps only
 rows (charged as rows, `Schema.RowBytes`) and the drainer's last key, which aliases the page of a row it has
-already handed on. `TestRetainedBoundsDoNotPinPages` (listing; real XML through the production parser, a
-held-up first range) bounds the peak live heap by the budget and the pages in flight and fails on the leak. It
-holds the smallest peak of three runs to that bound: the sampled live heap reads high for one sample when a
-collection lands at a burst, while a pinned page shows in every run.
+already handed on. `TestRetainedBoundsAreCopies` (`keyrange`) checks the copy itself: over pages whose keys
+are views of one buffer, as the S3 parser's are, no split child's bound or anchor points into a listed page.
+`TestRetainedBoundsDoNotPinPages` (listing; real XML through the production parser, a held-up first range)
+bounds the peak live heap by the budget and the pages in flight. It holds the smallest peak of three runs to
+that bound: the sampled live heap reads high for one sample when a collection lands at a burst. It bounds the
+envelope, not the copy: with the cursor left a view of its page it still passes (2026-11-19).
 
 **What `--sort-buffer` is not.** It is not a cap on the process's resident memory. It bounds rows and
 metadata in flight; outside it are response buffers and decoded pages

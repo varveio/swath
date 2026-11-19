@@ -68,8 +68,9 @@ func liveHeap() int64 {
 // the page, each waiting range would keep its parent's whole page arena
 // alive (about 1,000 × key and ETag), which the budget charges as a node of
 // about 150 bytes. The peak live heap must stay within a bound of the
-// budget and the pages in flight: +62 MiB (+63 MiB under -race) with the
-// cursor left a view of its page, against a 44 MiB bound.
+// budget and the pages in flight, 44 MiB. That bounds the envelope, not the
+// copy: with the cursor left a view of its page this test still passes
+// (2026-11-19); keyrange's TestRetainedBoundsAreCopies checks the copy.
 //
 // The peak is the live heap the last collection marked, sampled every
 // 100 ms, so a collection that lands while the pages in flight and the spill
