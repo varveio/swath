@@ -133,6 +133,17 @@ def dependants(outputs, manifests):
     return outputs
 
 
+def selection(paths, event, labels, manifests, *, unknown=False, build_tags=False, toolchain=False):
+    """Every output from the changed paths: the tiers, their module dependants, then the acceptance
+    legs, which follow the closure (a module main requires selects main)."""
+    outputs = select(paths, event, force_full='ci:full' in labels, unknown=unknown,
+                     build_tags=build_tags, toolchain=toolchain)
+    outputs = dependants(outputs, manifests)
+    if outputs['go'] and any(Path(path).name in {'go.mod', 'go.sum'} for path in paths):
+        outputs['images'] = True
+    return {**outputs, **acceptance(paths, outputs, event, unknown=unknown)}
+
+
 def detect(event, base, labels):
     unknown = not base or base == '0' * 40
     paths, build_tags, toolchain = [], False, False
@@ -161,12 +172,9 @@ def detect(event, base, labels):
                if path and not fixture_module(path) and path != ACCEPTANCE_MODULE}
     if tracked != set(MODULES.values()):
         raise RuntimeError('Go modules changed: update CI module ownership and jobs before merging')
-    outputs = select(paths, event, force_full='ci:full' in labels, unknown=unknown,
-                     build_tags=build_tags, toolchain=toolchain)
-    outputs = dependants(outputs, {key: Path(path).read_text() for key, path in MODULES.items()})
-    if outputs['go'] and any(Path(path).name in {'go.mod', 'go.sum'} for path in paths):
-        outputs['images'] = True
-    return {**outputs, **acceptance(paths, outputs, event, unknown=unknown)}
+    return selection(paths, event, labels,
+                     {key: Path(path).read_text() for key, path in MODULES.items()},
+                     unknown=unknown, build_tags=build_tags, toolchain=toolchain)
 
 
 def main():

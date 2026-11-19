@@ -172,13 +172,17 @@ class PolicyTests(unittest.TestCase):
                                       build_tags=True)['platforms'])
 
     def test_acceptance_legs(self):
-        # (paths, event, select() keywords) -> (candidate legs, baseline legs)
+        # The path detect() takes, selection() with the repository's own go.mod files, so a change
+        # to a module main requires selects main, and the candidate, through the closure.
+        manifests = {key: (ROOT / path).read_text() for key, path in policy.MODULES.items()}
+        # (paths, event, selection() keywords) -> (candidate legs, baseline legs)
         cases = [
             (['internal/x.go'], 'pull_request', {}, 'linux', 'off'),
             (['reader/read.go'], 'pull_request', {}, 'linux', 'off'),
             (['internal/journal/lock.go'], 'pull_request', {}, 'all', 'off'),
             (['go.sum'], 'pull_request', {}, 'all', 'off'),
-            (['objfile/object.go'], 'pull_request', {}, 'off', 'off'),
+            # The root go.mod requires objfile: main and the candidate follow.
+            (['objfile/object.go'], 'pull_request', {}, 'linux', 'off'),
             (['docs/start-here.md'], 'pull_request', {}, 'off', 'off'),
             (['README.md'], 'pull_request', {}, 'off', 'off'),
             (['acceptance/testdata/local.txtar'], 'pull_request', {}, 'all', 'all'),
@@ -186,7 +190,7 @@ class PolicyTests(unittest.TestCase):
             (['.github/workflows/acceptance.yml'], 'pull_request', {}, 'all', 'all'),
             (['.github/workflows/ci.yml'], 'pull_request', {}, 'all', 'off'),
             (['scripts/ci/go-ci-policy.py'], 'pull_request', {}, 'all', 'off'),
-            (['README.md'], 'pull_request', dict(force_full=True), 'all', 'off'),
+            (['README.md'], 'pull_request', dict(labels=['ci:full']), 'all', 'off'),
             (['README.md'], 'push', {}, 'all', 'off'),
             (['internal/x.go'], 'push', {}, 'all', 'off'),
             (['acceptance/testdata/local.txtar'], 'push', {}, 'all', 'all'),
@@ -195,22 +199,31 @@ class PolicyTests(unittest.TestCase):
         ]
         for paths, event, kwargs, candidate, baseline in cases:
             with self.subTest(paths=paths, event=event, kwargs=kwargs):
-                out = policy.select(paths, event, **kwargs)
-                got = policy.acceptance(paths, out, event, unknown=kwargs.get('unknown', False))
-                self.assertEqual(got, {'acceptance': candidate, 'acceptance_baseline': baseline})
+                kwargs = dict(kwargs)
+                got = policy.selection(paths, event, kwargs.pop('labels', []), manifests, **kwargs)
+                self.assertEqual((got['acceptance'], got['acceptance_baseline']), (candidate, baseline))
 
     def test_acceptance_workflow_legs(self):
         # The plan step of acceptance.yml: the legs each `platforms` value expands to.
         runners = {'linux-amd64': 'ubuntu-latest', 'linux-arm64': 'ubuntu-24.04-arm',
                    'darwin-arm64': 'macos-latest', 'darwin-amd64': 'macos-15-intel',
                    'windows-amd64': 'windows-latest'}
+        # A call passes both inputs; a dispatch passes none and runs the baseline on every target.
+        dispatch = ACCEPTANCE_WORKFLOW.split('\n  workflow_dispatch:', 1)[1].split('\n')
+        self.assertEqual(dispatch[0], '')
+        self.assertFalse(dispatch[1].startswith('    '), 'a dispatch takes no inputs')
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / 'output'
-            for platforms, targets in [('all', list(runners)), ('linux', ['linux-amd64']),
-                                       ('off', ['off'])]:
+            for feeder, platforms, targets in [('candidate', 'all', list(runners)),
+                                               ('baseline', 'all', list(runners)),
+                                               ('candidate', 'linux', ['linux-amd64']),
+                                               ('candidate', 'off', ['off']),
+                                               ('baseline', 'off', ['off']),
+                                               ('', '', list(runners))]:
                 output.write_text('')
                 subprocess.run(['bash', '-c', run_step('Acceptance legs', ACCEPTANCE_WORKFLOW)],
-                               env=dict(os.environ, PLATFORMS=platforms, GITHUB_OUTPUT=str(output)),
+                               env=dict(os.environ, FEEDER=feeder, PLATFORMS=platforms,
+                                        GITHUB_OUTPUT=str(output)),
                                check=True, capture_output=True)
                 matrix = json.loads(output.read_text().split('=', 1)[1])
                 self.assertEqual([row['target'] for row in matrix], targets)
@@ -224,14 +237,15 @@ class PolicyTests(unittest.TestCase):
             for platforms in ['', 'windows', 'true']:
                 output.write_text('')
                 run = subprocess.run(['bash', '-c', run_step('Acceptance legs', ACCEPTANCE_WORKFLOW)],
-                                     env=dict(os.environ, PLATFORMS=platforms, GITHUB_OUTPUT=str(output)),
+                                     env=dict(os.environ, FEEDER='candidate', PLATFORMS=platforms,
+                                              GITHUB_OUTPUT=str(output)),
                                      capture_output=True)
                 self.assertNotEqual(run.returncode, 0, platforms)
                 self.assertEqual(output.read_text(), '')
 
     def test_acceptance_tripwire(self):
         # The tripwire step against a real history: base, a pull request on top, a label.
-        step = run_step('Existing acceptance files unchanged, or labeled acceptance-change')
+        step = run_step('Acceptance files unchanged, or labeled acceptance-change')
         with tempfile.TemporaryDirectory() as temp:
             cwd = Path(temp)
 
@@ -250,7 +264,7 @@ class PolicyTests(unittest.TestCase):
             git('commit', '-qm', 'base')
             base = git('rev-parse', 'HEAD')
 
-            def pull_request(change, labeled=False):
+            def pull_request(change, labeled=False, bad_base=False):
                 git('checkout', '-q', '-B', 'pr', base)
                 change()
                 git('add', '-A')
@@ -262,6 +276,8 @@ class PolicyTests(unittest.TestCase):
                 main = git('rev-parse', 'HEAD')
                 head = git('rev-parse', 'pr')
                 git('reset', '-q', '--hard', base)
+                if bad_base:
+                    main = 'f' * 40  # a revision the clone does not have
                 return subprocess.run(['bash', '-c', step], cwd=temp, capture_output=True, text=True,
                                       env=dict(os.environ, BASE=main, HEAD=head,
                                                LABELED='true' if labeled else 'false')).returncode
@@ -272,9 +288,14 @@ class PolicyTests(unittest.TestCase):
                 'delete': scenario.unlink,
                 'rename': lambda: scenario.rename(scenario.with_name('l.txtar')),
                 'mode': lambda: scenario.chmod(0o755),
+                # An addition can narrow what runs as surely as an edit.
+                'add scenario': lambda: scenario.with_name('s3-replay.txtar').write_text('exec swath-replay\n'),
+                'add TestMain': lambda: (cwd / 'acceptance/main_test.go').write_text(
+                    'package acceptance\n\nimport "testing"\n\nfunc TestMain(m *testing.M) {}\n'),
+                'add vendor': lambda: ((cwd / 'acceptance/vendor').mkdir(),
+                                       (cwd / 'acceptance/vendor/modules.txt').write_text('# x\n')),
             }
             passed = {
-                'add': lambda: scenario.with_name('s3-replay.txtar').write_text('exec swath-replay\n'),
                 'product': lambda: (cwd / 'internal/x.go').write_text('package y\n'),
                 'nothing': lambda: None,
             }
@@ -285,6 +306,11 @@ class PolicyTests(unittest.TestCase):
             for name, change in passed.items():
                 with self.subTest(change=name):
                     self.assertEqual(pull_request(change), 0)
+            # A diff that cannot run fails closed, label or not, whatever the pull request changes.
+            for name, change in passed.items():
+                for labeled in (False, True):
+                    with self.subTest(change=name, bad_base=True, labeled=labeled):
+                        self.assertNotEqual(pull_request(change, labeled=labeled, bad_base=True), 0)
 
     def test_light_docs_are_the_pages_docs_path_refuses(self):
         # The docs tier is skipped for LIGHT_DOCS, so no Go test may read them: docs.Unread

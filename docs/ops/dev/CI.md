@@ -15,7 +15,7 @@ runners are owned elsewhere and are only summarized here:
 | Workflow | Trigger | Job |
 | --- | --- | --- |
 | [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push/label change, every push to `main`, manual dispatch from any branch | the per-commit gate: Go jobs, script self-tests, the acceptance suite, `ci-gate` |
-| [`acceptance.yml`](../../../.github/workflows/acceptance.yml) | called by `ci.yml`; manual dispatch (the baseline) | the black-box [acceptance suite](#the-acceptance-suite) on built binaries, one leg per target |
+| [`acceptance.yml`](../../../.github/workflows/acceptance.yml) | called by `ci.yml`; manual dispatch (the baseline, on the five targets) | the black-box [acceptance suite](#the-acceptance-suite) on built binaries, one leg per target |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
 | [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks over the built site, with its videos fetched from a release and verified by sha256; deploy to GitHub Pages from `main` |
@@ -86,16 +86,19 @@ It exists because GitHub requires checks by name, and a matrix job reports one n
 (`go-race (crash)`, `go-xos (windows-latest, cmd)`). A
 rule that names `go-race` matches nothing; a rule that names the legs goes stale the moment a shard
 or platform is added. `needs` collapses all of a matrix's legs into one result, so a new leg extends
-the gate without touching the branch rule. A rule listing jobs also cannot notice a job whose scope
-silently shrank; an aggregate that inspects every dependency can.
+the gate without touching the branch rule. `ci-gate` checks each job's result, not what the job
+ran: a job whose scope shrank and still succeeded is green to it. On full runs `go-full-gate` also
+checks the selection (every Go tier, the acceptance candidate on the five targets, the expanded
+matrices), still not what a passing leg ran.
 
 Two details carry the weight:
 
-- `if: always()`. Without it a failed dependency skips `ci-gate`, a skipped required check never
-  reports, and the pull request waits instead of going red.
-- `skipped` is a failure on every event. An unaffected job runs with its work skipped, so its
-  result is `success`. A skipped job means a dependency failed or a tier was removed from the gate.
-  This also makes the gate usable as evidence for full main validation.
+- `if: always()`. Without it a failed dependency skips `ci-gate`, and GitHub counts a skipped
+  required check as passed, so the pull request could merge over a red job.
+- `ci-gate` accepts only `success`, on every event: `skipped`, `failure` and `cancelled` fail it.
+  An unaffected job runs with its work skipped, so its result is `success`. A skipped job means one
+  of its own dependencies failed or a job-level `if:` removed it from the gate. This also makes the
+  gate usable as evidence for full main validation.
 
 The job writes a table of every dependency and its result to the step summary; that table is the
 first place to look when the gate is red.
@@ -106,9 +109,9 @@ Cache maintenance is a separate housekeeping workflow and is not gated. Neither 
 ## Change detection
 
 [`scripts/ci/go-ci-policy.py`](../../../scripts/ci/go-ci-policy.py) selects complete Go modules and
-tiers. PR selection follows changed paths and local module dependencies: reader changes include main,
-object-file changes stay independent unless a consumer is added, and main changes do not retest an
-unchanged independent module. Testdata, embedded files, generated-help documents and external replay
+tiers. PR selection follows changed paths and local module dependencies: reader and object-file
+changes include main, whose `go.mod` requires both, and main changes do not retest an unchanged
+nested module. Testdata, embedded files, generated-help documents and external replay
 fixtures are inputs too. The exact module/tier mapping and escalation rules live in
 [Go testing](../../internals/testing.md#change-detection); regression cases exercise the actual selector,
 workflow matrix shell, rename/deletion behavior and the gate.
@@ -330,13 +333,22 @@ module's one dependency is small, and a cache would add a family per runner to t
 [budget](#caching) for seconds of compiling.
 
 The suite is worth something only if it does not move with the code. `acceptance-tripwire` fails a
-pull request that modifies, renames or deletes an existing file under `acceptance/` unless the
+pull request that adds, modifies, renames or deletes any file under `acceptance/` unless the
 pull request carries the label `acceptance-change`, which only the owner applies
-([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); added files pass. It compares the pull
-request's head with its merge base, so a change `main` made since does not count, and a label
-change reruns `ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone
-who can label a pull request can pass it, so it makes a change to the suite a recorded decision
-rather than a side effect.
+([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)). Additions count: a new `_test.go` with a
+`TestMain`, or a vendored dependency, can narrow what runs without touching an existing file. So a
+pull request that adds a scenario waits for the owner's label too. It compares the pull request's
+head with its merge base, so a change `main` made since does not count; a diff that cannot run (a
+revision the clone lacks) fails the job rather than reading as no change; and a label change reruns
+`ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone who can label
+a pull request can pass it, so it makes a change to the suite a recorded decision rather than a side
+effect.
+
+The suite can also be weakened from outside `acceptance/`: through what `acceptance.yml` runs, the
+acceptance jobs and gates in `ci.yml`, or the acceptance selection in `go-ci-policy.py`. `AGENTS.md`
+puts those changes under the same owner rule, but the tripwire does not watch the files: they change
+with routine CI work and the weekly action bumps, and a label needed every week stops meaning
+anything.
 
 A full `main` run holds four macOS runners at once (two `go-xos` legs and the candidate's
 `macos-latest` and `macos-15-intel` legs), six when the baseline runs too, of the five concurrent
@@ -358,7 +370,9 @@ the generations and saves each build cache trimmed to what its job used.
 ### Go caches
 
 The [`setup-go`](../../../.github/actions/setup-go/action.yml) composite action, used by every Go
-job, restores two caches. DEPS is one hash of the `go.mod` and `go.sum` of all three modules.
+job of `ci.yml`, `nightly.yml` and `go-stress.yml`, restores two caches; the acceptance legs and
+`release.yml` use `actions/setup-go` directly, with no cache. DEPS is one hash of the `go.mod` and
+`go.sum` of all three modules.
 
 | Cache | Key | Shared by |
 | --- | --- | --- |
@@ -477,17 +491,20 @@ minutes:
 ## When a run is slow or red
 
 - **Red gate:** open `ci-gate`'s step summary; it lists every dependency and its result. A
-  `skipped` result on a pull request means a job-level `if:` removed a job from the gate.
+  `skipped` result fails the gate on every event: one of that job's own dependencies failed, or a
+  job-level `if:` removed it.
 - **Red `go-race` leg:** the log shows each package's result live, then the output of the failed
   tests; the step prints the command to rerun the shard. The full stream is the `go-race-SHARD`
   artifact.
 - **Red acceptance leg:** the leg's log shows the failing scenario's script and output; the
-  `acceptance-FEEDER-TARGET` artifact keeps the whole `go test -v` output. A red candidate leg means
+  `acceptance-FEEDER-TARGET` artifact keeps the whole `go test -v` output. A leg that went red before
+  `go test` (installing DuckDB, downloading or checking the archive, a `--version` check, the runner)
+  is an installation or runner failure: read the failing step. A red candidate scenario means
   the commit changed behavior the suite records: fix the product, or report the change to the owner
   as intended ([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); never edit the scenario to pass.
-  A red baseline leg means a change to the suite is wrong about v0.4.0.
-- **Red `acceptance-tripwire`:** the pull request changes an existing file under `acceptance/`
-  without the owner's label; the job lists the files.
+  A red baseline scenario means a change to the suite is wrong about v0.4.0.
+- **Red `acceptance-tripwire`:** the pull request changes or adds files under `acceptance/`
+  without the owner's label; the job lists them. With no list, `git diff` itself failed.
 - **Suspected flake:** do not rerun until green. Dispatch `go-stress.yml` with the test, a count
   and the runner, and cite the run and its tally in the pull request (see
   [`docs/internals/testing.md`](../../internals/testing.md#stress-repeats)).
@@ -500,10 +517,13 @@ minutes:
 ## Changing CI without breaking the gate
 
 - **A new job:** add it to `ci-gate`'s `needs`. If it should run only for some changes, gate its
-  steps on `needs.changes.outputs.*`, not the job; a job-level `if:` fails every pull request. If it
-  is legitimately event-gated, it passes as `skipped` only off pull requests.
-- **A new Go path the jobs depend on:** add it to the Go regex in `changes` (and to `go-fixtures`'
-  own list if that tier reads it), and update the change-detection list in
+  steps on `needs.changes.outputs.*`, not the job: a job-level `if:` that is false skips the job,
+  and a skipped job fails the gate on every event. A job only some events need is gated in its steps
+  too, as `acceptance-tripwire` is on pull requests.
+- **A new Go path the jobs depend on:** give it an owner in `select()` of
+  [`scripts/ci/go-ci-policy.py`](../../../scripts/ci/go-ci-policy.py) (a path it does not know selects
+  full validation) with a case in `scripts/ci/test-ci-policy.py` (and add it to `go-fixtures`' own list
+  if that tier reads it), and update the change-detection list in
   [`docs/internals/testing.md`](../../internals/testing.md#change-detection).
 - **A new test that reads `docs/`:** name it `TestDocs...` and reach the page through `docs.Path`; the
   docs tier then runs it with no edit here. A test that reads `docs/` as data (the provider evidence)
