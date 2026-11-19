@@ -68,16 +68,16 @@ func liveHeap() int64 {
 // the page, each waiting range would keep its parent's whole page arena
 // alive (about 1,000 × key and ETag), which the budget charges as a node of
 // about 150 bytes. The peak live heap must stay within a bound of the
-// budget and the pages in flight: +62 MiB (+63 MiB under -race) with the
-// cursor left a view of its page, against a 44 MiB bound.
+// budget and the pages in flight, 44 MiB. That bounds the envelope, not the
+// copy: with the cursor left a view of its page this test still passes
+// (2026-11-19); keyrange's TestRetainedBoundsAreCopies checks the copy.
 //
 // The peak is the live heap the last collection marked, sampled every
 // 100 ms, so a collection that lands while the pages in flight and the spill
 // writers' buffers peak together reads high for one sample. Under -race,
 // ten runs read +30 to +47 MiB (2026-11-08), one over the bound. That noise
-// is transient and the defect is systematic, so the run is repeated and the
-// smallest of the peaks is held to the bound: a pinned page shows in every
-// run, a transient high in rarely more than one.
+// is transient, so the run is repeated and the smallest of the peaks is held
+// to the bound: a transient high shows in rarely more than one run.
 func TestRetainedBoundsDoNotPinPages(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a 400,000-key listing")

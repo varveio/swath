@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/dataset"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source"
 )
@@ -147,6 +148,46 @@ func TestByteOrderIsAPrerequisite(t *testing.T) {
 		if err := p.Expand(context.Background(), r, &direct{&collect{}}); !errors.Is(err, ErrInvalidPage) {
 			t.Fatalf("sequential=%v: UTF-16 order across pages accepted: %v", seq, err)
 		}
+	}
+}
+
+// TestRepeatedKeyIsAProtocolError (I9): a store's page that repeats a key
+// is the store's protocol violation, reported by the range's order check
+// as an invalid page, never swath's own invariant violation. A key
+// repeated inside a page, or across a page boundary, is run through the
+// order stage as a listing is, so a repeat that slipped past the range
+// would fail there as a dataset invariant instead; a first key equal to
+// the range's exclusive start bound is expanded directly, where nothing
+// after the range would notice it.
+func TestRepeatedKeyIsAProtocolError(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		lo    string // the range's exclusive start ("": the open root through the order stage)
+		pages []Page[Object]
+	}{
+		{name: "within a page", pages: []Page[Object]{last("a", "b", "b", "c")}},
+		{name: "across pages", pages: []Page[Object]{more("a", "b"), last("b", "c")}},
+		{name: "at the start bound", lo: "a", pages: []Page[Object]{last("a", "b")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := &script{pages: c.pages}
+			p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing}, s.fetch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.lo == "" {
+				_, err = order.Run[Range, Object](context.Background(), p, &collect{}, &Schema, order.Options{Workers: 1, Budget: 1 << 20})
+			} else {
+				err = p.Expand(context.Background(), Range{lo: c.lo, open: true, id: 1}, &direct{&collect{}}) // one worker: no split
+			}
+			if s.calls != len(c.pages) {
+				t.Fatalf("%d of %d pages served", s.calls, len(c.pages))
+			}
+			var ie *dataset.InvariantError
+			if !errors.Is(err, source.ErrProtocol) || !errors.Is(err, ErrInvalidPage) || errors.As(err, &ie) || !strings.Contains(err.Error(), "out of order") {
+				t.Fatalf("got %T %v, want the store's invalid page (a protocol violation), not swath's invariant", err, err)
+			}
+		})
 	}
 }
 

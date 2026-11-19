@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/varveio/swath/internal/order"
 )
@@ -446,5 +447,82 @@ func TestFilterLeavesSplitInputs(t *testing.T) {
 	}
 	if dropped.rem != kept.rem || !slices.Equal(dropped.children, kept.children) {
 		t.Fatalf("a filter changed the split inputs: remainder %v, children %v; unfiltered %v, %v", dropped.rem, dropped.children, kept.rem, kept.children)
+	}
+}
+
+// TestRetainedBoundsAreCopies (I11): a waiting range's bounds are copies,
+// never views of a page's buffer. The pages are as the S3 parser makes
+// them, every key a view of one buffer per page. A split hands the cursor
+// on as the lower child's lo, and a queued child keeps it until a worker
+// takes it: were it a view, the child would keep its parent's whole page
+// alive while the budget charges it a node. No child's bound or anchor may
+// share a byte with any page the range listed.
+func TestRetainedBoundsAreCopies(t *testing.T) {
+	keys := make([]string, 5000)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%06d", i)
+	}
+	const page = 100
+	var mu sync.Mutex
+	var bufs []string // every page's buffer
+	fetch := fetchFrom(newSorted(keys, false, 1))
+	p, err := New(Options{Workers: 64, PageSize: page, SplitCoin: func() bool { return true }}, Description[Object]{Target: "test", Listing: Listing},
+		func(ctx context.Context, q *Query) (*Page[Object], error) {
+			pg, err := fetch(ctx, q)
+			if err != nil {
+				return nil, err
+			}
+			var b strings.Builder
+			for _, r := range pg.Rows {
+				b.WriteString(r.Key)
+			}
+			buf, at := b.String(), 0
+			for i := range pg.Rows {
+				n := len(pg.Rows[i].Key)
+				pg.Rows[i].Key = buf[at : at+n]
+				at += n
+			}
+			mu.Lock()
+			bufs = append(bufs, buf)
+			mu.Unlock()
+			return pg, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &clearing{}
+	if err := p.expandRange(context.Background(), Range{lo: "", hi: "l", id: 1, born: fromRoot}, e); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(e.children) != 2 || len(bufs) == 0 {
+		t.Fatalf("no split observed: %d children after %d pages", len(e.children), len(bufs))
+	}
+	if lo, want := e.children[0].lo, keys[len(bufs)*page-1]; lo != want {
+		t.Fatalf("the lower child starts after %q, want the cursor %q", lo, want)
+	}
+	// The bounded chain's anchor is the copy of the first key it listed.
+	if a := e.children[1].anchor; a != keys[0] {
+		t.Fatalf("the upper child's anchor is %q, want the first key %q", a, keys[0])
+	}
+	inPage := func(s string) bool {
+		if s == "" {
+			return false
+		}
+		at := uintptr(unsafe.Pointer(unsafe.StringData(s)))
+		for _, b := range bufs {
+			if lo := uintptr(unsafe.Pointer(unsafe.StringData(b))); at >= lo && at < lo+uintptr(len(b)) {
+				return true
+			}
+		}
+		return false
+	}
+	for i, c := range e.children {
+		for name, s := range map[string]string{"lo": c.lo, "hi": c.hi, "anchor": c.anchor, "after": c.after} {
+			if inPage(s) {
+				t.Errorf("child %d's %s %q is a view of a listed page", i, name, s)
+			}
+		}
 	}
 }
