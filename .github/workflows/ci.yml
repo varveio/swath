@@ -761,13 +761,11 @@ jobs:
   # (`go-race (crash)`, ...): a rule naming `go-race` matches nothing, and naming the legs
   # individually goes stale the moment a leg is added or renamed.
   # One aggregate job has a single stable name, and `needs` already collapses every leg of a
-  # matrix into one result — so adding a leg extends the gate for free. Requiring the tiers
-  # individually has a second failure mode this avoids: a single-module `check` once reported a
-  # cross-module change green (08-19), and a rule listing job names cannot notice that.
+  # matrix into one result — so adding a leg extends the gate for free. It checks results, not
+  # what a job ran: a job whose scope shrank and still succeeded is green here.
   #
-  # `if: always()` is not optional. Without it a failed dependency SKIPS this job, a skipped
-  # required check never reports a conclusion, and the pull request waits forever instead of
-  # going red.
+  # `if: always()` is not optional. Without it a failed dependency SKIPS this job, and GitHub
+  # counts a skipped required check as passed, so the pull request could merge over a red job.
   ci-gate:
     needs: [changes, scripts, go-lint, go-docs, go-race, go-nonrace, go-build, go-objfile, go-reader, go-xos, go-fixtures, acceptance-baseline, acceptance-candidate, acceptance-tripwire]
     if: always()

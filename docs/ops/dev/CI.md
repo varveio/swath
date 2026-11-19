@@ -86,16 +86,19 @@ It exists because GitHub requires checks by name, and a matrix job reports one n
 (`go-race (crash)`, `go-xos (windows-latest, cmd)`). A
 rule that names `go-race` matches nothing; a rule that names the legs goes stale the moment a shard
 or platform is added. `needs` collapses all of a matrix's legs into one result, so a new leg extends
-the gate without touching the branch rule. A rule listing jobs also cannot notice a job whose scope
-silently shrank; an aggregate that inspects every dependency can.
+the gate without touching the branch rule. `ci-gate` checks each job's result, not what the job
+ran: a job whose scope shrank and still succeeded is green to it. On full runs `go-full-gate` also
+checks the selection (every Go tier, the acceptance candidate on the five targets, the expanded
+matrices), still not what a passing leg ran.
 
 Two details carry the weight:
 
-- `if: always()`. Without it a failed dependency skips `ci-gate`, a skipped required check never
-  reports, and the pull request waits instead of going red.
-- `skipped` is a failure on every event. An unaffected job runs with its work skipped, so its
-  result is `success`. A skipped job means a dependency failed or a tier was removed from the gate.
-  This also makes the gate usable as evidence for full main validation.
+- `if: always()`. Without it a failed dependency skips `ci-gate`, and GitHub counts a skipped
+  required check as passed, so the pull request could merge over a red job.
+- `ci-gate` accepts only `success`, on every event: `skipped`, `failure` and `cancelled` fail it.
+  An unaffected job runs with its work skipped, so its result is `success`. A skipped job means one
+  of its own dependencies failed or a job-level `if:` removed it from the gate. This also makes the
+  gate usable as evidence for full main validation.
 
 The job writes a table of every dependency and its result to the step summary; that table is the
 first place to look when the gate is red.
@@ -367,7 +370,9 @@ the generations and saves each build cache trimmed to what its job used.
 ### Go caches
 
 The [`setup-go`](../../../.github/actions/setup-go/action.yml) composite action, used by every Go
-job, restores two caches. DEPS is one hash of the `go.mod` and `go.sum` of all three modules.
+job of `ci.yml`, `nightly.yml` and `go-stress.yml`, restores two caches; the acceptance legs and
+`release.yml` use `actions/setup-go` directly, with no cache. DEPS is one hash of the `go.mod` and
+`go.sum` of all three modules.
 
 | Cache | Key | Shared by |
 | --- | --- | --- |
@@ -486,15 +491,18 @@ minutes:
 ## When a run is slow or red
 
 - **Red gate:** open `ci-gate`'s step summary; it lists every dependency and its result. A
-  `skipped` result on a pull request means a job-level `if:` removed a job from the gate.
+  `skipped` result fails the gate on every event: one of that job's own dependencies failed, or a
+  job-level `if:` removed it.
 - **Red `go-race` leg:** the log shows each package's result live, then the output of the failed
   tests; the step prints the command to rerun the shard. The full stream is the `go-race-SHARD`
   artifact.
 - **Red acceptance leg:** the leg's log shows the failing scenario's script and output; the
-  `acceptance-FEEDER-TARGET` artifact keeps the whole `go test -v` output. A red candidate leg means
+  `acceptance-FEEDER-TARGET` artifact keeps the whole `go test -v` output. A leg that went red before
+  `go test` (installing DuckDB, downloading or checking the archive, a `--version` check, the runner)
+  is an installation or runner failure: read the failing step. A red candidate scenario means
   the commit changed behavior the suite records: fix the product, or report the change to the owner
   as intended ([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); never edit the scenario to pass.
-  A red baseline leg means a change to the suite is wrong about v0.4.0.
+  A red baseline scenario means a change to the suite is wrong about v0.4.0.
 - **Red `acceptance-tripwire`:** the pull request changes or adds files under `acceptance/`
   without the owner's label; the job lists them. With no list, `git diff` itself failed.
 - **Suspected flake:** do not rerun until green. Dispatch `go-stress.yml` with the test, a count
@@ -509,10 +517,13 @@ minutes:
 ## Changing CI without breaking the gate
 
 - **A new job:** add it to `ci-gate`'s `needs`. If it should run only for some changes, gate its
-  steps on `needs.changes.outputs.*`, not the job; a job-level `if:` fails every pull request. If it
-  is legitimately event-gated, it passes as `skipped` only off pull requests.
-- **A new Go path the jobs depend on:** add it to the Go regex in `changes` (and to `go-fixtures`'
-  own list if that tier reads it), and update the change-detection list in
+  steps on `needs.changes.outputs.*`, not the job: a job-level `if:` that is false skips the job,
+  and a skipped job fails the gate on every event. A job only some events need is gated in its steps
+  too, as `acceptance-tripwire` is on pull requests.
+- **A new Go path the jobs depend on:** give it an owner in `select()` of
+  [`scripts/ci/go-ci-policy.py`](../../../scripts/ci/go-ci-policy.py) (a path it does not know selects
+  full validation) with a case in `scripts/ci/test-ci-policy.py` (and add it to `go-fixtures`' own list
+  if that tier reads it), and update the change-detection list in
   [`docs/internals/testing.md`](../../internals/testing.md#change-detection).
 - **A new test that reads `docs/`:** name it `TestDocs...` and reach the page through `docs.Path`; the
   docs tier then runs it with no edit here. A test that reads `docs/` as data (the provider evidence)
