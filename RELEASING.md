@@ -69,7 +69,9 @@ For each `vX.Y.Z` tag, once the environment is approved:
 
 - **Stable releases** publish `ghcr.io/varveio/swath:X.Y.Z` and
   `ghcr.io/varveio/swath-replay:X.Y.Z`, plus rolling `:X.Y`, `:X` (for major versions
-  at least 1), and `:latest` tags for each package. Release candidates publish only
+  at least 1), and `:latest` tags for each package. The rolling tags move only after both
+  images are signed, attested and verified, and name the verified digests; a release that
+  fails before then leaves them on the previous release. Release candidates publish only
   their exact `:X.Y.Z-rc.N` version tag.
 - Nothing else publishes: `main` pushes and manual dispatch build and smoke the images without
   pushing ([CI architecture](docs/ops/dev/CI.md#registry-and-artifacts)). To pin an exact
@@ -245,11 +247,12 @@ do not repair the published candidate by hand.
    requires its successful full Go qualification,
    and checks the release notes, then runs the Go gate and builds the assets once on that
    exact tag SHA, and then waits on the protected `public-release` environment. **Approve it.**
-   The publish job then pushes both images by digest, smokes those digests, tags them,
-   signs and attests everything, creates the GitHub release as a **draft**, runs the
-   verification commands below against what it just published, and only then un-drafts
-   it. If verification fails the release stays a draft — fix and re-tag rather than
-   publishing by hand.
+   The publish job then pushes both images by digest, smokes those digests, gives them
+   the `X.Y.Z` tag, signs and attests everything, creates the GitHub release as a **draft**,
+   runs the verification commands below against what it just published, moves the rolling
+   tags to the verified digests, and only then un-drafts it. If verification fails the
+   release stays a draft and the rolling tags stay on the previous release — fix and re-tag
+   rather than publishing by hand.
 6. **Final releases only:** update the Homebrew tap,
    [varveio/homebrew-tap](https://github.com/varveio/homebrew-tap), by hand until
    [#655](https://github.com/varveio/swath/issues/655) automates it. With Homebrew installed (macOS, or the

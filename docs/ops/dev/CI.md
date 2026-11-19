@@ -40,7 +40,8 @@ tagged `go.mod` carries no `replace`, and that the nested-module tags it require
 outside project does (`GOWORK=off` for the whole workflow, a strict `go mod tidy -diff`), reruns
 `go vet` and the race tests on the tag's SHA (not `ci.yml`'s whole matrix), builds every target's
 binaries once into the release archives, builds both images from those archived binaries, pushes
-them by digest, smokes the digests, and only then applies tags and signs.
+them by digest, smokes the digests, and only then applies the version tag, signs, attests and
+verifies; the rolling tags (`X.Y`, `latest`) move to the verified digests last.
 [`RELEASING.md`](../../../RELEASING.md#what-gates-a-release) owns what gates a release and why.
 
 The release's `go-tests` runs the race tests in the shards of `scripts/ci/go-race-shards.sh`,
