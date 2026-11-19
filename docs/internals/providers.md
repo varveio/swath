@@ -193,7 +193,7 @@ These integrations still require work outside the provider directory:
 | `reader/schema.go` | A public dataset schema specification, including version roles when applicable. A directly declared producer schema can list without reader support. |
 | `reader/rows.go` | Current-object projection in `objectColumns` and any new typed row decoder. |
 | `dataset_schema.py`, `verify.py` | Independent schema and verifier support. |
-| `command/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
+| `internal/command/flagcheck_test.go` | Exact expected owners for another provider that takes a shared flag group. |
 | `internal/cli/registered_test.go` | Central registration, interface, restart, locator and client-reporting coverage. |
 | `internal/inventory/producerschema_test.go` | Producer schema golden coverage (`testdata/producer-schema-*.golden`). |
 | `internal/inventory/reader_fixtures_test.go`, `scripts/ci/seekparquet-conformance.sh`, `scripts/ci/seekparquet_conformance.py` | When adding conformance support: produce the schema's fixture in `TestSeekParquetFixtures`, select it in the shell runner and declare projected columns in Python's `COLUMNS`. The scripts live at the repository root. |

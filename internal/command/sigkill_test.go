@@ -562,7 +562,7 @@ func selfKilled(ps *os.ProcessState) bool {
 
 // swathMain is the swath binary's package, relative to this package's
 // directory (a test's working directory).
-const swathMain = "../cmd/swath"
+const swathMain = "../../cmd/swath"
 
 // buildSwath builds the command for the subprocess tests.
 func buildSwath(t *testing.T) string {
