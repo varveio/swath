@@ -72,6 +72,22 @@ updates:
     commit-message:
       prefix: "deps"
 
+  # The acceptance suite's module (acceptance/, outside go.work): an entry of its own, so its update
+  # is one pull request apart from the three modules'. A change to its go.mod or go.sum needs the
+  # owner's label acceptance-change (AGENTS.md), which must not hold up the others.
+  - package-ecosystem: gomod
+    directory: /acceptance
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    groups:
+      acceptance:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+
   # The website's build: VitePress and its dependencies, from site/package-lock.json. VitePress
   # stays on 1.x: the 2.0 line is still in alpha, so its major updates are not proposed.
   - package-ecosystem: npm

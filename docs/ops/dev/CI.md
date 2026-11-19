@@ -14,7 +14,8 @@ runners are owned elsewhere and are only summarized here:
 
 | Workflow | Trigger | Job |
 | --- | --- | --- |
-| [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push/label change, every push to `main`, manual dispatch from any branch | the per-commit gate: Go jobs, script self-tests, `ci-gate` |
+| [`ci.yml`](../../../.github/workflows/ci.yml) | every pull request push/label change, every push to `main`, manual dispatch from any branch | the per-commit gate: Go jobs, script self-tests, the acceptance suite, `ci-gate` |
+| [`acceptance.yml`](../../../.github/workflows/acceptance.yml) | called by `ci.yml`; manual dispatch (the baseline) | the black-box [acceptance suite](#the-acceptance-suite) on built binaries, one leg per target |
 | [`nightly.yml`](../../../.github/workflows/nightly.yml) | 07:00 UTC on `main`; dispatch with a `jobs` selector | what is too slow, too timing-sensitive or too time-dependent for every commit |
 | [`release.yml`](../../../.github/workflows/release.yml) | a pushed `v*` tag | retest and build the Go binaries and images at the tag, then publish, sign and attest |
 | [`site.yml`](../../../.github/workflows/site.yml) | every pull request and push; dispatch | site consistency checks over the built site, with its videos fetched from a release and verified by sha256; deploy to GitHub Pages from `main` |
@@ -56,7 +57,7 @@ does not check it: its checklist requires a successful `go-race-nightly` job on 
 released or on one with the same Go sources, a step for a person that no workflow enforces
 ([RELEASING.md](../../../RELEASING.md#cutting-a-release)).
 
-[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. The three modules are one `directories` entry, so a group is one pull request across them and the workspace (`go.work`) that builds them together moves as one. The Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
+[`dependabot.yml`](../../../.github/dependabot.yml) keeps the pinned actions (in the workflows and the composite actions under `.github/actions/`), Docker base images (`Dockerfile`) and the three Go modules current, with one weekly pull request per configured group. The acceptance suite's module is an entry of its own, so its update arrives alone and the label it needs ([the acceptance suite](#the-acceptance-suite)) never holds up the three modules'. The Actions and Docker groups take every update, majors included; the Go module groups take only minor and patch updates, so a Go module's major update arrives in a pull request of its own. The three modules are one `directories` entry, so a group is one pull request across them and the workspace (`go.work`) that builds them together moves as one. The Azure SDK modules (`github.com/Azure/azure-sdk-for-go/*`) form a group of their own, out of the catch-all one: their minor releases change the requests swath sends, so each is reviewed alone. Each provider client in the root module (S3, GCS and Azure) holds the requests it sends to a wire snapshot (`TestWireSnapshot`, [clients](../../internals/clients.md#wire-snapshots)), so an AWS SDK or Google API update in the catch-all group that changes a request fails that test and is reviewed against the snapshot as well. It does not raise the `toolchain` line of `go.mod`, so the golang image digest in the `Dockerfile` and that line move together by hand. Tools downloaded by version are hand-bumped as well, each with the release asset's SHA-256 where the download is direct: the DuckDB CLI in the `ci.yml` jobs that read Parquet back, in `acceptance.yml` (one asset per target) and in `release.yml` `publish`, OSV-Scanner in `scripts/ci/osv-scan.sh`, Syft as the `syft-version` input of `anchore/sbom-action` in `release.yml`, go-licenses in `notices.sh`, and Buildx and the BuildKit image (`version` and `driver-opts` of `docker/setup-buildx-action` in `release.yml`, the image by digest).
 
 ## Registry and artifacts
 
@@ -67,13 +68,14 @@ the license gate remain on every selected main-module PR. Nothing
 outside a release pushes a tag, so the registry holds release versions and nothing else. An
 unreleased commit's image is built locally from the checkout (`docker build .`).
 
-The artifact uploads of `ci.yml`, `nightly.yml`, `go-stress.yml` and `release.yml` set their own `retention-days`
+The artifact uploads of `ci.yml`, `acceptance.yml`, `nightly.yml`, `go-stress.yml` and `release.yml` set their own `retention-days`
 instead of taking the repository default:
 
-- 14 days for the per-commit `go test -json` streams in `ci.yml`;
+- 14 days for the per-commit `go test -json` streams in `ci.yml` and the acceptance legs' `go test -v` output;
 - 30 days for the diagnostics and reports of `nightly.yml` and `go-stress.yml`, and the release's
   `go test -json` streams (one per shard);
-- 1 day for an artifact that only hands files from one job to another in the same run.
+- 1 day for an artifact that only hands files from one job to another in the same run (`go-build`'s
+  binaries for the acceptance suite among them).
 
 ## One required check: `ci-gate`
 
@@ -197,7 +199,7 @@ tests' wall time is their slowest shard, not their sum (one serial job once took
 | `go-docs` | the docs tier: the `TestDocs*` tests that read pages under `docs/`, when a pull request changes pages and no main-module input, and on full validation |
 | `go-race (SHARD)` | `go test -race` on one shard of the main module |
 | `go-nonrace` | tests that measure the process (heap gates, the shape suite) and SeekParquet conformance, which `-race` would distort |
-| `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile`) for two architectures and their smokes; the image build runs the Go license gate (`notices.sh`) |
+| `go-build` | static cross-builds of both commands for five targets, the version stamp, the Go lister and replay images (`Dockerfile`) for two architectures and their smokes; the image build runs the Go license gate (`notices.sh`); the binaries go to the acceptance suite's candidate as an artifact |
 | `go-objfile`, `go-reader` | the nested modules `objfile` and `reader`: vet, tidy, race tests, cross-builds |
 | `go-xos (OS)`, `go-xos (OS, LEG)` | arm64 complement on ordinary PRs; full selected-module platform suites on escalation, main and dispatch, macOS and Windows split into legs |
 | `go-fixtures` | the replay fixture tier on the fixtures `bench/replay/fixtures` writes |
@@ -298,6 +300,46 @@ macOS and Windows runtime coverage is usually deferred because those jobs and th
 previously dominated PR turnaround. It has caught real platform differences, so it is retained on
 main/nightly and required before release. Path escalation is an early-warning aid, not proof that
 unselected code cannot have platform-specific behavior.
+
+## The acceptance suite
+
+The Go jobs run tests that import the code and change with it, written by whoever changed the code,
+so a green run cannot show that a change left swath's external behavior alone. The
+[acceptance suite](../../../acceptance/README.md) is a module of its own, outside `go.work`, that runs
+built binaries as a user does and reads their datasets with a pinned DuckDB CLI, an implementation
+of Parquet swath does not share. [`acceptance.yml`](../../../.github/workflows/acceptance.yml) runs
+it, one leg per target, and `ci.yml` calls it twice:
+
+- `acceptance-candidate` runs the binaries `go-build` built from the commit, the same bytes, handed
+  over as an artifact, against the v0.4.0 `swath-replay`, so the client and the server it is tested
+  against cannot change together; a second, short run checks the candidate `swath-replay` on the
+  replay scenarios alone. It runs on Linux x64 on a pull request that selects the main module, and on
+  all five targets on `main`, dispatch, full-scope pull requests and changes to the suite.
+- `acceptance-baseline` runs the published v0.4.0 archives, checked against the release's
+  `SHA256SUMS`, whose own SHA-256 the workflow pins. A released binary does not change, so it runs
+  only when the suite or its workflow changes, and on dispatch: it proves that a scenario still holds
+  for the release whose behavior it records.
+
+The suite's inputs select the expectations (`SWATH_EXPECT`): the baseline's are frozen at v0.4.0,
+the candidate's add each intended difference with its reason. Neither caller has a job-level `if:`:
+with nothing selected, the called workflow runs one `off` leg whose steps skip, so the job succeeds
+and `ci-gate` keeps counting a skipped job as a failure; `go-full-gate` also requires the candidate on
+all five targets. The legs set up Go with `actions/setup-go` and no cache, as the release does: the
+module's one dependency is small, and a cache would add a family per runner to the
+[budget](#caching) for seconds of compiling.
+
+The suite is worth something only if it does not move with the code. `acceptance-tripwire` fails a
+pull request that modifies, renames or deletes an existing file under `acceptance/` unless the
+pull request carries the label `acceptance-change`, which only the owner applies
+([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); added files pass. It compares the pull
+request's head with its merge base, so a change `main` made since does not count, and a label
+change reruns `ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone
+who can label a pull request can pass it, so it makes a change to the suite a recorded decision
+rather than a side effect.
+
+A full `main` run holds four macOS runners at once (two `go-xos` legs and the candidate's
+`macos-latest` and `macos-15-intel` legs), six when the baseline runs too, of the five concurrent
+macOS jobs the plan allows: the sixth waits for a runner.
 
 ## Caching
 
@@ -420,7 +462,8 @@ running deploy.
 ## Runners and cost
 
 Everything runs on GitHub-hosted runners. Linux jobs use `ubuntu-latest` (amd64) or
-`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` (legs, as in `go-xos`) and
+`ubuntu-24.04-arm`; Windows and macOS appear only in `go-xos`, `nightly.yml` `go-xos-macos` / `go-xos-windows` (legs, as in `go-xos`),
+the acceptance suite's legs (with `macos-15-intel` for darwin-amd64, the one Intel runner) and
 `go-stress.yml`. The choices above are driven mostly by wall time and queueing rather than by
 minutes:
 
@@ -437,6 +480,13 @@ minutes:
 - **Red `go-race` leg:** the log shows each package's result live, then the output of the failed
   tests; the step prints the command to rerun the shard. The full stream is the `go-race-SHARD`
   artifact.
+- **Red acceptance leg:** the leg's log shows the failing scenario's script and output; the
+  `acceptance-FEEDER-TARGET` artifact keeps the whole `go test -v` output. A red candidate leg means
+  the commit changed behavior the suite records: fix the product, or report the change to the owner
+  as intended ([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); never edit the scenario to pass.
+  A red baseline leg means a change to the suite is wrong about v0.4.0.
+- **Red `acceptance-tripwire`:** the pull request changes an existing file under `acceptance/`
+  without the owner's label; the job lists the files.
 - **Suspected flake:** do not rerun until green. Dispatch `go-stress.yml` with the test, a count
   and the runner, and cite the run and its tally in the pull request (see
   [`docs/internals/testing.md`](../../internals/testing.md#stress-repeats)).
