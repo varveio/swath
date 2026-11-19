@@ -35,8 +35,9 @@
 // parallel only when the scope is larger than a page; a page is not a walk
 // with parallelism off. It sets no limit: a caller stops a walk by
 // cancelling ctx, and Walk then returns the context's error with a
-// WalkSummary of what it handed on. A live walk spills nothing to disk and
-// retains no key, nor any Unread, after it hands it on.
+// WalkSummary of what it handed on; a live walk that had already refused
+// a page returns ErrInvalidPage instead. A live walk spills nothing to
+// disk and retains no key, nor any Unread, after it hands it on.
 //
 // Summarize counts an inventory's entries at or under each of several
 // targets and sums their sizes, space on disk and newest change, one

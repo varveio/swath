@@ -145,7 +145,8 @@ zero). The ranges are checked too: no key range overlaps another, so no key reac
 
 A walk sets no limit of its own. To stop one, cancel its context: `Walk` then returns the context's error, even
 if the function took every batch, together with a `WalkSummary` that counts what the function took. A walk that
-returns no error finished.
+had already refused a page returns `listing.ErrInvalidPage` instead: the page, not the context, ended it. A walk
+that returns no error finished.
 
 A walk that cannot read a place goes on past it and hands the function an `Unread` for it as it meets it, in a
 batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
@@ -218,7 +219,8 @@ as swath's command reads it for its outcome: `ErrAuth` for credentials that do n
 `ErrNotFound` for a bucket that is not there, `ErrInvalidRequest` for a request the contract refuses and for a
 bucket that is there but in another region than the source's (the message names the bucket's region),
 `ErrUnavailable` once the client's retries are spent (throttling included), `ErrInvalidPage`, `ErrInvalidToken` and
-`ErrUnsupported`. A call whose context ends returns the context's error. A walk has two exceptions, which need not
+`ErrUnsupported`. A call whose context ends returns the context's error, but a walk that had already refused a page
+returns `ErrInvalidPage`. A walk has two exceptions, which need not
 match a class: an error your function returns, which `Walk` returns unchanged, and a panic in the walk's own
 goroutines, which `Walk` recovers and returns as an error. A panic in your function is not recovered. Error messages
 pass through swath's redaction and carry no credential.
