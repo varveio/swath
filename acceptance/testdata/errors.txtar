@@ -1,0 +1,95 @@
+# The first errors a new user meets, offline: each exits with its documented
+# code (docs/reference/exit-codes.md) and prints one message, once, with no
+# stack trace, and changes nothing. interface covers a missing local source
+# for swath list and swath show and swath resume on an empty directory; these
+# are the rest of that first contact.
+
+mkdir t notds
+cp hello.txt t/a
+cp hello.txt notds/f
+digests notds
+cp stdout notds-before.txt
+
+# swath show and swath resume on what is not a dataset. resume refuses
+# (exit 2), show fails (exit 1); neither touches the directory.
+exits 1 swath show notds
+cmp stderr show-notds.txt
+! stdout .
+exits 1 swath show nosuch
+[!windows] cmp stderr show-nosuch.txt
+[windows] stderr '\Aswath: nosuch: [^\n]+\n\z'
+! stdout .
+exits 2 swath resume notds
+cmp stderr nothing-to-resume.txt
+! stdout .
+exits 2 swath resume nosuch
+cmp stderr nothing-to-resume.txt
+! stdout .
+! exists nosuch
+digests notds
+cmp stdout notds-before.txt
+
+# swath du --from-dataset on a directory without a manifest, and on a path
+# that does not exist: a usage error, exit 2.
+exits 2 swath du --from-dataset notds
+cmp stderr from-notds.txt
+! stdout .
+exits 2 swath du --from-dataset nosuch
+cmp stderr from-nosuch.txt
+! stdout .
+digests notds
+cmp stdout notds-before.txt
+
+# A source that does not exist: exit 1, one line, and no output created.
+exits 1 swath du nosuch
+[!windows] cmp stderr nosuch.txt
+[windows] stderr '\Aswath: nosuch: [^\n]+\n\z'
+! stdout .
+exits 1 swath list nosuch -o ds
+[!windows] cmp stderr nosuch.txt
+[windows] stderr '\Aswath: nosuch: [^\n]+\n\z'
+! stdout .
+! exists ds
+
+# --report into a directory that does not exist is refused before anything is
+# listed (exit 2), naming the directory.
+exits 2 swath list t --report missing/r.json
+cmpform stderr report-missing.txt
+! stdout .
+! exists missing
+
+# Outputs into a directory the user cannot write (Unix: Windows does not
+# apply the mode): exit 1, nothing created. A dataset's message names the
+# directory it could not make. A text output's message is left out here: it
+# names swath's internal scratch file (issue 615, "Text output to an
+# unwritable directory names the internal scratch file").
+[!windows] mkdir ro
+[!windows] chmod 0555 ro
+[!windows] exits 1 swath list t -o ro/ds
+[!windows] cmp stderr ro-ds.txt
+[!windows] ! stdout .
+[!windows] exits 1 swath list t -o ro/rows.tsv
+[!windows] stderr '\Aswath: [^\n]+\n\z'
+[!windows] ! stdout .
+[!windows] digests ro
+[!windows] ! stdout .
+
+-- hello.txt --
+hello
+-- show-notds.txt --
+swath: notds holds neither a dataset nor an interrupted run
+-- show-nosuch.txt --
+swath: nosuch: no such file or directory
+-- nothing-to-resume.txt --
+swath: nothing to resume: no interrupted run in the output directory
+-- from-notds.txt --
+swath: --from-dataset notds: no dataset (no manifest.json): give the directory swath list -o wrote
+-- from-nosuch.txt --
+swath: --from-dataset nosuch: no such directory
+-- nosuch.txt --
+swath: nosuch: no such file or directory
+-- report-missing.txt --
+swath: --report missing/r.json: its directory $WORK${/}missing does not exist
+See 'swath list --help'.
+-- ro-ds.txt --
+swath: output: mkdir ro/ds: permission denied

@@ -315,8 +315,8 @@ it, one leg per target, and `ci.yml` calls it twice:
 
 - `acceptance-candidate` runs the binaries `go-build` built from the commit, the same bytes, handed
   over as an artifact, against the v0.4.0 `swath-replay`, so the client and the server it is tested
-  against cannot change together; a second, short run checks the candidate `swath-replay` on the
-  replay scenarios alone. It runs on Linux x64 on a pull request that selects the main module, and on
+  against cannot change together; a second run repeats every scenario with the candidate
+  `swath-replay`. It runs on Linux x64 on a pull request that selects the main module, and on
   all five targets on `main`, dispatch, full-scope pull requests, pull requests that select the
   cross-OS legs, and changes to the suite.
 - `acceptance-baseline` runs the published v0.4.0 archives, checked against the release's
