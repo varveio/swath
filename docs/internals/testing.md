@@ -30,7 +30,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
 | Acceptance suite, candidate | the commit's `swath`, as `go-build` built it, in the black-box scenarios of [`acceptance/`](../../acceptance/README.md) against the v0.4.0 `swath-replay`, datasets read by DuckDB; then the replay scenarios with the commit's `swath-replay` ([acceptance suite](#acceptance-suite)) | PR: main selected (linux-amd64); suite changes, full-scope PRs, PRs that select the cross-OS legs, main, dispatch: the five targets | ubuntu-latest; ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest | `ci.yml` `acceptance-candidate` (`acceptance.yml`) |
 | Acceptance suite, baseline | the same scenarios on the published v0.4.0 archives, with v0.4.0's expectations | PR, main: a change under `acceptance/` or to `acceptance.yml`; dispatch | the five above | `ci.yml` `acceptance-baseline`; `acceptance.yml` dispatched |
-| Acceptance tripwire | no existing file under `acceptance/` modified, renamed or deleted without the owner's label `acceptance-change` | PR | ubuntu-latest | `ci.yml` `acceptance-tripwire` |
+| Acceptance tripwire | no file under `acceptance/` added, modified, renamed or deleted without the owner's label `acceptance-change` | PR | ubuntu-latest | `ci.yml` `acceptance-tripwire` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
@@ -382,10 +382,12 @@ cd acceptance && SWATH_BIN=DIR/swath SWATH_REPLAY_BIN=DIR/swath-replay SWATH_EXP
 ```
 
 `acceptance-tripwire` runs `git diff --no-renames --name-status BASE...HEAD -- acceptance/` between the pull
-request's base and head: any status but `A` (added) fails the job unless the pull request carries the label
-`acceptance-change`, which the owner alone applies ([`AGENTS.md`](../../AGENTS.md#the-acceptance-suite)). A
-rename is a deletion and an addition, so it fails too. `scripts/ci/test-ci-policy.py` runs the step against a
-real history, and the acceptance legs' selection and the workflow's leg table.
+request's base and head: any path it lists, added ones included, fails the job unless the pull request carries
+the label `acceptance-change`, which the owner alone applies ([`AGENTS.md`](../../AGENTS.md#the-acceptance-suite)).
+A diff that fails (a revision the clone lacks) fails the job, label or not. `scripts/ci/test-ci-policy.py` runs
+the step against a real history (edits, deletions, renames, mode changes and additions, a new `TestMain` and a
+vendored dependency among them, and an unknown base), and the acceptance legs' selection and the workflow's leg
+table.
 
 ### Nightly
 

@@ -719,11 +719,12 @@ jobs:
       feeder: candidate
       platforms: ${{ needs.changes.outputs.acceptance }}
 
-  # The suite's tripwire: an existing file under acceptance/ changes only with the owner's say,
-  # which the owner gives with the label `acceptance-change` (AGENTS.md). Added files pass. The PR's
-  # own changes are the diff from its merge base to its head, renames as a deletion and an
-  # addition; a label change reruns the workflow, so the check follows the label. Off pull
-  # requests the step skips and the job succeeds.
+  # The suite's tripwire: every change under acceptance/, an added file included, needs the owner's
+  # say, which the owner gives with the label `acceptance-change` (AGENTS.md); an added file can
+  # narrow what runs as surely as an edit (a TestMain, a vendored dependency). The PR's own changes
+  # are the diff from its merge base to its head; a diff that cannot run fails the job instead of
+  # reading as no change. A label change reruns the workflow, so the check follows the label. Off
+  # pull requests the step skips and the job succeeds.
   acceptance-tripwire:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -733,7 +734,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Existing acceptance files unchanged, or labeled acceptance-change
+      - name: Acceptance files unchanged, or labeled acceptance-change
         if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
@@ -741,14 +742,14 @@ jobs:
           LABELED: ${{ contains(github.event.pull_request.labels.*.name, 'acceptance-change') }}
         run: |
           set -euo pipefail
-          changed=$(git diff --no-renames --name-status "$BASE...$HEAD" -- acceptance/ | grep -v '^A' || true)
+          changed=$(git diff --no-renames --name-status "$BASE...$HEAD" -- acceptance/)
           if [ -z "$changed" ]; then
-            echo "No existing file under acceptance/ changed."
+            echo "No file under acceptance/ changed."
           elif [ "$LABELED" = true ]; then
-            echo "Existing files under acceptance/ changed, with the label acceptance-change:"
+            echo "Files under acceptance/ changed, with the label acceptance-change:"
             echo "$changed"
           else
-            echo "::error::This pull request modifies or deletes existing files under acceptance/ without the label acceptance-change. The acceptance suite is the owner's record of swath's external behavior: a failing scenario is fixed in the product, and a scenario changes only when the owner approves the behavior change, which the owner alone records by applying the label (AGENTS.md); only the owner applies it. A pull request that changes a scenario lists each one with its reason."
+            echo "::error::This pull request adds, modifies or deletes files under acceptance/ without the label acceptance-change. The acceptance suite is the owner's record of swath's external behavior: a failing scenario is fixed in the product, and the suite changes, a new scenario included, only when the owner approves, which the owner alone records by applying the label (AGENTS.md). A pull request that changes the suite lists each changed scenario with its reason."
             echo "$changed"
             exit 1
           fi

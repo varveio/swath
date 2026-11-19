@@ -330,11 +330,14 @@ module's one dependency is small, and a cache would add a family per runner to t
 [budget](#caching) for seconds of compiling.
 
 The suite is worth something only if it does not move with the code. `acceptance-tripwire` fails a
-pull request that modifies, renames or deletes an existing file under `acceptance/` unless the
+pull request that adds, modifies, renames or deletes any file under `acceptance/` unless the
 pull request carries the label `acceptance-change`, which only the owner applies
-([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); added files pass. It compares the pull
-request's head with its merge base, so a change `main` made since does not count, and a label
-change reruns `ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone
+([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)). Additions count: a new `_test.go` with a
+`TestMain`, or a vendored dependency, can narrow what runs without touching an existing file. So a
+pull request that adds a scenario waits for the owner's label too. It compares the pull request's
+head with its merge base, so a change `main` made since does not count; a diff that cannot run (a
+revision the clone lacks) fails the job rather than reading as no change; and a label change reruns
+`ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone
 who can label a pull request can pass it, so it makes a change to the suite a recorded decision
 rather than a side effect.
 
@@ -486,8 +489,8 @@ minutes:
   the commit changed behavior the suite records: fix the product, or report the change to the owner
   as intended ([`AGENTS.md`](../../../AGENTS.md#the-acceptance-suite)); never edit the scenario to pass.
   A red baseline leg means a change to the suite is wrong about v0.4.0.
-- **Red `acceptance-tripwire`:** the pull request changes an existing file under `acceptance/`
-  without the owner's label; the job lists the files.
+- **Red `acceptance-tripwire`:** the pull request changes or adds files under `acceptance/`
+  without the owner's label; the job lists them. With no list, `git diff` itself failed.
 - **Suspected flake:** do not rerun until green. Dispatch `go-stress.yml` with the test, a count
   and the runner, and cite the run and its tally in the pull request (see
   [`docs/internals/testing.md`](../../internals/testing.md#stress-repeats)).

@@ -86,7 +86,7 @@ that run the built binaries as a user does, on every platform, against v0.4.0 an
 - A failing scenario is fixed in the product, or reported to the owner as an intended behavior
   change. Never edit a scenario on your own judgment to make it pass.
 - Never apply the label `acceptance-change`: the owner applies it. CI fails a pull request that
-  modifies, renames or deletes a file under `acceptance/` without it.
+  adds, modifies, renames or deletes any file under `acceptance/` without it.
 
 ## The Go code
 

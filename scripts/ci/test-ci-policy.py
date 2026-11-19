@@ -231,7 +231,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_acceptance_tripwire(self):
         # The tripwire step against a real history: base, a pull request on top, a label.
-        step = run_step('Existing acceptance files unchanged, or labeled acceptance-change')
+        step = run_step('Acceptance files unchanged, or labeled acceptance-change')
         with tempfile.TemporaryDirectory() as temp:
             cwd = Path(temp)
 
@@ -250,7 +250,7 @@ class PolicyTests(unittest.TestCase):
             git('commit', '-qm', 'base')
             base = git('rev-parse', 'HEAD')
 
-            def pull_request(change, labeled=False):
+            def pull_request(change, labeled=False, bad_base=False):
                 git('checkout', '-q', '-B', 'pr', base)
                 change()
                 git('add', '-A')
@@ -262,6 +262,8 @@ class PolicyTests(unittest.TestCase):
                 main = git('rev-parse', 'HEAD')
                 head = git('rev-parse', 'pr')
                 git('reset', '-q', '--hard', base)
+                if bad_base:
+                    main = 'f' * 40  # a revision the clone does not have
                 return subprocess.run(['bash', '-c', step], cwd=temp, capture_output=True, text=True,
                                       env=dict(os.environ, BASE=main, HEAD=head,
                                                LABELED='true' if labeled else 'false')).returncode
@@ -272,9 +274,14 @@ class PolicyTests(unittest.TestCase):
                 'delete': scenario.unlink,
                 'rename': lambda: scenario.rename(scenario.with_name('l.txtar')),
                 'mode': lambda: scenario.chmod(0o755),
+                # An addition can narrow what runs as surely as an edit.
+                'add scenario': lambda: scenario.with_name('s3-replay.txtar').write_text('exec swath-replay\n'),
+                'add TestMain': lambda: (cwd / 'acceptance/main_test.go').write_text(
+                    'package acceptance\n\nimport "testing"\n\nfunc TestMain(m *testing.M) {}\n'),
+                'add vendor': lambda: ((cwd / 'acceptance/vendor').mkdir(),
+                                       (cwd / 'acceptance/vendor/modules.txt').write_text('# x\n')),
             }
             passed = {
-                'add': lambda: scenario.with_name('s3-replay.txtar').write_text('exec swath-replay\n'),
                 'product': lambda: (cwd / 'internal/x.go').write_text('package y\n'),
                 'nothing': lambda: None,
             }
@@ -285,6 +292,11 @@ class PolicyTests(unittest.TestCase):
             for name, change in passed.items():
                 with self.subTest(change=name):
                     self.assertEqual(pull_request(change), 0)
+            # A diff that cannot run fails closed, label or not, whatever the pull request changes.
+            for name, change in passed.items():
+                for labeled in (False, True):
+                    with self.subTest(change=name, bad_base=True, labeled=labeled):
+                        self.assertNotEqual(pull_request(change, labeled=labeled, bad_base=True), 0)
 
     def test_light_docs_are_the_pages_docs_path_refuses(self):
         # The docs tier is skipped for LIGHT_DOCS, so no Go test may read them: docs.Unread
