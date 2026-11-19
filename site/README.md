@@ -19,7 +19,7 @@ every push to `main`. Nothing about the published site is stored in a branch.
 | `static/` | Copied verbatim into the site root: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, the nav logo (`logo-light.svg`, `logo-dark.svg`), the social card `card.png`, `data/channel.json`, `data/media.json` (the videos the deploy fetches, below), `media/` (the replay's poster) and `runs/noaa-gestofs-pds/index.html` (the home page's run report, below) |
 | `card/` | The social card's source, `card.svg`, and `render.sh`, which renders it to `static/card.png`. |
 | `readme/` | `hero.png`, the home page's lead terminal example as the repository README shows it, and `render.sh` (with `render.cjs`), which renders it from the built site. Not published. |
-| `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. |
+| `package.json`, `package-lock.json` | VitePress, pinned to 1.6.4, and the font packages, with their locked dependencies. An `overrides` entry holds Vite at 6.4.x, which has the security fixes Vite 5 does not get; VitePress 1.6.4 asks for Vite 5. Remove it when a stable VitePress requires Vite 6 or later. |
 
 ## How the documentation is published
 
