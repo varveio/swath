@@ -34,6 +34,10 @@
 // AllocatedMissing without them. KindPrefix and KindUnknown entries are
 // ignored: one is synthetic, the other a gap the listing reports itself.
 //
+// The missing counters and Unidentified count names, not files: each name
+// of a hard-linked file without a size or a time adds to SizeMissing or
+// NewestMissing, though only one adds the file's figures.
+//
 // # The guarantee
 //
 // For every prefix, nested ones included, Allocated is a lower bound of
@@ -43,10 +47,13 @@
 // takes entries, so totals taken from a walk that stopped early are lower
 // bounds too. The missing counters are diagnostics, not bounds.
 //
-// Take a prefix the walk covered (no unread place under or above it) whose
-// allocation evidence is complete (AllocatedMissing and Unidentified are
-// 0). Then Allocated equals what du -sB1 reports for that directory, with
-// three differences:
+// Take a prefix the walk covered and whose allocation evidence is
+// complete. The walk covered it when the walk returned no error, an
+// inventory's walk reported WalkSummary.Complete, and no Unread holds the
+// prefix or lies under it; an Unread elsewhere leaves it covered. Its
+// allocation evidence is complete when AllocatedMissing and Unidentified
+// are 0. Then Allocated equals what du -sB1 reports for that directory,
+// with three differences:
 //
 //   - A directory on another device is listed and not entered: its own
 //     blocks count and its contents do not. GNU du -s enters it, and

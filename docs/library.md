@@ -197,13 +197,14 @@ results := tally.Result() // one du.Totals per prefix, in the order requested
 ```
 
 For every prefix, `Allocated` is a lower bound of `du -sB1` of the prefix on an acyclic traversal scope, also
-after a walk stopped early. Where the walk covered a prefix (no `Unread` at, under or above it) and
-`AllocatedMissing` and `Unidentified` are 0, it equals `du -sB1` with three differences: a directory on another
+after a walk stopped early. The walk covered a prefix when it returned no error, an inventory's walk reported
+`WalkSummary.Complete`, and no `Unread` holds the prefix or lies under it. Where it did and `AllocatedMissing` and
+`Unidentified` are 0, `Allocated` equals `du -sB1` with three differences: a directory on another
 device counts its own blocks and not its contents (GNU `du -s` enters it, `du -sx` leaves out the mount point's
 own blocks); the prefix's own directory counts only when its entry is fed, and a walk of the root hands on none,
 so feed a `KindDir` at `""` with the root's blocks; and a same-device bind mount of an ancestor is a cycle that
 swath's walk enters and counts again, where GNU du skips it. Every bound and equality holds on acyclic traversal
-scopes only.
+scopes only, and on a tree that does not change during the walk.
 
 ## Evidence and errors
 

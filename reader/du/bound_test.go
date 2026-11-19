@@ -103,7 +103,8 @@ func randomTree(rng *rand.Rand, degrade bool) tree {
 }
 
 // truth is prefix p's figures over the tree as it is: each file under it
-// once, each directory's own blocks.
+// once, each directory's own blocks, each symbolic link's name, and the
+// per-name counters of the entries as listed.
 func (tr tree) truth(p string) Totals {
 	s := Totals{Prefix: p}
 	for d, alloc := range tr.dirs {
@@ -124,6 +125,61 @@ func (tr tree) truth(p string) Totals {
 		}
 		if f.kind != listing.KindObject {
 			s.Allocated += f.alloc
+		}
+	}
+
+	for _, f := range tr.files {
+		if f.kind != listing.KindSymlink {
+			continue
+		}
+		for _, n := range f.names {
+			if strings.HasPrefix(n, p) {
+				s.Symlinks++
+			}
+		}
+	}
+
+	names := tr.perName(p)
+	s.SizeMissing, s.NewestMissing = names.SizeMissing, names.NewestMissing
+	s.AllocatedMissing, s.Unidentified = names.AllocatedMissing, names.Unidentified
+	return s
+}
+
+// perName is prefix p's missing counters and Unidentified, taken from each
+// entry under it alone: no name is deduplicated.
+func (tr tree) perName(p string) Totals {
+	var s Totals
+	for _, e := range tr.entries {
+		if !strings.HasPrefix(string(e.Key), p) {
+			continue
+		}
+		switch e.Kind {
+		case listing.KindDir:
+			if e.AllocatedBytes == nil {
+				s.AllocatedMissing++
+			}
+			continue
+		case listing.KindFile, listing.KindSymlink, listing.KindOther:
+			identified := e.Links != nil && (*e.Links == 1 || (*e.Links > 1 && e.Device != nil && e.Inode != nil))
+			switch {
+			case e.AllocatedBytes == nil:
+				s.AllocatedMissing++
+				continue
+			case !identified:
+				s.Unidentified++
+				continue
+			case e.Kind != listing.KindFile:
+				continue
+			}
+		case listing.KindObject:
+		default:
+			continue
+		}
+		if e.Size == nil {
+			s.SizeMissing++
+		}
+		if e.LastModified == nil {
+			s.NewestMissing++
 		}
 	}
 	return s
@@ -153,9 +209,9 @@ func before(a, b *time.Time) bool {
 // tree's entries in random orders and slices to a tally of random nested
 // and sibling prefixes. For every prefix, no figure ever decreases as Add
 // takes entries; Files, Size, Allocated and Newest never exceed the
-// tree's own figures; with complete evidence they equal them and no
-// missing counter is set; and the totals do not depend on the order or
-// the slicing.
+// tree's own figures; Symlinks, the missing counters and Unidentified
+// count every name; with complete evidence every figure equals the
+// tree's; and the totals do not depend on the order or the slicing.
 func TestLowerBound(t *testing.T) {
 	rng := rand.New(rand.NewPCG(661, 1))
 	for i := range 2000 {
@@ -182,8 +238,11 @@ func TestLowerBound(t *testing.T) {
 			if s.Files > want.Files || s.Size > want.Size || s.Allocated > want.Allocated || !before(s.Newest, want.Newest) {
 				t.Fatalf("tree %d, prefix %q above the tree's figures:\n got %s\nwant %s", i, s.Prefix, show(s), show(want))
 			}
+			if s.Symlinks != want.Symlinks || s.SizeMissing != want.SizeMissing || s.NewestMissing != want.NewestMissing ||
+				s.AllocatedMissing != want.AllocatedMissing || s.Unidentified != want.Unidentified {
+				t.Fatalf("tree %d, prefix %q counts names wrongly:\n got %s\nwant %s", i, s.Prefix, show(s), show(want))
+			}
 			if !degrade {
-				want.Symlinks = s.Symlinks
 				if !equal(s, want) {
 					t.Fatalf("tree %d, prefix %q with complete evidence:\n got %s\nwant %s", i, s.Prefix, show(s), show(want))
 				}

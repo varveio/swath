@@ -292,6 +292,30 @@ func TestIdentifiedAndUnidentifiedAlias(t *testing.T) {
 	}
 }
 
+// TestMissingPerName: every name of a hard-linked file without a size or
+// a time counts in SizeMissing and NewestMissing, though the file counts
+// once, whether its names come in one slice or in two.
+func TestMissingPerName(t *testing.T) {
+	alias := func(key string) listing.Entry {
+		e := file(key, 2, 5)
+		e.Size, e.LastModified = nil, nil
+		return e
+	}
+	want := []Totals{
+		{Prefix: "", Files: 1, Allocated: 4096, SizeMissing: 2, NewestMissing: 2},
+		{Prefix: "a/", Files: 1, Allocated: 4096, SizeMissing: 2, NewestMissing: 2},
+	}
+
+	one := tally(t, "", "a/")
+	add(t, one, alias("a/x"), alias("a/y"))
+	check(t, one.Result(), want...)
+
+	two := tally(t, "", "a/")
+	add(t, two, alias("a/x"))
+	add(t, two, alias("a/y"))
+	check(t, two.Result(), want...)
+}
+
 // TestSingleLinkWithoutIdentity: a file with one link needs no device or
 // inode, and two of them count as two files.
 func TestSingleLinkWithoutIdentity(t *testing.T) {
@@ -451,8 +475,9 @@ func TestResult(t *testing.T) {
 	check(t, tl.Result(), want...)
 }
 
-// TestNew: New refuses a malformed or repeated prefix and a negative
-// limit, and keeps its own copy of the prefixes.
+// TestNew: New refuses a malformed or repeated prefix, a prefix past the
+// largest position and a negative limit, and keeps its own copy of the
+// prefixes.
 func TestNew(t *testing.T) {
 	for _, opt := range []Options{
 		{Prefixes: []string{"a"}},
@@ -477,6 +502,15 @@ func TestNew(t *testing.T) {
 	check(t, tl.Result(),
 		Totals{Prefix: "a/", Files: 1, Size: 1, Newest: at(1)},
 		Totals{Prefix: "", Files: 1, Size: 1, Newest: at(1)})
+
+	defer func(old int) { maxIndex = old }(maxIndex)
+	maxIndex = 2
+	if _, err := New(Options{Prefixes: []string{"a/", "b/", "c/", "d/"}}); !errors.Is(err, listing.ErrInvalidRequest) {
+		t.Errorf("New with a prefix past the largest position: %v, want listing.ErrInvalidRequest", err)
+	}
+	if _, err := New(Options{Prefixes: []string{"a/", "b/", "c/"}}); err != nil {
+		t.Errorf("New with a prefix at the largest position: %v", err)
+	}
 
 	if tl, err := New(Options{}); err != nil || len(tl.Result()) != 0 || tl.maxInodes != defaultMaxInodes {
 		t.Errorf("New(Options{}): %v", err)

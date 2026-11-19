@@ -26,6 +26,10 @@ var (
 // defaultMaxInodes is Options.MaxInodes when it is 0.
 const defaultMaxInodes = 1_000_000
 
+// maxIndex is the largest position of a prefix in Options.Prefixes: the
+// tally keeps positions as int32. A variable so that a test can lower it.
+var maxIndex = math.MaxInt32
+
 // Options say which prefixes a Tally sums.
 type Options struct {
 	// Prefixes are "" or keys ending in "/", nested or not, none repeated.
@@ -34,10 +38,14 @@ type Options struct {
 }
 
 // New returns an empty Tally. It copies opt and refuses a malformed or repeated prefix,
-// or a negative MaxInodes, with an error that matches listing.ErrInvalidRequest.
+// more than 1<<31 prefixes or a negative MaxInodes, with an error that matches
+// listing.ErrInvalidRequest.
 func New(opt Options) (*Tally, error) {
 	if opt.MaxInodes < 0 {
 		return nil, fmt.Errorf("du: MaxInodes %d is negative: %w", opt.MaxInodes, listing.ErrInvalidRequest)
+	}
+	if len(opt.Prefixes)-1 > maxIndex {
+		return nil, fmt.Errorf("du: %d prefixes are more than %d: %w", len(opt.Prefixes), maxIndex+1, listing.ErrInvalidRequest)
 	}
 
 	t := &Tally{
@@ -181,7 +189,7 @@ type Totals struct {
 	// Per name: counted files and objects without a size or a time; directories
 	// and local entries without AllocatedBytes, and local entries without identity
 	// (Links unknown or 0, or above 1 without Device or Inode), the last two counted in
-	// no other figure.
+	// no other figure except Symlinks.
 	SizeMissing, NewestMissing     int64
 	AllocatedMissing, Unidentified int64
 }
@@ -190,14 +198,17 @@ type Totals struct {
 type part struct {
 	symlink bool // a symbolic link's name, counted or not
 	// allocatedMissing and unidentified exclude a local entry from every
-	// figure but Symlinks; counted is an entry that adds the figures below.
-	allocatedMissing, unidentified, counted bool
+	// figure but Symlinks.
+	allocatedMissing, unidentified bool
 
-	file                       bool // counts in Files
-	size, allocated            int64
+	// sizeMissing and newestMissing count per name, every alias of a
+	// hard-linked file included.
 	sizeMissing, newestMissing bool
-	newest                     time.Time
-	hasNewest                  bool
+
+	file            bool // counts in Files
+	size, allocated int64
+	newest          time.Time
+	hasNewest       bool
 
 	// linked is a counted file with several links, id its identity: it
 	// counts once within each prefix.
@@ -237,6 +248,12 @@ func (t *Tally) take(e *listing.Entry) error {
 			s.unidentified++
 			continue
 		}
+		if p.sizeMissing {
+			s.sizeMissing++
+		}
+		if p.newestMissing {
+			s.newestMissing++
+		}
 		if p.linked {
 			first, err := t.claim(p.id, j)
 			if err != nil {
@@ -260,7 +277,7 @@ func partOf(e *listing.Entry) part {
 	var p part
 	switch e.Kind {
 	case listing.KindObject:
-		p.counted, p.file = true, true
+		p.file = true
 		p.times(e)
 		return p
 	case listing.KindDir:
@@ -268,7 +285,7 @@ func partOf(e *listing.Entry) part {
 			p.allocatedMissing = true
 			return p
 		}
-		p.counted, p.allocated = true, *e.AllocatedBytes
+		p.allocated = *e.AllocatedBytes
 		return p
 	}
 
@@ -284,7 +301,7 @@ func partOf(e *listing.Entry) part {
 		return p
 	}
 
-	p.counted, p.allocated = true, *e.AllocatedBytes
+	p.allocated = *e.AllocatedBytes
 	if e.Kind == listing.KindFile {
 		p.file = true
 		p.times(e)
@@ -311,8 +328,8 @@ func (p *part) times(e *listing.Entry) {
 	}
 }
 
-// add adds a counted entry's figures, or fails with ErrOverflow and adds
-// none.
+// add adds a counted entry's figures, once per file, or fails with
+// ErrOverflow and adds none.
 func (s *sums) add(p *part) error {
 	if p.size > math.MaxInt64-s.size || p.allocated > math.MaxInt64-s.allocated {
 		return ErrOverflow
@@ -322,12 +339,6 @@ func (s *sums) add(p *part) error {
 	s.allocated += p.allocated
 	if p.file {
 		s.files++
-	}
-	if p.sizeMissing {
-		s.sizeMissing++
-	}
-	if p.newestMissing {
-		s.newestMissing++
 	}
 	if p.hasNewest && (!s.hasNewest || p.newest.After(s.newest)) {
 		s.newest, s.hasNewest = p.newest, true
