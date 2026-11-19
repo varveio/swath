@@ -1,0 +1,87 @@
+# Acceptance suite
+
+A black-box check of built `swath` and `swath-replay` binaries, run the way a user runs them. It does not
+import or build the code: it is a module of its own (`varve.io/swath-acceptance`), outside `go.work`, with no
+requirement on `github.com/varveio/swath`. Every expected value comes from how a scenario builds its input (a
+file tree, a key list served by `swath-replay`, a dataset written by 0.4.0) or from DuckDB reading a dataset,
+never from swath agreeing with itself.
+
+## Changing it
+
+Changing or deleting anything under `acceptance/` needs the owner's say. A pull request that does lists each
+scenario it changes with the reason. The suite exists to notice when swath's behaviour changes; editing it in
+the same change that changes swath defeats that.
+
+## Running it
+
+```bash
+cd acceptance
+SWATH_BIN=/abs/path/swath SWATH_REPLAY_BIN=/abs/path/swath-replay SWATH_EXPECT=current \
+  GOWORK=off go test -count=1 ./...
+```
+
+`-run 'TestScenarios/.*replay'` selects the replay scenarios; each scenario is a subtest named after its file.
+
+| Input | What it is |
+|---|---|
+| `SWATH_BIN` | absolute path to the `swath` executable under test |
+| `SWATH_REPLAY_BIN` | absolute path to the `swath-replay` executable that serves the object-store scenarios |
+| `SWATH_EXPECT` | `v0.4.0` or `current`: which side of a changed behaviour to expect (below) |
+| `duckdb` on `PATH` | the DuckDB CLI, which reads the datasets |
+
+A missing or wrong input fails the run with a message naming it; nothing is skipped. The binaries must answer
+`--version` with `swath ` and `swath-replay ` respectively. They are copied under their own names (`.exe` on
+Windows) into a directory the scripts find first on `PATH`.
+
+The run needs no network and no credentials: object stores are `swath-replay` on `127.0.0.1`. It must not run
+as root (`local-permissions` fails if it does).
+
+## Scenarios
+
+Each file in `testdata/` is a [testscript](https://pkg.go.dev/github.com/rogpeppe/go-internal/testscript)
+script: commands as a user types them, then the files they use.
+
+| Scenario | What it checks |
+|---|---|
+| `interface` | the version line, the commands, the options the other scenarios use, and the exit code and message of each kind of mistake |
+| `local` | a tree with hostile names (spaces, non-ASCII, byte-order traps, an empty directory, a hard link, a symbolic link, a non-UTF-8 name on Linux, a path over 260 characters) as text, totals and a dataset |
+| `local-permissions` | an unreadable directory: exit 3, the entries left out, the dataset's coverage (not on Windows) |
+| `s3-replay`, `gcs-replay`, `azure-replay` | a key list served over each provider's API: the listing equals it exactly and in byte order, filters, columns, formats, totals, the dataset's schema, rows, manifest and report |
+| `deadline-resume` | a run stopped by `--max-duration` (exit 124) after committing parts, then resumed, gives the same parts byte for byte as a run never stopped |
+| `compat-v040` | a dataset written by 0.4.0 (`testdata/compat-v040/`, provenance in the script) is read by `swath show`, `swath du --from-dataset` and `--seed-from`, and replaced by `--overwrite` |
+
+Commands beside testscript's own:
+
+| Command | Does |
+|---|---|
+| `exits N PROGRAM ARGS...` | runs PROGRAM and requires exit status N (`! exec` only says it failed) |
+| `mktree DIR SPEC` | builds a tree from SPEC (`dir PATH MTIME`, `file PATH SIZE MTIME`, `link PATH TARGET`), times set last |
+| `seq FILE N FORMAT` | appends N lines `fmt.Sprintf(FORMAT, i)` to FILE, for key lists and expected rows too long to write out |
+| `replay FLAGS...` | starts `swath-replay serve --port 0 FLAGS`, waits up to 30 s for its startup line, sets `$REPLAY` to its endpoint, and kills it when the script ends |
+| `dataset DIR SQL` | checks each part `DIR/manifest.json` names (bytes, SHA-256, rows, no other part in `data/`), then runs SQL in DuckDB over table `ds` (the parts' rows in stored order) and `ds_schema` (the first part's Parquet columns), printing rows tab-separated |
+| `json FILE PATH...` | prints the JSON value at each dotted PATH; `! json FILE PATH` requires PATH absent |
+
+Conditions beside testscript's own: `[expect:v0.4.0]` and `[expect:current]`, true when `SWATH_EXPECT` names
+them.
+
+## Expectations by version
+
+A line without an `[expect:…]` condition must hold for every build. Where `main` changed behaviour on purpose
+after 0.4.0, the script keeps both expectations next to each other, the 0.4.0 one under `[expect:v0.4.0]` and the
+current one under `[expect:current]` with a comment naming the pull request that changed it. The pipeline says
+which side to check through `SWATH_EXPECT`: `v0.4.0` for the published 0.4.0 binaries, `current` for a build of
+`main`. Nothing parses `swath --version`. When the next release ships, it becomes the baseline: its side stays,
+unmarked, and the 0.4.0 side is deleted.
+
+Platform differences are conditions too (`[windows]`, `[linux]`, `[symlink]`), each with its reason.
+
+Values that differ from run to run or machine to machine are matched loosely, by name: times a run takes or
+records, the build revision, temporary paths, directories' own sizes, allocated bytes, inode, device and owner
+numbers, and the local time zone's name on Windows.
+
+## What it relies on in DuckDB
+
+`read_parquet` with `file_row_number`, `parquet_schema` (`name`, `type`, `repetition_type`, `converted_type`,
+`num_children`), `DESCRIBE`, `decode`, `hex`, `epoch_us`, `regexp_matches`, `error` and `printf`, and the CLI
+flags `-no-init -batch -bail -list -noheader -nullvalue -separator`. Rows come back in the order the table was
+built in, the manifest's part order and each part's row order.
