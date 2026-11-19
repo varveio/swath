@@ -5,6 +5,7 @@
 # The version line. The v0.4.0 feeder must hand over the release itself.
 exec swath --version
 [expect:v0.4.0] stdout '^swath 0\.4\.0 \(7e75c77f59c9cc31248e6d1326d9140cb8be5567\)\n$'
+# A build of main says devel, or the release it is, and its commit.
 [expect:current] stdout '^swath (devel|[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?) \([0-9a-f]{40}(-dirty)?\)\n$'
 ! stderr .
 cp stdout version.txt

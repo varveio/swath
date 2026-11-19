@@ -117,6 +117,11 @@ stdout '^  coverage  nothing unreadable; no filters; no exclusions$'
 # #620: swath show names the storage by its parts and schema; -v adds the format id.
 [expect:current] stdout '^  storage   1 part, [0-9.]+ KiB of Parquet \(schema swath/local-entries/v1\)$'
 
+exec swath show -v ds
+[expect:v0.4.0] stdout '^  storage   1 part, [0-9.]+ KiB of Parquet \(SeekParquet format 0 draft 1, schema swath/local-entries/v1\)$'
+# #620, #644: -v adds the SeekParquet format id, and the build that wrote the manifest.
+[expect:current] stdout '^  storage   1 part, [0-9.]+ KiB of Parquet \(SeekParquet format 0 draft 1, schema swath/local-entries/v1, written by swath \S+ revision [0-9a-f]{40}(-dirty)?\)$'
+
 # Totals from the dataset agree with the tree, the hard links aside (none here).
 exec swath du --from-dataset ds --apparent-size --format jsonl
 stdout '\A\{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,'

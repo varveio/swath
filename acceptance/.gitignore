@@ -1,0 +1,2 @@
+# The root .gitignore leaves out Parquet files; the 0.4.0 dataset is a fixture.
+!testdata/compat-v040/data/*.parquet

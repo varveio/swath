@@ -41,6 +41,10 @@ stdout '^  saved     [1-9][0-9]* parts?, [0-9,]+ rows; swath resume lists after 
 [expect:current] stdout '^  started   \d{4}-\d\d-\d\d \d\d:\d\d:\d\d \S+$'
 [expect:current] ! stdout '^  identity '
 
+exec swath show -v cut
+stdout '^  started   \d{4}-\d\d-\d\d \d\d:\d\d:\d\d \S+ \(journal version 1\)$'
+stdout '^  identity  provider s3, schema swath/s3-objects/v1, .*, source s3://bkt/, endpoint http://127\.0\.0\.1:[0-9]+, '
+
 # A new run over the interrupted one is refused, and changes nothing.
 exits 2 swath list s3://bkt --endpoint-url $REPLAY --anonymous -o cut
 exists cut/error.json
