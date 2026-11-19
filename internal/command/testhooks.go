@@ -29,8 +29,13 @@ import (
 // SWATH_TEST_SLOW_AT (slowAt); and on
 // the order stage's events (order.SetDurableEvents), serialSeals',
 // SWATH_TEST_LAST_RANGE_FILE (lastRangeFile) and
-// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing).
+// SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing). SWATH_TEST_GRACE, a
+// duration, replaces shutdownGrace: a forced-exit test holds the run at a
+// hang point and lets a short grace fire instead of waiting out 15 s.
 func testHooks() {
+	if d, err := time.ParseDuration(os.Getenv("SWATH_TEST_GRACE")); err == nil {
+		shutdownGrace = d
+	}
 	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {
 		h, e := serialSeals()

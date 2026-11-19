@@ -148,7 +148,8 @@ Diagnostics:
 
 The crash, hang and pacing hooks the process tests drive (`SWATH_TEST_KILL_AT`, `SWATH_TEST_HANG_AT`,
 `SWATH_TEST_SLOW_AT`, `SWATH_TEST_SERIAL_SEALS`, `SWATH_TEST_LAST_RANGE_FILE`,
-`SWATH_TEST_DRAIN_AFTER_LISTING`) exist only in a build with the `swathtest` tag
+`SWATH_TEST_DRAIN_AFTER_LISTING`) and `SWATH_TEST_GRACE` (a shutdown grace shorter than the 15 s one, for the
+forced-exit tests) exist only in a build with the `swathtest` tag
 (`go build -tags swathtest ./cmd/swath`), which those tests build; a release binary reads none of them.
 
 ## Phase profiles
