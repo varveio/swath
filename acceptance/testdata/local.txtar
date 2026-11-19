@@ -20,8 +20,10 @@ mktree t tree.spec
 [darwin] env BORN={time} BORN_US={int}
 
 # Every entry, in unsigned byte order of the key: ' ' < '-' < '.' < '/' < '0'
-# puts a/ and a/x between a.txt and a0, and B before a.
-exec swath list t --columns key,kind
+# puts a/ and a/x between a.txt and a0, and B before a. Nothing on stderr:
+# no warning, and no closing lines (--no-stats; by default they print for a
+# run over 1.5 s, which a loaded runner can take even here).
+exec swath list t --columns key,kind --no-stats
 cmp stdout want-keys.tsv
 ! stderr .
 
@@ -32,7 +34,6 @@ cmp stdout want-files.tsv
 exec swath list t
 [!windows] cmpform stdout want-bare.tsv
 [windows] cmpform stdout want-bare-windows.tsv
-! stderr .
 
 exec swath list t --format jsonl --columns key,size,last_modified,kind --no-dirs
 cmp stdout want-files.jsonl
@@ -59,13 +60,20 @@ cmp rows.tsv want-files.tsv
 [expect:current] [!windows] env PRIMARY=allocated_bytes
 # #660: Windows reads no blocks, so the lengths lead.
 [expect:current] [windows] env PRIMARY=size
+# Windows: every file lacks blocks; #660 counts the directories too, which
+# lack them as well.
+[expect:v0.4.0] [windows] env NOBLOCKS=9
+[expect:current] [windows] env NOBLOCKS=15
 exec swath du t
 [!windows] cmpform stdout want-du.tsv
 [windows] cmpform stdout want-du-windows.tsv
 
 exec swath du t -d 1 --apparent-size --format jsonl
 [!windows] cmpform stdout want-du-1.jsonl
-[windows] cmpform stdout want-du-1-windows.jsonl
+[windows] [expect:v0.4.0] cmpform stdout want-du-1-windows-v040.jsonl
+# #660: a prefix counts its own directory's blocks, missing on Windows, and
+# its allocated bytes are null when none of its entries has blocks.
+[windows] [expect:current] cmpform stdout want-du-1-windows.jsonl
 
 # The table names the zone it prints times in (TZ is UTC; Windows keeps the runner's zone).
 [!windows] exec swath du t -d 1 --format table --apparent-size
@@ -308,19 +316,25 @@ row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_mi
 total	0	9	6	55197	0	{int}	0	2026-06-01T00:00:00.000000Z	$PRIMARY	name	true	
 -- want-du-windows.tsv --
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
-total	0	9	6	55197	0	\N	9	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false	
+total	0	9	6	55197	0	\N	$NOBLOCKS	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false	
 -- want-du-1.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"deep/","objects":1,"dirs":1,"size":0,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-02-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
--- want-du-1-windows.jsonl --
+-- want-du-1-windows-v040.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":9,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"deep/","objects":1,"dirs":1,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-02-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- want-du-1-windows.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":15,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"deep/","objects":1,"dirs":1,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-02-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 -- want-du-table-v040.txt --
     size  files  dirs  last_modified (UTC)  path
      1 B      1     0  2026-03-01 00:00:00  a/
@@ -439,7 +453,7 @@ true
 -- want-saved-du.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true,"dataset":{"path":"ds","source":"$WORK/t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
 -- want-saved-du-windows.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":9,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"{path}\\t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":$NOBLOCKS,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"{path}\\t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
 -- refused.txt --
 swath: ds: output directory is not empty (use --overwrite to replace a previous dataset)
 -- want-txt-rows.tsv --
