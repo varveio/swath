@@ -8,3 +8,6 @@
 # Build and release machinery.
 /.github/               @sagiba
 /config/                @sagiba
+
+# The acceptance suite: the owner's record of swath's external behavior (AGENTS.md).
+/acceptance/            @sagiba

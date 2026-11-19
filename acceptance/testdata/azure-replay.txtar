@@ -1,0 +1,221 @@
+# A container served over the Azure Blob API (List Blobs) by swath-replay.
+# The listing must equal the key list exactly: every name once, in unsigned
+# byte order. Azure lists in UTF-16 code-unit order, which puts z/😀 (U+1F600)
+# before z/～ (U+FF5E); swath must put them back in byte order. keys.tsv is
+# hostile.tsv (12 names, 79 bytes, newest 2026-06-01; Azure refuses control
+# characters in a name) and 2,500 names zz/00001..zz/02500 whose sizes are
+# 1..2500 (3,126,250 bytes): 2,512 blobs, 3,126,329 bytes. The server fills
+# what a key list does not give (etag, blob type, tier, lease state) with
+# fixed synthetic values.
+
+cp hostile.tsv keys.tsv
+seq keys.tsv 2500 'zz/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt --protocols azure
+
+# The bare listing on a pipe: TSV, every column, every name, escaped.
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous
+cp want-hostile.tsv want-all.tsv
+seq want-all.tsv 2500 'zz/%05[1]d\t%[1]d\t2026-01-01T00:00:00.000000Z\t0x000000000000001\t\\N\tapplication/octet-stream\tBlockBlob\tHot\t\\N\ttrue\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N\tavailable\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N'
+cmp stdout want-all.tsv
+
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous --exclude 'zz/**' --format jsonl --columns key,size,last_modified,blob_type
+cmp stdout want-hostile.jsonl
+
+# Filters.
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous --include 'z/*' --columns key,size --report narrowed.json
+cmp stdout want-z.tsv
+json narrowed.json invocation.narrowing invocation.source
+[expect:v0.4.0] stdout '\A"provider_lists_root"\n"az://replay/bkt"\n\z'
+# #621: an include with a literal prefix narrows an Azure listing, as on S3 and GCS.
+[expect:current] stdout '\A"narrowed"\n"az://replay/bkt/z/"\n\z'
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous --storage-class Hot --exclude 'zz/**' --include 'a?b' --columns key,storage_class
+stdout '\Akey\tstorage_class\na b\tHot\na-b\tHot\na\.b\tHot\n\z'
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous --exclude-regex '^zz/' --exclude-regex '^a' --max-size 9 --columns key
+stdout '\Akey\nB\nback\\\\slash\ncafé\n\z'
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous --modified-since 2026-03-01T00:00:00Z --columns key,last_modified --no-header
+stdout '\Aa/x\t2026-06-01T00:00:00\.000000Z\n\z'
+
+# Totals.
+exec swath du az://replay/bkt --endpoint-url $REPLAY --anonymous
+stdout '\Arow_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n'
+stdout '\ntotal\t0\t2512\t3126329\t0\t\\N\t2512\t2026-06-01T00:00:00\.000000Z\tsize\tname\tfalse\t\n\z'
+exec swath du az://replay/bkt --endpoint-url $REPLAY --anonymous -d 1 --format jsonl
+cmp stdout want-du-1.jsonl
+
+# The dataset, in parts of at most 1,000 rows.
+exec swath list az://replay/bkt --endpoint-url $REPLAY --anonymous -o ds --part-max-rows 1000 --report report.json
+! stdout .
+exists ds/manifest.json ds/run.json ds/cuts.txt
+! exists ds/error.json
+json ds/run.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n2512\n\z'
+dataset ds 'SELECT * FROM ds_schema'
+cmp stdout want-schema.tsv
+dataset ds 'SELECT column_name, column_type FROM (DESCRIBE ds)'
+cmp stdout want-types.tsv
+# Every column of every row; a key with a backslash as hex.
+dataset ds 'SELECT * REPLACE (CASE WHEN regexp_matches(key, ''[\t\n\\]'') THEN ''hex:'' || hex(key) ELSE key END AS key, epoch_us(last_modified) AS last_modified, epoch_us(created_at) AS created_at, epoch_us(storage_class_changed_at) AS storage_class_changed_at, epoch_us(accessed_at) AS accessed_at, epoch_us(immutability_policy_until) AS immutability_policy_until) FROM ds'
+cp want-rows-hostile.tsv want-rows.tsv
+seq want-rows.tsv 2500 'zz/%05[1]d\t%[1]d\t1767225600000000\t0x000000000000001\tNULL\tapplication/octet-stream\tBlockBlob\tHot\tNULL\ttrue\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL\tavailable\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL'
+cmp stdout want-rows.tsv
+
+json ds/manifest.json format format_version draft_revision schema_id key extensions.swath.version extensions.swath.source extensions.swath.scope extensions.swath.coverage.complete extensions.swath.coverage.stop_reason extensions.swath.coverage.unreadable extensions.swath.coverage.filters extensions.swath.coverage.exclusions extensions.swath.collected extensions.swath.committed_object_bytes
+cmp stdout want-manifest.txt
+json ds/manifest.json parts.0.rows parts.0.min_key_base64 parts.1.rows parts.2.rows parts.2.max_key_base64
+stdout '\A1000\n"Qg=="\n1000\n512\n"enovMDI1MDA="\n\z'
+! json ds/manifest.json parts.3
+json report.json outcome.class outcome.exit_code outcome.status outcome.complete output.rows_committed output.committed_object_bytes invocation.schema_id
+stdout '\A"ok"\n0\n"committed"\ntrue\n2512\n3126329\n"swath/azure-objects/v1"\n\z'
+
+exec swath show ds
+stdout -count=6 '\n'
+stdout '\Ads: complete\n'
+stdout '^  source    az://replay/bkt \(whole container\)$'
+stdout '^  contents  2,512 objects, 2\.98 MiB; keys "B" \.\. "zz/02500"$'
+stdout '^  coverage  nothing unreadable; no filters; no exclusions$'
+[expect:v0.4.0] stdout '^  storage   3 parts, [0-9.]+ KiB of Parquet \(SeekParquet format 0 draft 1, schema swath/azure-objects/v1\)$'
+# #620: swath show names the storage by its parts and schema; -v adds the format id.
+[expect:current] stdout '^  storage   3 parts, [0-9.]+ KiB of Parquet \(schema swath/azure-objects/v1\)$'
+
+# Totals from the dataset agree with the key list, and name the listing
+# they come from.
+exec swath du --from-dataset ds -d 1 --format jsonl
+cmpform stdout want-saved-du-1.jsonl
+
+-- hostile.tsv --
+# key	size	last_modified_us
+z/%F0%9F%98%80	13	1767225600000000
+a0	7	1767225600000000
+a/	0	1767225600000000
+B	1	1767312000000000
+a%20b	2	1767225600000000
+z/%EF%BD%9E	12	1767225600000000
+a-b	3	1767225600000000
+back%5Cslash	8	1767225600000000
+a.b	4	1767225600000000
+a/x	6	1780272000000000
+caf%C3%A9	9	1767225600000000
+z/%E6%97%A5%E6%9C%AC	14	1767225600000000
+-- want-hostile.tsv --
+key	size	last_modified	etag	md5	content_type	blob_type	storage_class	created_at	storage_class_inferred	storage_class_changed_at	archive_status	rehydrate_priority	accessed_at	content_encoding	server_encrypted	encryption_scope	customer_provided_key_sha256	lease_state	tag_count	metadata	tags	immutability_policy_until	immutability_policy_mode	legal_hold
+B	1	2026-01-02T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+a b	2	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+a-b	3	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+a.b	4	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+a/	0	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+a/x	6	2026-06-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+a0	7	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+back\\slash	8	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+café	9	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+z/日本	14	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+z/～	12	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+z/😀	13	2026-01-01T00:00:00.000000Z	0x000000000000001	\N	application/octet-stream	BlockBlob	Hot	\N	true	\N	\N	\N	\N	\N	\N	\N	\N	available	\N	\N	\N	\N	\N	\N
+-- want-hostile.jsonl --
+{"key":"B","size":1,"last_modified":"2026-01-02T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"a b","size":2,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"a-b","size":3,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"a.b","size":4,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"a/","size":0,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"a/x","size":6,"last_modified":"2026-06-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"a0","size":7,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"back\\slash","size":8,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"café","size":9,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"z/日本","size":14,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"z/～","size":12,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+{"key":"z/😀","size":13,"last_modified":"2026-01-01T00:00:00.000000Z","blob_type":"BlockBlob"}
+-- want-z.tsv --
+key	size
+z/日本	14
+z/～	12
+z/😀	13
+-- want-du-1.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":2512,"size":3126329,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2512,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"size":6,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"z/","objects":3,"size":39,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"zz/","objects":2500,"size":3126250,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2500,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- want-saved-du-1.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":2512,"size":3126329,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2512,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"az://replay/bkt","schema_id":"swath/azure-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"size":6,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"az://replay/bkt","schema_id":"swath/azure-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"prefix","depth":1,"prefix":"z/","objects":3,"size":39,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"az://replay/bkt","schema_id":"swath/azure-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"prefix","depth":1,"prefix":"zz/","objects":2500,"size":3126250,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2500,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"az://replay/bkt","schema_id":"swath/azure-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+-- want-schema.tsv --
+key	BYTE_ARRAY	REQUIRED	UTF8
+size	INT64	OPTIONAL	INT_64
+last_modified	INT64	OPTIONAL	TIMESTAMP_MICROS
+etag	BYTE_ARRAY	OPTIONAL	UTF8
+md5	BYTE_ARRAY	OPTIONAL	UTF8
+content_type	BYTE_ARRAY	OPTIONAL	UTF8
+blob_type	BYTE_ARRAY	OPTIONAL	UTF8
+storage_class	BYTE_ARRAY	OPTIONAL	UTF8
+created_at	INT64	OPTIONAL	TIMESTAMP_MICROS
+storage_class_inferred	BOOLEAN	OPTIONAL	NULL
+storage_class_changed_at	INT64	OPTIONAL	TIMESTAMP_MICROS
+archive_status	BYTE_ARRAY	OPTIONAL	UTF8
+rehydrate_priority	BYTE_ARRAY	OPTIONAL	UTF8
+accessed_at	INT64	OPTIONAL	TIMESTAMP_MICROS
+content_encoding	BYTE_ARRAY	OPTIONAL	UTF8
+server_encrypted	BOOLEAN	OPTIONAL	NULL
+encryption_scope	BYTE_ARRAY	OPTIONAL	UTF8
+customer_provided_key_sha256	BYTE_ARRAY	OPTIONAL	UTF8
+lease_state	BYTE_ARRAY	OPTIONAL	UTF8
+tag_count	INT64	OPTIONAL	INT_64
+metadata	BYTE_ARRAY	OPTIONAL	UTF8
+tags	BYTE_ARRAY	OPTIONAL	UTF8
+immutability_policy_until	INT64	OPTIONAL	TIMESTAMP_MICROS
+immutability_policy_mode	BYTE_ARRAY	OPTIONAL	UTF8
+legal_hold	BOOLEAN	OPTIONAL	NULL
+-- want-types.tsv --
+key	VARCHAR
+size	BIGINT
+last_modified	TIMESTAMP WITH TIME ZONE
+etag	VARCHAR
+md5	VARCHAR
+content_type	VARCHAR
+blob_type	VARCHAR
+storage_class	VARCHAR
+created_at	TIMESTAMP WITH TIME ZONE
+storage_class_inferred	BOOLEAN
+storage_class_changed_at	TIMESTAMP WITH TIME ZONE
+archive_status	VARCHAR
+rehydrate_priority	VARCHAR
+accessed_at	TIMESTAMP WITH TIME ZONE
+content_encoding	VARCHAR
+server_encrypted	BOOLEAN
+encryption_scope	VARCHAR
+customer_provided_key_sha256	VARCHAR
+lease_state	VARCHAR
+tag_count	BIGINT
+metadata	VARCHAR
+tags	VARCHAR
+immutability_policy_until	TIMESTAMP WITH TIME ZONE
+immutability_policy_mode	VARCHAR
+legal_hold	BOOLEAN
+-- want-rows-hostile.tsv --
+B	1	1767312000000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+a b	2	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+a-b	3	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+a.b	4	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+a/	0	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+a/x	6	1780272000000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+a0	7	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+hex:6261636B5C736C617368	8	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+café	9	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+z/日本	14	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+z/～	12	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+z/😀	13	1767225600000000	0x000000000000001	NULL	application/octet-stream	BlockBlob	Hot	NULL	true	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	available	NULL	NULL	NULL	NULL	NULL	NULL
+-- want-manifest.txt --
+"seekparquet"
+0
+1
+"swath/azure-objects/v1"
+{"column":"key","unique":true}
+1
+{"container":"bkt","kind":"azure","uri":"az://replay/bkt"}
+{"kind":"whole"}
+true
+"end_of_scope"
+0
+[]
+[]
+{"columns":[]}
+3126329

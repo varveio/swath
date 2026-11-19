@@ -1,0 +1,200 @@
+# A bucket served over the S3 API (ListObjectsV2) by swath-replay. The
+# listing must equal the key list exactly: every key once, in unsigned byte
+# order, whatever order the fixture gives them in. keys.tsv is hostile.tsv
+# (14 keys, 100 bytes, newest 2026-06-01) and 2,500 keys zz/00001..zz/02500
+# whose sizes are 1..2500 (3,126,250 bytes): 2,514 objects, 3,126,350 bytes.
+
+cp hostile.tsv keys.tsv
+seq keys.tsv 2500 'zz/%05[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt --protocols s3
+
+# The bare listing on a pipe: TSV, every column, every key, escaped.
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous
+cp want-hostile.tsv want-all.tsv
+seq want-all.tsv 2500 'zz/%05[1]d\t%[1]d\t2026-01-01T00:00:00.000000Z\t\\N\t\\N\t\\N\t\\N\t\\N\t\\N'
+cmp stdout want-all.tsv
+
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --exclude 'zz/**' --format jsonl
+cmp stdout want-hostile.jsonl
+
+# Filters and columns. An include with a literal prefix narrows the listing.
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --include 'z/*' --columns key,size --report narrowed.json
+cmp stdout want-z.tsv
+json narrowed.json invocation.narrowing invocation.source
+stdout '\A"narrowed"\n"s3://bkt/z/"\n\z'
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --storage-class GLACIER --columns key,storage_class
+stdout '\Akey\tstorage_class\nB\tGLACIER\n\z'
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --modified-since 2026-03-01T00:00:00Z --columns key,last_modified --no-header
+stdout '\Aa/x\t2026-06-01T00:00:00\.000000Z\n\z'
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous --exclude 'zz/**' --min-size 10 --max-size 13 --columns key
+stdout '\Akey\nnew\\nline\ntab\\there\nz/～\nz/😀\n\z'
+
+# Totals, from the listing and from the key list.
+exec swath du s3://bkt --endpoint-url $REPLAY --anonymous
+stdout '\Arow_type\tdepth\tobjects\tsize\tsize_missing\tallocated_bytes\tallocated_bytes_missing\tmax_last_modified\tprimary\tsort\tlinks_once\tprefix\n'
+stdout '\ntotal\t0\t2514\t3126350\t0\t\\N\t2514\t2026-06-01T00:00:00\.000000Z\tsize\tname\tfalse\t\n\z'
+exec swath du s3://bkt --endpoint-url $REPLAY --anonymous -d 1 --format jsonl
+cmp stdout want-du-1.jsonl
+
+# The dataset, in parts of at most 1,000 rows.
+exec swath list s3://bkt --endpoint-url $REPLAY --anonymous -o ds --part-max-rows 1000 --report report.json
+! stdout .
+exists ds/manifest.json ds/run.json ds/cuts.txt
+! exists ds/error.json
+json ds/run.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n2514\n\z'
+dataset ds 'SELECT * FROM ds_schema'
+cmp stdout want-schema.tsv
+dataset ds 'SELECT column_name, column_type FROM (DESCRIBE ds)'
+cmp stdout want-types.tsv
+# Every column of every row; a key with a tab, line feed or backslash as hex.
+dataset ds 'SELECT * REPLACE (CASE WHEN regexp_matches(key, ''[\t\n\\]'') THEN ''hex:'' || hex(key) ELSE key END AS key, epoch_us(last_modified) AS last_modified) FROM ds'
+cp want-rows-hostile.tsv want-rows.tsv
+seq want-rows.tsv 2500 'zz/%05[1]d\t%[1]d\t1767225600000000\tNULL\tNULL\tNULL\tNULL\tNULL\tNULL'
+cmp stdout want-rows.tsv
+
+json ds/manifest.json format format_version draft_revision schema_id key extensions.swath.version extensions.swath.source extensions.swath.scope extensions.swath.coverage.complete extensions.swath.coverage.stop_reason extensions.swath.coverage.unreadable extensions.swath.coverage.filters extensions.swath.coverage.exclusions extensions.swath.collected extensions.swath.committed_object_bytes
+cmp stdout want-manifest.txt
+json ds/manifest.json parts.0.path parts.0.rows parts.0.min_key_base64 parts.1.path parts.1.rows parts.2.path parts.2.rows parts.2.max_key_base64
+cmp stdout want-parts.txt
+! json ds/manifest.json parts.3
+json report.json outcome.class outcome.exit_code outcome.status outcome.complete output.rows_committed output.committed_object_bytes invocation.schema_id
+stdout '\A"ok"\n0\n"committed"\ntrue\n2514\n3126350\n"swath/s3-objects/v1"\n\z'
+
+exec swath show ds
+stdout -count=6 '\n'
+stdout '\Ads: complete\n'
+stdout '^  source    s3://bkt \(whole bucket\)$'
+stdout '^  contents  2,514 objects, 2\.98 MiB; keys "B" \.\. "zz/02500"$'
+stdout '^  coverage  nothing unreadable; no filters; no exclusions$'
+[expect:v0.4.0] stdout '^  storage   3 parts, [0-9.]+ KiB of Parquet \(SeekParquet format 0 draft 1, schema swath/s3-objects/v1\)$'
+# #620: swath show names the storage by its parts and schema; -v adds the format id.
+[expect:current] stdout '^  storage   3 parts, [0-9.]+ KiB of Parquet \(schema swath/s3-objects/v1\)$'
+
+# Totals from the dataset agree with the key list, and name the listing
+# they come from.
+exec swath du --from-dataset ds -d 1 --format jsonl
+cmpform stdout want-saved-du-1.jsonl
+
+-- hostile.tsv --
+# key	size	last_modified_us	etag	storage_class	owner_id	owner_display_name	checksum_algorithm	checksum_type
+z/%F0%9F%98%80	13	1767225600000000	e13	STANDARD
+tab%09here	11	1767225600000000
+a0	7	1767225600000000
+a/	0	1767225600000000
+B	1	1767312000000000	e1	GLACIER	\N	\N	CRC64NVME	FULL_OBJECT
+a%20b	2	1767225600000000
+z/%EF%BD%9E	12	1767225600000000
+a-b	3	1767225600000000
+back%5Cslash	8	1767225600000000
+a.b	4	1767225600000000
+a/x	6	1780272000000000
+caf%C3%A9	9	1767225600000000
+new%0Aline	10	1767225600000000
+z/%E6%97%A5%E6%9C%AC	14	1767225600000000
+-- want-hostile.tsv --
+key	size	last_modified	etag	storage_class	owner_id	owner_display_name	checksum_algorithm	checksum_type
+B	1	2026-01-02T00:00:00.000000Z	e1	GLACIER	\N	\N	CRC64NVME	FULL_OBJECT
+a b	2	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+a-b	3	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+a.b	4	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+a/	0	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+a/x	6	2026-06-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+a0	7	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+back\\slash	8	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+café	9	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+new\nline	10	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+tab\there	11	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+z/日本	14	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+z/～	12	2026-01-01T00:00:00.000000Z	\N	\N	\N	\N	\N	\N
+z/😀	13	2026-01-01T00:00:00.000000Z	e13	STANDARD	\N	\N	\N	\N
+-- want-hostile.jsonl --
+{"key":"B","size":1,"last_modified":"2026-01-02T00:00:00.000000Z","etag":"e1","storage_class":"GLACIER","owner_id":null,"owner_display_name":null,"checksum_algorithm":"CRC64NVME","checksum_type":"FULL_OBJECT"}
+{"key":"a b","size":2,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"a-b","size":3,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"a.b","size":4,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"a/","size":0,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"a/x","size":6,"last_modified":"2026-06-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"a0","size":7,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"back\\slash","size":8,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"café","size":9,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"new\nline","size":10,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"tab\there","size":11,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"z/日本","size":14,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"z/～","size":12,"last_modified":"2026-01-01T00:00:00.000000Z","etag":null,"storage_class":null,"owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+{"key":"z/😀","size":13,"last_modified":"2026-01-01T00:00:00.000000Z","etag":"e13","storage_class":"STANDARD","owner_id":null,"owner_display_name":null,"checksum_algorithm":null,"checksum_type":null}
+-- want-z.tsv --
+key	size
+z/日本	14
+z/～	12
+z/😀	13
+-- want-du-1.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":2514,"size":3126350,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2514,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"size":6,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"z/","objects":3,"size":39,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"zz/","objects":2500,"size":3126250,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2500,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- want-saved-du-1.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":2514,"size":3126350,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2514,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"s3://bkt","schema_id":"swath/s3-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":2,"size":6,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"s3://bkt","schema_id":"swath/s3-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"prefix","depth":1,"prefix":"z/","objects":3,"size":39,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"s3://bkt","schema_id":"swath/s3-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+{"row_type":"prefix","depth":1,"prefix":"zz/","objects":2500,"size":3126250,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2500,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"s3://bkt","schema_id":"swath/s3-objects/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+-- want-schema.tsv --
+key	BYTE_ARRAY	REQUIRED	UTF8
+size	INT64	OPTIONAL	INT_64
+last_modified	INT64	OPTIONAL	TIMESTAMP_MICROS
+etag	BYTE_ARRAY	OPTIONAL	UTF8
+storage_class	BYTE_ARRAY	OPTIONAL	UTF8
+owner_id	BYTE_ARRAY	OPTIONAL	UTF8
+owner_display_name	BYTE_ARRAY	OPTIONAL	UTF8
+checksum_algorithm	BYTE_ARRAY	OPTIONAL	UTF8
+checksum_type	BYTE_ARRAY	OPTIONAL	UTF8
+-- want-types.tsv --
+key	VARCHAR
+size	BIGINT
+last_modified	TIMESTAMP WITH TIME ZONE
+etag	VARCHAR
+storage_class	VARCHAR
+owner_id	VARCHAR
+owner_display_name	VARCHAR
+checksum_algorithm	VARCHAR
+checksum_type	VARCHAR
+-- want-rows-hostile.tsv --
+B	1	1767312000000000	e1	GLACIER	NULL	NULL	CRC64NVME	FULL_OBJECT
+a b	2	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+a-b	3	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+a.b	4	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+a/	0	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+a/x	6	1780272000000000	NULL	NULL	NULL	NULL	NULL	NULL
+a0	7	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+hex:6261636B5C736C617368	8	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+café	9	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+hex:6E65770A6C696E65	10	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+hex:7461620968657265	11	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+z/日本	14	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+z/～	12	1767225600000000	NULL	NULL	NULL	NULL	NULL	NULL
+z/😀	13	1767225600000000	e13	STANDARD	NULL	NULL	NULL	NULL
+-- want-manifest.txt --
+"seekparquet"
+0
+1
+"swath/s3-objects/v1"
+{"column":"key","unique":true}
+1
+{"container":"bkt","kind":"s3","uri":"s3://bkt"}
+{"kind":"whole"}
+true
+"end_of_scope"
+0
+[]
+[]
+{"columns":[]}
+3126350
+-- want-parts.txt --
+"data/part-00000.parquet"
+1000
+"Qg=="
+"data/part-00001.parquet"
+1000
+"data/part-00002.parquet"
+514
+"enovMDI1MDA="

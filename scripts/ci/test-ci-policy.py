@@ -11,11 +11,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text()
+ACCEPTANCE_WORKFLOW = (ROOT / '.github/workflows/acceptance.yml').read_text()
 
 
-def run_step(name):
+def run_step(name, workflow=WORKFLOW):
     # Extract literal shell without a YAML dependency on the runner.
-    step = WORKFLOW.split('      - name: ' + name + '\n', 1)[1]
+    step = workflow.split('      - name: ' + name + '\n', 1)[1]
     body = step.split('        run: |\n', 1)[1]
     lines = []
     for line in body.splitlines():
@@ -143,6 +144,10 @@ class PolicyTests(unittest.TestCase):
             (['config/osv/osv-scanner.toml'], set()),
             (['scripts/provider-conformance/campaign.py'], set()),
             (['scripts/benchmarks/replay/run_pair.py'], set()),
+            # The acceptance suite is a module of its own that no Go tier tests: acceptance()
+            # selects its legs, and its go.mod is not a new module of the repository.
+            (['acceptance/go.mod', 'acceptance/testdata/local.txtar'], set()),
+            (['acceptance/scenarios_test.go'], set()),
         ]
         for paths, expected in cases:
             with self.subTest(paths=paths):
@@ -165,6 +170,147 @@ class PolicyTests(unittest.TestCase):
                 self.assertTrue(all(got.values()), (paths, event))
         self.assertTrue(policy.select(['internal/foo.go'], 'pull_request',
                                       build_tags=True)['platforms'])
+
+    def test_acceptance_legs(self):
+        # The path detect() takes, selection() with the repository's own go.mod files, so a change
+        # to a module main requires selects main, and the candidate, through the closure.
+        manifests = {key: (ROOT / path).read_text() for key, path in policy.MODULES.items()}
+        # (paths, event, selection() keywords) -> (candidate legs, baseline legs)
+        cases = [
+            (['internal/x.go'], 'pull_request', {}, 'linux', 'off'),
+            (['reader/read.go'], 'pull_request', {}, 'linux', 'off'),
+            (['internal/journal/lock.go'], 'pull_request', {}, 'all', 'off'),
+            (['go.sum'], 'pull_request', {}, 'all', 'off'),
+            # The root go.mod requires objfile: main and the candidate follow.
+            (['objfile/object.go'], 'pull_request', {}, 'linux', 'off'),
+            (['docs/start-here.md'], 'pull_request', {}, 'off', 'off'),
+            (['README.md'], 'pull_request', {}, 'off', 'off'),
+            (['acceptance/testdata/local.txtar'], 'pull_request', {}, 'all', 'all'),
+            (['acceptance/README.md', 'internal/x.go'], 'pull_request', {}, 'all', 'all'),
+            (['.github/workflows/acceptance.yml'], 'pull_request', {}, 'all', 'all'),
+            (['.github/workflows/ci.yml'], 'pull_request', {}, 'all', 'off'),
+            (['scripts/ci/go-ci-policy.py'], 'pull_request', {}, 'all', 'off'),
+            (['README.md'], 'pull_request', dict(labels=['ci:full']), 'all', 'off'),
+            (['README.md'], 'push', {}, 'all', 'off'),
+            (['internal/x.go'], 'push', {}, 'all', 'off'),
+            (['acceptance/testdata/local.txtar'], 'push', {}, 'all', 'all'),
+            ([], 'workflow_dispatch', dict(unknown=True), 'all', 'all'),
+            ([], 'push', dict(unknown=True), 'all', 'all'),
+        ]
+        for paths, event, kwargs, candidate, baseline in cases:
+            with self.subTest(paths=paths, event=event, kwargs=kwargs):
+                kwargs = dict(kwargs)
+                got = policy.selection(paths, event, kwargs.pop('labels', []), manifests, **kwargs)
+                self.assertEqual((got['acceptance'], got['acceptance_baseline']), (candidate, baseline))
+
+    def test_acceptance_workflow_legs(self):
+        # The plan step of acceptance.yml: the legs each `platforms` value expands to.
+        runners = {'linux-amd64': 'ubuntu-latest', 'linux-arm64': 'ubuntu-24.04-arm',
+                   'darwin-arm64': 'macos-latest', 'darwin-amd64': 'macos-15-intel',
+                   'windows-amd64': 'windows-latest'}
+        # A call passes both inputs; a dispatch passes none and runs the baseline on every target.
+        dispatch = ACCEPTANCE_WORKFLOW.split('\n  workflow_dispatch:', 1)[1].split('\n')
+        self.assertEqual(dispatch[0], '')
+        self.assertFalse(dispatch[1].startswith('    '), 'a dispatch takes no inputs')
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / 'output'
+            for feeder, platforms, targets in [('candidate', 'all', list(runners)),
+                                               ('baseline', 'all', list(runners)),
+                                               ('candidate', 'linux', ['linux-amd64']),
+                                               ('candidate', 'off', ['off']),
+                                               ('baseline', 'off', ['off']),
+                                               ('', '', list(runners))]:
+                output.write_text('')
+                subprocess.run(['bash', '-c', run_step('Acceptance legs', ACCEPTANCE_WORKFLOW)],
+                               env=dict(os.environ, FEEDER=feeder, PLATFORMS=platforms,
+                                        GITHUB_OUTPUT=str(output)),
+                               check=True, capture_output=True)
+                matrix = json.loads(output.read_text().split('=', 1)[1])
+                self.assertEqual([row['target'] for row in matrix], targets)
+                for row in matrix:
+                    if row['target'] == 'off':
+                        self.assertEqual(row['runner'], 'ubuntu-latest')
+                        continue
+                    self.assertEqual(row['runner'], runners[row['target']])
+                    self.assertRegex(row['duckdb_sha256'], r'^[0-9a-f]{64}$')
+                    self.assertTrue(row['duckdb'].startswith('duckdb-cli-'))
+            for platforms in ['', 'windows', 'true']:
+                output.write_text('')
+                run = subprocess.run(['bash', '-c', run_step('Acceptance legs', ACCEPTANCE_WORKFLOW)],
+                                     env=dict(os.environ, FEEDER='candidate', PLATFORMS=platforms,
+                                              GITHUB_OUTPUT=str(output)),
+                                     capture_output=True)
+                self.assertNotEqual(run.returncode, 0, platforms)
+                self.assertEqual(output.read_text(), '')
+
+    def test_acceptance_tripwire(self):
+        # The tripwire step against a real history: base, a pull request on top, a label.
+        step = run_step('Acceptance files unchanged, or labeled acceptance-change')
+        with tempfile.TemporaryDirectory() as temp:
+            cwd = Path(temp)
+
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=temp, text=True).strip()
+
+            git('init', '-q', '-b', 'main')
+            git('config', 'user.email', 'ci@example.invalid')
+            git('config', 'user.name', 'CI')
+            (cwd / 'acceptance/testdata').mkdir(parents=True)
+            (cwd / 'acceptance/testdata/local.txtar').write_text('exec swath --version\n')
+            (cwd / 'acceptance/README.md').write_text('# Acceptance\n')
+            (cwd / 'internal').mkdir()
+            (cwd / 'internal/x.go').write_text('package x\n')
+            git('add', '.')
+            git('commit', '-qm', 'base')
+            base = git('rev-parse', 'HEAD')
+
+            def pull_request(change, labeled=False, bad_base=False):
+                git('checkout', '-q', '-B', 'pr', base)
+                change()
+                git('add', '-A')
+                git('commit', '-qm', 'pr', '--allow-empty')
+                # main moves on after the branch point and edits the suite: not the PR's change.
+                git('checkout', '-q', 'main')
+                (cwd / 'acceptance/README.md').write_text('# Acceptance, edited on main\n')
+                git('commit', '-qam', 'main moves')
+                main = git('rev-parse', 'HEAD')
+                head = git('rev-parse', 'pr')
+                git('reset', '-q', '--hard', base)
+                if bad_base:
+                    main = 'f' * 40  # a revision the clone does not have
+                return subprocess.run(['bash', '-c', step], cwd=temp, capture_output=True, text=True,
+                                      env=dict(os.environ, BASE=main, HEAD=head,
+                                               LABELED='true' if labeled else 'false')).returncode
+
+            scenario = cwd / 'acceptance/testdata/local.txtar'
+            refused = {
+                'modify': lambda: scenario.write_text('exec swath --help\n'),
+                'delete': scenario.unlink,
+                'rename': lambda: scenario.rename(scenario.with_name('l.txtar')),
+                'mode': lambda: scenario.chmod(0o755),
+                # An addition can narrow what runs as surely as an edit.
+                'add scenario': lambda: scenario.with_name('s3-replay.txtar').write_text('exec swath-replay\n'),
+                'add TestMain': lambda: (cwd / 'acceptance/main_test.go').write_text(
+                    'package acceptance\n\nimport "testing"\n\nfunc TestMain(m *testing.M) {}\n'),
+                'add vendor': lambda: ((cwd / 'acceptance/vendor').mkdir(),
+                                       (cwd / 'acceptance/vendor/modules.txt').write_text('# x\n')),
+            }
+            passed = {
+                'product': lambda: (cwd / 'internal/x.go').write_text('package y\n'),
+                'nothing': lambda: None,
+            }
+            for name, change in refused.items():
+                with self.subTest(change=name):
+                    self.assertNotEqual(pull_request(change), 0)
+                    self.assertEqual(pull_request(change, labeled=True), 0)
+            for name, change in passed.items():
+                with self.subTest(change=name):
+                    self.assertEqual(pull_request(change), 0)
+            # A diff that cannot run fails closed, label or not, whatever the pull request changes.
+            for name, change in passed.items():
+                for labeled in (False, True):
+                    with self.subTest(change=name, bad_base=True, labeled=labeled):
+                        self.assertNotEqual(pull_request(change, labeled=labeled, bad_base=True), 0)
 
     def test_light_docs_are_the_pages_docs_path_refuses(self):
         # The docs tier is skipped for LIGHT_DOCS, so no Go test may read them: docs.Unread
@@ -262,6 +408,16 @@ class PolicyTests(unittest.TestCase):
             result, rows = run()
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(rows['objfile'], 'true')
+            # The acceptance suite's module is known: it selects its legs, not a Go tier.
+            suite_base = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=temp, text=True).strip()
+            (cwd / 'acceptance').mkdir()
+            (cwd / 'acceptance/go.mod').write_text('module varve.io/swath-acceptance\n')
+            subprocess.run(['git', 'add', 'acceptance/go.mod'], cwd=temp, check=True)
+            subprocess.run(['git', 'commit', '-qm', 'acceptance suite'], cwd=temp, check=True)
+            result, rows = run(BASE=suite_base)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual({k for k, v in rows.items() if v == 'true'}, set())
+            self.assertEqual((rows['acceptance'], rows['acceptance_baseline']), ('all', 'all'))
             # A new nested module cannot silently miss every existing job.
             (cwd / 'internal/new').mkdir()
             (cwd / 'internal/new/go.mod').write_text('module example/new\n')
@@ -350,6 +506,8 @@ exit 2
     def test_full_gate_refuses_partial_or_failed_validation(self):
         flags = ('full', 'go', 'reader', 'objfile', 'fixtures', 'images', 'platforms', 'docs')
         selection = dict.fromkeys(flags, 'true')
+        selection['acceptance'] = 'all'
+        selection['acceptance_baseline'] = 'off'
         selection['go_shards'] = subprocess.check_output(
             [str(ROOT / 'scripts/ci/go-race-shards.sh'), '--matrix'], text=True)
         windows = json.loads(subprocess.check_output(
@@ -370,6 +528,11 @@ exit 2
             self.assertNotEqual(check(selection, result), 0)
         for omitted in flags:
             self.assertNotEqual(check(dict(selection, **{omitted: 'false'})), 0, omitted)
+        # The candidate on every target is part of full validation; the baseline runs only when
+        # the suite changes, so either value qualifies.
+        for partial in ['linux', 'off']:
+            self.assertNotEqual(check(dict(selection, acceptance=partial)), 0, partial)
+        self.assertEqual(check(dict(selection, acceptance_baseline='all')), 0)
         unsplit_windows = macos + [arm, dict(os='windows-latest', runner='windows-latest', scope='full')]
         unsplit_macos = [dict(os='macos-latest', runner='macos-latest', scope='full'), arm] + windows
         for bad_matrix in [macos + [arm], xos[:-1], xos[1:], unsplit_windows, unsplit_macos,
@@ -378,12 +541,17 @@ exit 2
             self.assertNotEqual(check(dict(selection, go_xos=json.dumps(bad_matrix))), 0)
         self.assertNotEqual(check(dict(selection, go_shards='[]')), 0)
 
-        # A new Go job cannot be omitted from either aggregate unnoticed.
-        go_jobs = set(re.findall(r'^  (go-[a-z0-9_-]+):$', WORKFLOW, re.M)) - {'go-full-gate'}
+        # A new Go or acceptance job cannot be omitted from either aggregate unnoticed (the
+        # tripwire is for pull requests, so ci-gate alone needs it).
+        go_jobs = (set(re.findall(r'^  ((?:go|acceptance)-[a-z0-9_-]+):$', WORKFLOW, re.M))
+                   - {'go-full-gate', 'acceptance-tripwire'})
+        self.assertTrue({'acceptance-baseline', 'acceptance-candidate'} <= go_jobs)
         for gate in ['ci-gate', 'go-full-gate']:
             section = WORKFLOW.split('  ' + gate + ':\n', 1)[1]
             needs = set(re.search(r'needs: \[(.*?)\]', section)[1].split(', '))
             self.assertTrue(go_jobs <= needs, (gate, go_jobs - needs))
+            if gate == 'ci-gate':
+                self.assertIn('acceptance-tripwire', needs)
 
         # Every job that sets up Go ends by trimming its build cache and saving it on main: a job
         # without that step would never save one, and its runs on main would build cold.

@@ -1,0 +1,63 @@
+{
+  "format": "seekparquet",
+  "format_version": 0,
+  "draft_revision": 1,
+  "schema_id": "swath/s3-objects/v1",
+  "parts": [
+    {
+      "path": "data/part-00000.parquet",
+      "rows": 500,
+      "bytes": 2649,
+      "min_key_base64": "aW1nLzAwMDEucG5n",
+      "max_key_base64": "aW1nLzA1MDAucG5n",
+      "sha256": "de2a6f27d37faeeb7bcb91cd4517d2e812b43188d35a08c8703d134e16b86f93"
+    },
+    {
+      "path": "data/part-00001.parquet",
+      "rows": 500,
+      "bytes": 2833,
+      "min_key_base64": "aW1nLzA1MDEucG5n",
+      "max_key_base64": "bG9ncy8wNDAwLmd6",
+      "sha256": "2baa92093c1ccd679c90fa28b2b07ef27a6ef239792d6df157aa4ea160af6980"
+    },
+    {
+      "path": "data/part-00002.parquet",
+      "rows": 200,
+      "bytes": 2540,
+      "min_key_base64": "bG9ncy8wNDAxLmd6",
+      "max_key_base64": "bG9ncy8wNjAwLmd6",
+      "sha256": "02a67a4ddb1a9bca89ef3f86746d62b98a78a0e1c81a32301a06b0d772493a55"
+    }
+  ],
+  "extensions": {
+    "swath": {
+      "version": 1,
+      "published_at": "2026-11-19T10:40:23.509660Z",
+      "source": {
+        "kind": "s3",
+        "uri": "s3://bkt",
+        "container": "bkt"
+      },
+      "scope": {
+        "kind": "whole"
+      },
+      "coverage": {
+        "complete": true,
+        "stop_reason": "end_of_scope",
+        "unreadable": 0,
+        "exclusions": [],
+        "filters": [],
+        "listing_started_at": "2026-11-19T10:40:23.477367Z",
+        "listing_finished_at": "2026-11-19T10:40:23.505246Z"
+      },
+      "collected": {
+        "columns": []
+      },
+      "committed_object_bytes": 360600
+    }
+  },
+  "key": {
+    "column": "key",
+    "unique": true
+  }
+}

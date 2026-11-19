@@ -75,6 +75,24 @@ The contributor reference is
 - Docker is available for MinIO and replay checks.
 - Use DuckDB or the repository verifier for Parquet output.
 
+## The acceptance suite
+
+[`acceptance/`](acceptance/README.md) is the owner's record of swath's external behavior: scenarios
+that run the built binaries as a user does, on every platform, against v0.4.0 and the commit
+([where it runs](docs/internals/testing.md#acceptance-suite)). It is not a builder's test suite.
+
+- Builders do not edit `acceptance/`. A change there, a new scenario included, needs the owner's
+  explicit say, and the pull request lists each changed scenario with the reason for its change.
+- A failing scenario is fixed in the product, or reported to the owner as an intended behavior
+  change. Never edit a scenario on your own judgment to make it pass.
+- The same holds outside `acceptance/` for whatever decides what the suite runs and what counts as
+  its passing: what `.github/workflows/acceptance.yml` runs, the acceptance jobs and their gates in
+  `.github/workflows/ci.yml`, and the acceptance selection in `scripts/ci/go-ci-policy.py`. A change
+  that narrows the scenarios, targets or events it runs on, or what its result decides, needs the
+  owner's explicit say; no label check enforces this.
+- Never apply the label `acceptance-change`: the owner applies it. CI fails a pull request that
+  adds, modifies, renames or deletes any file under `acceptance/` without it.
+
 ## The Go code
 
 - The module `github.com/varveio/swath` is the repository root: the command in `cmd/swath`,
