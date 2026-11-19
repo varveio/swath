@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/varveio/swath/reader/listing"
 )
@@ -99,5 +101,63 @@ func TestWalkCancelled(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) || calls != 1 || sum.Unread != 1 || sum.Evidence.Unlocated != nil {
 		t.Fatalf("err %v after %d batches, %+v", err, calls, sum)
+	}
+}
+
+// stalling is a store whose walk hands over one valid batch, then, if
+// bad, a batch of an object without a size, and keeps one worker
+// running until finish is closed.
+type stalling struct {
+	failing
+	bad    bool
+	finish <-chan struct{}
+}
+
+func (s stalling) Walk(ctx context.Context, w Walk, sink Sink) error {
+	size := int64(1)
+	err := sink.Entries(ctx, []listing.Entry{{Key: fmt.Appendf(nil, "%sa", w.Prefix), Kind: listing.KindObject, Size: &size}})
+	if err == nil && s.bad {
+		err = sink.Entries(ctx, []listing.Entry{{Key: fmt.Appendf(nil, "%sb", w.Prefix), Kind: listing.KindObject}})
+	}
+	<-s.finish
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// TestWalkDeadlineAfterInvalidPage (#666): a walk that refused a page
+// returns ErrInvalidPage, not the context's error, when the context's
+// deadline passes before its workers finish; with no page refused it
+// returns the deadline's error. The first batch is emitted either way.
+// The deadline runs on synctest's clock, which reaches it only once the
+// walk waits on its last worker.
+func TestWalkDeadlineAfterInvalidPage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bad  bool
+		want error
+	}{
+		{"invalid page", true, listing.ErrInvalidPage},
+		{"no invalid page", false, context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+				defer cancel()
+				src := &Source{store: stalling{bad: tc.bad, finish: ctx.Done()}}
+				emitted := 0
+				sum, err := src.Walk(ctx, listing.WalkRequest{Prefix: []byte("p/")}, func(b listing.WalkBatch) error {
+					emitted += len(b.Entries)
+					return nil
+				})
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					t.Fatalf("the walk returned before its deadline: %v", ctx.Err())
+				}
+				if !errors.Is(err, tc.want) || emitted != 1 || sum.Entries != 1 || sum.Complete {
+					t.Fatalf("err %v, %d entries emitted, %+v", err, emitted, sum)
+				}
+			})
+		})
 	}
 }

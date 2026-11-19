@@ -34,13 +34,15 @@ func (s *Source) Walk(ctx context.Context, req listing.WalkRequest, emit func(li
 	finished := time.Now()
 
 	res := listing.WalkSummary{Entries: w.entries, Unread: w.unread, Evidence: evidence(started, finished, false)}
+	// A page the walk refused comes before ctx's end, which cannot cause
+	// one: checkEntries reads only the entries the store handed over.
 	switch {
 	case w.emitErr != nil:
 		return res, w.emitErr
-	case ctx.Err() != nil:
-		return res, ctx.Err()
 	case w.invalid != nil:
 		return res, objfile.RedactError(w.invalid) // it quotes the store's keys
+	case ctx.Err() != nil:
+		return res, ctx.Err()
 	case err != nil:
 		return res, failure(ctx, err)
 	}

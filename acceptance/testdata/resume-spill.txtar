@@ -1,0 +1,93 @@
+# A resume reads back what the stopped run kept in its durable spill files
+# instead of listing it again (docs/resume-and-refresh.md, "What a resume
+# keeps and lists again"), and still gives the parts, byte for byte, of a run
+# never stopped. The bucket holds 200,000 keys k/000001..k/200000 whose sizes
+# are 1..200000 (20,000,100,000 bytes). Parts close at 2,000 rows, never by
+# time.
+#
+# The run cannot finish before it is stopped at 5 s, whatever the client: the
+# server answers at most 8 requests at once (--max-concurrent-requests 8, its
+# least), a page or a structure probe returns at most 1,000 keys in no less
+# than 250 ms, and a pivot probe at most one, so the 200,000 keys take at
+# least 200 / 8 x 250 ms = 6.25 s (about 10 s measured with 8 workers). Ahead
+# of the output, ranges spill past the 128 KiB sort buffer, and the first one
+# to finish listing seals its spill file at about 1.3 s (1.25 to 1.5 s
+# measured on 0.4.0 and the current build; 25 to 29 sealed by 5 s), well
+# before the stop.
+#
+# The resume's report is the only witness of the read-back: the replay
+# server's log cannot say which spilled ranges were read back rather than
+# listed again, since a page carries keys past its range's end and a request
+# with a continuation token does not show where it points. The server still
+# witnesses that the resume lists after the last saved key, as in
+# deadline-resume (saved.sql, witness.sql).
+
+seq keys.tsv 200000 'k/%06[1]d\t%[1]d\t1767225600000000'
+replay --fixture keys.tsv --bucket bkt
+env FAST=$REPLAY
+replay --fixture keys.tsv --bucket bkt --inject-latency worker_page=250ms,pivot_probe=50ms,structure_probe=250ms --max-concurrent-requests 8 --slow-request-log-ms 0
+
+# The run that is never stopped, against a server without delays.
+exec swath list s3://bkt --endpoint-url $FAST --anonymous -j 8 --part-interval 0 --part-max-rows 2000 --sort-buffer 128KiB -o whole
+json whole/manifest.json parts.99.rows extensions.swath.committed_object_bytes
+stdout '\A2000\n20000100000\n\z'
+! json whole/manifest.json parts.100
+
+# The stopped run: stopped at the deadline (exit 124), with parts saved and
+# spill files sealed.
+exits 124 swath list s3://bkt --endpoint-url $REPLAY --anonymous -j 8 --part-interval 0 --part-max-rows 2000 --sort-buffer 128KiB -o cut --max-duration 5s --report stopped.json
+json stopped.json outcome.class output.parts_written diagnostics.resources.spill.durable.sealed_durable
+stdout '\A"deadline"\n[1-9][0-9]*\n[1-9][0-9]*\n\z'
+replaylog $REPLAY stopped.log
+grep '^replay slow request shape=WORKER_PAGE ms=[0-9.]+ prefix=- delimiter=- start_after=- continuation=none max_keys=1000 entries=1000 truncated=true$' stopped.log
+
+# The last key of the parts saved before the resume, read from their files.
+stdin saved.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''cut'''
+stdout '\Ak/[0-9]{6}\r?\n\z'
+
+# The resume reads sealed spill back (rows it did not list), lists the rest
+# after the last saved key, and commits all 200,000 rows.
+exec swath resume cut --max-duration 0 --report resumed.json
+replaylog $REPLAY cut-resumed.log
+grep '^replay slow request shape=WORKER_PAGE ' cut-resumed.log
+stdin witness.sql
+exec duckdb -no-init -batch -bail -list -noheader -cmd 'SET VARIABLE run = ''cut'''
+stdout '\Ak/[0-9]{6}\|[1-9][0-9]*\r?\n\z'
+json resumed.json outcome.class outcome.exit_code outcome.complete output.rows_committed
+stdout '\A"ok"\n0\ntrue\n200000\n\z'
+json resumed.json diagnostics.resources.spill.durable.resume.replayed_certificates diagnostics.resources.spill.durable.resume.replayed_rows
+stdout '\A[1-9][0-9]*\n[1-9][0-9]*\n\z'
+
+# The same parts as the run that was never stopped, and every row.
+json whole/manifest.json parts
+cp stdout whole-parts.json
+json cut/manifest.json parts
+cmp stdout whole-parts.json
+dataset cut 'SELECT key, size, epoch_us(last_modified) FROM ds'
+seq want-rows.tsv 200000 'k/%06[1]d\t%[1]d\t1767225600000000'
+cmp stdout want-rows.tsv
+-- saved.sql --
+-- The last key of the parts the stopped run left in RUN/data/ (a part is
+-- published there only once the journal has recorded it), kept in
+-- RUN-saved.parquet for witness.sql, and printed.
+COPY (SELECT max(key) AS key FROM read_parquet(getvariable('run') || '/data/*.parquet'))
+  TO (getvariable('run') || '-saved.parquet') (FORMAT parquet);
+FROM read_parquet(getvariable('run') || '-saved.parquet');
+-- witness.sql --
+-- The requests in RUN-resumed.log without a continuation token, whatever
+-- their shape, must not start below the last key saved before the resume
+-- (RUN-saved.parquet): the lowest key such a request can return is the
+-- greater of its prefix and its start-after ("-": none). A request with a
+-- token is left out: the log does not say where its token points. Prints the
+-- saved key and how many requests were checked.
+CREATE TEMP TABLE requests AS
+  SELECT line, greatest(
+      coalesce(nullif(regexp_extract(line, ' prefix=(\S*) ', 1), '-'), ''),
+      coalesce(nullif(regexp_extract(line, ' start_after=(\S*) ', 1), '-'), '')) AS lowest
+  FROM (SELECT unnest(string_split(content, chr(10))) AS line FROM read_text(getvariable('run') || '-resumed.log'))
+  WHERE line LIKE 'replay slow request % continuation=none %';
+CREATE TEMP TABLE saved AS FROM read_parquet(getvariable('run') || '-saved.parquet');
+SELECT error(printf('the resume asked for keys from %s, below %s, the last key saved before it: %s', lowest, saved.key, line))
+  FROM requests, saved WHERE lowest < saved.key;
+SELECT saved.key, count(*) FROM requests, saved GROUP BY saved.key;

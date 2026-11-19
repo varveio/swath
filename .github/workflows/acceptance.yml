@@ -8,7 +8,7 @@ name: Acceptance
 #   release's SHA256SUMS (itself pinned below), both binaries from it, SWATH_EXPECT=v0.4.0;
 # - candidate: the swath that ci.yml go-build built from the commit (the `acceptance-candidate`
 #   artifact of the same run) against the v0.4.0 swath-replay, so client and server cannot change
-#   together, SWATH_EXPECT=current; then the replay scenarios alone with the candidate swath-replay.
+#   together, SWATH_EXPECT=current; then every scenario again with the candidate swath-replay.
 #
 # ci.yml calls it with both inputs (scripts/ci/go-ci-policy.py picks them). A dispatch, which has
 # no inputs, runs the baseline on the five targets. With `platforms` off it runs one leg whose steps
@@ -243,9 +243,9 @@ jobs:
           command -v duckdb
           go test -count=1 -v -timeout 10m ./... 2>&1 | tee "$RUNNER_TEMP/acceptance-logs/scenarios.log"
 
-      # The candidate swath-replay against the same scenarios' expected rows, whatever the full
-      # run's result. A pattern that selects nothing would pass, so a replay scenario must pass.
-      - name: go test (replay scenarios, candidate swath-replay)
+      # Every scenario again with the candidate swath-replay, whatever the first run's result: each
+      # one that starts a replay server checks it against the same expected rows and requests.
+      - name: go test (every scenario, candidate swath-replay)
         if: ${{ !cancelled() && steps.binaries.outcome == 'success' && inputs.feeder == 'candidate' }}
         working-directory: acceptance
         env:
@@ -253,12 +253,7 @@ jobs:
         run: |
           set -euo pipefail
           export SWATH_REPLAY_BIN="$CANDIDATE_REPLAY_BIN"
-          log="$RUNNER_TEMP/acceptance-logs/replay-candidate.log"
-          go test -count=1 -v -timeout 10m -run 'TestScenarios/.*replay' ./... 2>&1 | tee "$log"
-          if ! grep -q -- '--- PASS: TestScenarios/[^ ]*replay' "$log"; then
-            echo "::error::no replay scenario ran"
-            exit 1
-          fi
+          go test -count=1 -v -timeout 10m ./... 2>&1 | tee "$RUNNER_TEMP/acceptance-logs/replay-candidate.log"
 
       - name: Upload the go test -v output
         if: always() && matrix.target != 'off'

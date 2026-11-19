@@ -1,0 +1,148 @@
+# A source that names a prefix lists the keys that start with that string,
+# not a directory (docs/sources/s3.md and gcs.md: "a prefix is a string
+# prefix"; docs/sources/azure.md: names that start with the prefix), with
+# their whole keys. keys.tsv holds 9 keys around the string logs: logs
+# (1 byte), logs/ (2), logs/a (3), logs/b/c (4), logs2/x (5), logs-old/y (6),
+# and log (7), logt (8) and m (9), which do not start with it. A trailing
+# slash makes the prefix logs/, which leaves out logs, logs-old/y and
+# logs2/x. Unsigned byte order: '-' < '/' < '2'. The listings to stdout, the
+# totals and swath show print nothing on stderr, except the warning for a
+# prefix no key starts with.
+
+replay --fixture keys.tsv --bucket bkt --protocols s3,gcs,azure
+
+# S3.
+exec swath list s3://bkt/logs --endpoint-url $REPLAY --anonymous --columns key,size
+cmp stdout want-logs.tsv
+! stderr .
+exec swath list s3://bkt/logs/ --endpoint-url $REPLAY --anonymous --columns key,size
+cmp stdout want-logs-slash.tsv
+! stderr .
+exec swath list s3://bkt/logs2 --endpoint-url $REPLAY --anonymous --columns key,size
+cmp stdout want-logs2.tsv
+! stderr .
+
+# GCS.
+exec swath list gs://bkt/logs --endpoint-url $REPLAY/storage/v1/ --anonymous --columns key,size
+cmp stdout want-logs.tsv
+! stderr .
+exec swath list gs://bkt/logs/ --endpoint-url $REPLAY/storage/v1/ --anonymous --columns key,size
+cmp stdout want-logs-slash.tsv
+! stderr .
+exec swath list gs://bkt/logs2 --endpoint-url $REPLAY/storage/v1/ --anonymous --columns key,size
+cmp stdout want-logs2.tsv
+! stderr .
+
+# Azure Blob.
+exec swath list az://replay/bkt/logs --endpoint-url $REPLAY --anonymous --columns key,size
+cmp stdout want-logs.tsv
+! stderr .
+exec swath list az://replay/bkt/logs/ --endpoint-url $REPLAY --anonymous --columns key,size
+cmp stdout want-logs-slash.tsv
+! stderr .
+exec swath list az://replay/bkt/logs2 --endpoint-url $REPLAY --anonymous --columns key,size
+cmp stdout want-logs2.tsv
+! stderr .
+
+# A prefix no key starts with lists nothing, and says so.
+exec swath list s3://bkt/nothing --endpoint-url $REPLAY --anonymous --columns key,size
+stdout '\Akey\tsize\n\z'
+cmp stderr want-nothing.txt
+
+# Totals below a prefix: the key logs is in the total only; the first level
+# groups the rest by what follows the prefix up to its next slash.
+exec swath du s3://bkt/logs --endpoint-url $REPLAY --anonymous -d 1 --format jsonl
+cmp stdout want-du-logs.jsonl
+! stderr .
+exec swath du s3://bkt/logs/ --endpoint-url $REPLAY --anonymous -d 1 --format jsonl
+cmp stdout want-du-logs-slash.jsonl
+! stderr .
+
+# A dataset of a prefix holds those keys, and records the prefix as its scope.
+exec swath list s3://bkt/logs --endpoint-url $REPLAY --anonymous -o ds
+dataset ds 'SELECT key, size FROM ds'
+cmp stdout want-logs-rows.tsv
+json ds/manifest.json extensions.swath.source extensions.swath.scope extensions.swath.coverage.complete
+stdout '\A{"container":"bkt","kind":"s3","uri":"s3://bkt/logs"}\n{"kind":"prefix","prefix":"logs"}\ntrue\n\z'
+exec swath show ds
+stdout '^  source    s3://bkt/logs$'
+stdout '^  contents  6 objects, 21 B; keys "logs" \.\. "logs2/x"$'
+! stderr .
+
+# A local SOURCE is a path, not a string prefix. A directory lists what is
+# below it, keys relative to it, with or without a trailing separator; a file
+# lists as its one row, keyed by its name (docs/sources/local.md).
+mktree t tree.spec
+exec swath list t --columns key,kind --no-stats
+cmp stdout want-tree.tsv
+! stderr .
+exec swath list t/ --columns key,kind --no-stats
+cmp stdout want-tree.tsv
+! stderr .
+exec swath list t/d --columns key,kind,size --no-stats
+stdout '\Akey\tkind\tsize\ng\tfile\t5\n\z'
+! stderr .
+exec swath list t/f --columns key,kind,size --no-stats
+stdout '\Akey\tkind\tsize\nf\tfile\t3\n\z'
+! stderr .
+
+# A symbolic link as SOURCE lists as the link, never followed.
+[symlink] symlink t/l -> f
+[symlink] exec swath list t/l --columns key,kind,link_target --no-stats
+[symlink] stdout '\Akey\tkind\tlink_target\nl\tsymlink\tf\n\z'
+[symlink] ! stderr .
+
+-- keys.tsv --
+m	9	1767225600000000
+logs/b/c	4	1767225600000000
+log	7	1767225600000000
+logs2/x	5	1767225600000000
+logs	1	1767225600000000
+logs-old/y	6	1767225600000000
+logt	8	1767225600000000
+logs/a	3	1767225600000000
+logs/	2	1767225600000000
+-- want-logs.tsv --
+key	size
+logs	1
+logs-old/y	6
+logs/	2
+logs/a	3
+logs/b/c	4
+logs2/x	5
+-- want-logs-slash.tsv --
+key	size
+logs/	2
+logs/a	3
+logs/b/c	4
+-- want-logs2.tsv --
+key	size
+logs2/x	5
+-- want-logs-rows.tsv --
+logs	1
+logs-old/y	6
+logs/	2
+logs/a	3
+logs/b/c	4
+logs2/x	5
+-- want-nothing.txt --
+swath: warning: no key starts with "nothing"
+-- want-du-logs.jsonl --
+{"row_type":"total","depth":0,"prefix":"logs","objects":6,"size":21,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":6,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"logs-old/","objects":1,"size":6,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"logs/","objects":3,"size":9,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"logs2/","objects":1,"size":5,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- want-du-logs-slash.jsonl --
+{"row_type":"total","depth":0,"prefix":"logs/","objects":3,"size":9,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"logs/b/","objects":1,"size":4,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- tree.spec --
+dir d 2026-01-01T00:00:00Z
+dir d2 2026-01-01T00:00:00Z
+file d/g 5 2026-01-01T00:00:00Z
+file f 3 2026-01-01T00:00:00Z
+-- want-tree.tsv --
+key	kind
+d/	dir
+d/g	file
+d2/	dir
+f	file
