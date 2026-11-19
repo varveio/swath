@@ -36,7 +36,9 @@
 // location that changes meanwhile. A call that fails returns an error of
 // one of package listing's classes, read from the failure as the swath
 // command reads it for its outcome, or ctx's own error once ctx has ended;
-// a walk that had already refused a page returns ErrInvalidPage then.
+// a walk returns ErrInvalidPage then when entries a store handed on had
+// already failed the walk's own check, and ctx's error for any other
+// failure of a store.
 // A walk has two exceptions, which need not match a class: an error
 // returned by the caller's own emit, which Walk returns unchanged, and a
 // panic in the walk's own goroutines, which Walk recovers and returns as
