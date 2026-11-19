@@ -179,3 +179,39 @@ is `ErrInvalidPage`, a refused access `ErrAuth`, and any other failure to read t
 included, `ErrUnavailable`. A context's error is returned as it is and matches no class; an error returned by a
 walk's own callback is returned as it is, so it need not match one.
 [view/example_test.go](view/example_test.go) pages, looks up and summarizes the photos dataset.
+
+## The du tally
+
+The package [`github.com/varveio/swath/reader/du`](du/doc.go) sums a walk's entries per requested key prefix by
+du's rules: space on disk with directories' own blocks, and a file with several hard links once within each
+prefix that holds any of its names. It lists nothing and imports only `reader/listing` and the standard library:
+a caller hands `Tally.Add` each batch of a Walk, live or from an inventory, in any order, and reads
+`Tally.Result` at any time. Its API is experimental: it may change in any release. `swath du` itself does not
+use it: the command keeps its own tally, which sums every depth of one walk and counts a hard-linked file once
+per run, under its smallest name.
+
+Each prefix (`""` or a key ending in `/`) is summed as if it were the only one requested, and an entry counts in
+every prefix its key begins with, its own entry included. A local file, symbolic link or other entry counts only
+with its `AllocatedBytes` and its identity (`Links` 1, or above 1 with `Device` and `Inode`); without them it adds
+1 to `AllocatedMissing` (checked first) or `Unidentified` and to no other figure. A directory adds its own blocks,
+an object its size and time and no space on disk; common prefixes and entries of unknown kind are ignored. `Add`
+takes a whole slice or none of it: an entry of no kind or with a negative figure, a sum past int64
+(`ErrOverflow`) or more hard-linked files than `Options.MaxInodes` (`ErrInodeLimit`) fails it, and every later
+`Add` fails with the same error.
+
+For every prefix, nested ones included, `Allocated` is a lower bound of `du -sB1` of the prefix on an acyclic
+traversal scope, also after a walk stopped early; `Files` and `Size` never exceed their values over every entry
+under the prefix, and `Newest` is never later than its value there. The missing counters are diagnostics, not
+bounds. Where the walk covered a prefix (no unread place under or above it) and its allocation evidence is
+complete (`AllocatedMissing` and `Unidentified` are 0), `Allocated` equals what `du -sB1` reports for that
+directory, with three differences:
+
+- A directory on another device is listed and not entered: its own blocks count and its contents do not. GNU
+  `du -s` enters such a directory, and `du -sx` leaves out the mount point's own blocks.
+- The prefix's own directory entry counts only when it is fed. A live walk of a non-empty prefix hands it on; a
+  walk of the root does not, so a caller feeds the root's entry, a `KindDir` at key `""`, itself. An inventory
+  has no row for its source root, so a root summed from one leaves out the root's own blocks.
+- A same-device bind mount of an ancestor is a cycle: swath's walk enters it as an ordinary directory and counts
+  it again, while GNU du detects the cycle and skips it, so on such a tree `Allocated` can exceed du's figure.
+
+Every equality and bound against du holds on acyclic traversal scopes only.

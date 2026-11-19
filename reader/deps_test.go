@@ -49,3 +49,21 @@ func TestNoParquetGoImport(t *testing.T) {
 		}
 	}
 }
+
+// TestDuImportsListingOnly: package du, its tests included, imports
+// nothing but package listing and the standard library, so a program that
+// sums with it links no reader, SeekParquet or Parquet code.
+func TestDuImportsListingOnly(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "-test", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./du").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	for line := range strings.Lines(string(out)) {
+		path, _, _ := strings.Cut(strings.TrimSpace(line), " ") // "du [du.test]" is du built for its tests
+		switch path {
+		case "", "github.com/varveio/swath/reader/du", "github.com/varveio/swath/reader/du.test", "github.com/varveio/swath/reader/listing":
+		default:
+			t.Errorf("du links %s", path)
+		}
+	}
+}

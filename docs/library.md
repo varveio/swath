@@ -18,6 +18,7 @@ The library is **experimental**: it is implemented and tested, but its API may c
 | `github.com/varveio/swath/source/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
 | `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
+| `github.com/varveio/swath/reader/du` | `New`, a `Tally` that sums a walk's entries per key prefix by du's rules ([Sum a walk as du does](#sum-a-walk-as-du-does)) |
 
 Pages, lookups and walks answer from the location as it is during the call. To ask the same questions of a saved inventory
 instead, or for the totals under several prefixes (a summary), open it with the `reader/view` package
@@ -176,6 +177,33 @@ default:
 
 The program is the s3 package's [`Example_walk`](../source/s3/example_test.go). A walk needs `s3:ListBucket` on the
 bucket.
+
+## Sum a walk as du does
+
+The package `github.com/varveio/swath/reader/du` sums a walk's entries per requested key prefix by du's rules:
+space on disk with directories' own blocks, and a file with several hard links once within each prefix that holds
+any of its names. It lists nothing and imports only `reader/listing`. It is experimental, and `swath du` itself
+does not use it ([the du tally](../reader/README.md#the-du-tally) has its counting rules).
+
+```go
+tally, err := du.New(du.Options{Prefixes: []string{"", "projects/", "projects/a/"}})
+if err != nil {
+	return err
+}
+_, err = src.Walk(ctx, listing.WalkRequest{}, func(b listing.WalkBatch) error {
+	return tally.Add(b.Entries)
+})
+results := tally.Result() // one du.Totals per prefix, in the order requested
+```
+
+For every prefix, `Allocated` is a lower bound of `du -sB1` of the prefix on an acyclic traversal scope, also
+after a walk stopped early. Where the walk covered a prefix (no `Unread` at, under or above it) and
+`AllocatedMissing` and `Unidentified` are 0, it equals `du -sB1` with three differences: a directory on another
+device counts its own blocks and not its contents (GNU `du -s` enters it, `du -sx` leaves out the mount point's
+own blocks); the prefix's own directory counts only when its entry is fed, and a walk of the root hands on none,
+so feed a `KindDir` at `""` with the root's blocks; and a same-device bind mount of an ancestor is a cycle that
+swath's walk enters and counts again, where GNU du skips it. Every bound and equality holds on acyclic traversal
+scopes only.
 
 ## Evidence and errors
 
