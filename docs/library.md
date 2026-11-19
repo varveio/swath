@@ -144,7 +144,7 @@ no NUL byte in its key, and a size (an object S3 lists without one is `listing.E
 zero). The ranges are checked too: no key range overlaps another, so no key reaches the function twice.
 
 A walk sets no limit of its own. To stop one, cancel its context: `Walk` then returns the context's error, even
-if the function took every batch, together with a `WalkSummary` that counts what the function took. A walk that
+if the function took every batch, together with a `WalkSummary` that counts what the function took. A walk
 returns `listing.ErrInvalidPage` instead when entries a store handed on had already failed the walk's own check,
 whether before or after the context ended. Any other failure of a store once the context has ended still returns
 the context's error. A walk that returns no error finished.
