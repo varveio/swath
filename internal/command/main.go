@@ -75,6 +75,11 @@ var shutdownGrace = 15 * time.Second
 // timeout. Main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
 
+// graceGate, nil in the release binary, holds the start of the grace until
+// a test has built the state its forced exit needs (SWATH_TEST_GRACE_GATE,
+// testHooks).
+var graceGate func()
+
 // host is the program this copy of swath is built into, as Main was given
 // it; empty in the swath binary.
 var host string
@@ -129,6 +134,9 @@ func Main(ctx context.Context, hostName string, args []string, stdout, stderr io
 	// whatever blocks it.
 	exitAfterGrace = func(code int, why string) {
 		go func() {
+			if graceGate != nil {
+				graceGate()
+			}
 			select {
 			case <-finished:
 			case <-time.After(shutdownGrace):

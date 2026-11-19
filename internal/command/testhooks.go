@@ -7,6 +7,7 @@ package command
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -32,9 +33,16 @@ import (
 // SWATH_TEST_DRAIN_AFTER_LISTING (drainAfterListing). SWATH_TEST_GRACE, a
 // duration, replaces shutdownGrace: a forced-exit test holds the run at a
 // hang point and lets a short grace fire instead of waiting out 15 s.
+// SWATH_TEST_GRACE_GATE=fd (graceGate): the grace starts only once the
+// file descriptor fd, a pipe the test holds, reads its end, which the test
+// closes once its state is built (the hold engaged, stderr full).
 func testHooks() {
 	if d, err := time.ParseDuration(os.Getenv("SWATH_TEST_GRACE")); err == nil {
 		shutdownGrace = d
+	}
+	if fd, err := strconv.Atoi(os.Getenv("SWATH_TEST_GRACE_GATE")); err == nil {
+		gate := os.NewFile(uintptr(fd), "grace-gate")
+		graceGate = func() { _, _ = io.Copy(io.Discard, gate) }
 	}
 	var hooks, events []func(string)
 	if os.Getenv("SWATH_TEST_SERIAL_SEALS") != "" {

@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -108,6 +109,21 @@ func (h *holdWatch) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// gateGrace gives cmd's process the grace gate (SWATH_TEST_GRACE_GATE): its
+// grace starts only once the returned open is called, when the test's state
+// is built, however long the run took to reach it.
+func gateGrace(t *testing.T, cmd *exec.Cmd) (open func()) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	cmd.ExtraFiles = append(cmd.ExtraFiles, r)
+	cmd.Env = append(cmd.Env, fmt.Sprintf("SWATH_TEST_GRACE_GATE=%d", 2+len(cmd.ExtraFiles)))
+	return func() { w.Close() }
+}
+
 // TestForcedExitWithFullStderr (durability review): the
 // process's stderr is a pipe nobody drains, filled after startup, and the
 // journal sync hangs. A deadline (124) and a stall (75) still end the
@@ -117,7 +133,8 @@ func (h *holdWatch) Write(p []byte) (int, error) {
 // timeout line) is bounded, and the exit has a backstop. Before, the
 // forced path's first stderr write blocked and the process never exited.
 // The pipe is filled once the sync hangs (its marker read from the pipe),
-// so the forced path, a grace after the stop, finds it full.
+// and only then does the grace start (gateGrace), so the forced path finds
+// it full.
 func TestForcedExitWithFullStderr(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -150,6 +167,7 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 			cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, tc.flags...)...)...)
 			cmd.Env = graceEnv(hang)
 			cmd.Stderr = w
+			open := gateGrace(t, cmd)
 			start := time.Now()
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
@@ -172,6 +190,7 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 				t.Fatal("the journal sync never hung")
 			}
 			fillPipe(t, w)
+			open()
 			select {
 			case err = <-done:
 			case <-time.After(limit + 10*time.Second):
@@ -348,6 +367,8 @@ func TestForcedExitAtCommit(t *testing.T) {
 // with the deadline's code within the grace plus forcedAllowance: the
 // backstop is armed before anything that waits. Before, the forced exit
 // waited for that lock before arming it and never exited (eighth review).
+// The grace starts only once the classification holds the lock (gateGrace),
+// so the forced exit never takes the result first.
 func TestForcedExitBackstopFirst(t *testing.T) {
 	bin := buildSwath(t)
 	t.Parallel()
@@ -355,19 +376,25 @@ func TestForcedExitBackstopFirst(t *testing.T) {
 	s.set("hung")
 	dir := filepath.Join(t.TempDir(), "ds")
 	const deadline, hang = time.Second, "classify:1"
-	var stderr syncBuffer
+	stderr := newHoldWatch(hang)
 	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--max-duration", deadline.String())...)...)
 	cmd.Env = graceEnv(hang)
-	cmd.Stderr = &stderr
+	cmd.Stderr = stderr
+	open := gateGrace(t, cmd)
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	limit := deadline + testGrace + forcedAllowance + 3*time.Second
-	code, took := waitExit(t, cmd, start, limit)
-	if !strings.Contains(stderr.String(), hangMarker(hang)) {
+	select {
+	case <-stderr.held:
+		open()
+	case <-time.After(limit + 10*time.Second):
+		cmd.Process.Kill()
+		cmd.Wait()
 		t.Fatalf("the classification never hung: %s", stderr.String())
 	}
+	code, took := waitExit(t, cmd, start, limit)
 	if code != exitDeadline || took < deadline+testGrace || took > limit {
 		t.Fatalf("exit %d after %s, want %d between %s and %s", code, took.Round(time.Millisecond), exitDeadline, deadline+testGrace, limit)
 	}
