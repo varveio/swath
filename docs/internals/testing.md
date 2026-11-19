@@ -29,7 +29,7 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Builds and the Go images | static builds for 5 targets, the version stamp, the journal's Windows test compile, the license gate; selected image builds/smokes | PR: main selected; images on packaging/dependency/full escalation. Main, dispatch: all | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
 | Acceptance suite, candidate | the commit's `swath`, as `go-build` built it, in the black-box scenarios of [`acceptance/`](../../acceptance/README.md) against the v0.4.0 `swath-replay`, datasets read by DuckDB; then the replay scenarios with the commit's `swath-replay` ([acceptance suite](#acceptance-suite)) | PR: main selected (linux-amd64); suite changes, full-scope PRs, PRs that select the cross-OS legs, main, dispatch: the five targets | ubuntu-latest; ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest | `ci.yml` `acceptance-candidate` (`acceptance.yml`) |
-| Acceptance suite, baseline | the same scenarios on the published v0.4.0 archives, with v0.4.0's expectations | PR, main: a change under `acceptance/` or to `acceptance.yml`; dispatch | the five above | `ci.yml` `acceptance-baseline`; `acceptance.yml` dispatched |
+| Acceptance suite, baseline | the same scenarios on the published v0.4.0 archives, with v0.4.0's expectations | PR, main: a change under `acceptance/` or to `acceptance.yml`; dispatch of `ci.yml` or `acceptance.yml` | the five above | `ci.yml` `acceptance-baseline`; `acceptance.yml` dispatched |
 | Acceptance tripwire | no file under `acceptance/` added, modified, renamed or deleted without the owner's label `acceptance-change` | PR | ubuntu-latest | `ci.yml` `acceptance-tripwire` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
@@ -372,7 +372,7 @@ workflow pins, checks the archive against it and requires each binary's `--versi
 for the archive's, the commit for `go-build`'s. Go is the toolchain `go.mod` names, set up without a cache. The
 leg keeps its output as the `acceptance-FEEDER-TARGET` artifact (`scenarios.log`, and the candidate's
 `replay-candidate.log`) for 14 days, pass or fail. `gh workflow run acceptance.yml --ref BRANCH` runs the
-baseline (`-f platforms=linux` for linux-amd64 alone); `gh workflow run ci.yml --ref BRANCH` runs both
+baseline on the five targets (the dispatch takes no inputs); `gh workflow run ci.yml --ref BRANCH` runs both
 feeders on the five targets. Locally, with the binaries built into an absolute directory DIR (`./build.sh -o DIR/swath
 ./cmd/swath`, likewise `swath-replay`) and DuckDB on `PATH`:
 

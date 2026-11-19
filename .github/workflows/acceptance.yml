@@ -10,9 +10,10 @@ name: Acceptance
 #   artifact of the same run) against the v0.4.0 swath-replay, so client and server cannot change
 #   together, SWATH_EXPECT=current; then the replay scenarios alone with the candidate swath-replay.
 #
-# ci.yml calls it with both inputs (scripts/ci/go-ci-policy.py picks them). A dispatch runs the
-# baseline. With `platforms` off it runs one leg whose steps skip, so a caller's job succeeds
-# without a job-level `if:` (ci-gate counts a skipped job as a failure).
+# ci.yml calls it with both inputs (scripts/ci/go-ci-policy.py picks them). A dispatch, which has
+# no inputs, runs the baseline on the five targets. With `platforms` off it runs one leg whose steps
+# skip, so a caller's job succeeds without a job-level `if:` (ci-gate counts a skipped job as a
+# failure).
 on:
   workflow_call:
     inputs:
@@ -25,12 +26,6 @@ on:
         type: string
         required: true
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: "The baseline on linux (linux-amd64 only) or all five targets"
-        type: choice
-        options: [all, linux]
-        default: all
 
 permissions:
   contents: read
@@ -55,9 +50,12 @@ jobs:
       - name: Acceptance legs
         id: legs
         env:
+          FEEDER: ${{ inputs.feeder }}
           PLATFORMS: ${{ inputs.platforms }}
         run: |
           set -euo pipefail
+          # A dispatch has no inputs (a call has both): the baseline on every target.
+          if [ -z "$FEEDER" ]; then PLATFORMS=all; fi
           all=$(jq -c . <<'EOF'
           [
             {"target": "linux-amd64", "runner": "ubuntu-latest",

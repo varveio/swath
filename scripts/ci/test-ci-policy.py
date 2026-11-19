@@ -204,13 +204,22 @@ class PolicyTests(unittest.TestCase):
         runners = {'linux-amd64': 'ubuntu-latest', 'linux-arm64': 'ubuntu-24.04-arm',
                    'darwin-arm64': 'macos-latest', 'darwin-amd64': 'macos-15-intel',
                    'windows-amd64': 'windows-latest'}
+        # A call passes both inputs; a dispatch passes none and runs the baseline on every target.
+        dispatch = ACCEPTANCE_WORKFLOW.split('\n  workflow_dispatch:', 1)[1].split('\n')
+        self.assertEqual(dispatch[0], '')
+        self.assertFalse(dispatch[1].startswith('    '), 'a dispatch takes no inputs')
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / 'output'
-            for platforms, targets in [('all', list(runners)), ('linux', ['linux-amd64']),
-                                       ('off', ['off'])]:
+            for feeder, platforms, targets in [('candidate', 'all', list(runners)),
+                                               ('baseline', 'all', list(runners)),
+                                               ('candidate', 'linux', ['linux-amd64']),
+                                               ('candidate', 'off', ['off']),
+                                               ('baseline', 'off', ['off']),
+                                               ('', '', list(runners))]:
                 output.write_text('')
                 subprocess.run(['bash', '-c', run_step('Acceptance legs', ACCEPTANCE_WORKFLOW)],
-                               env=dict(os.environ, PLATFORMS=platforms, GITHUB_OUTPUT=str(output)),
+                               env=dict(os.environ, FEEDER=feeder, PLATFORMS=platforms,
+                                        GITHUB_OUTPUT=str(output)),
                                check=True, capture_output=True)
                 matrix = json.loads(output.read_text().split('=', 1)[1])
                 self.assertEqual([row['target'] for row in matrix], targets)
@@ -224,7 +233,8 @@ class PolicyTests(unittest.TestCase):
             for platforms in ['', 'windows', 'true']:
                 output.write_text('')
                 run = subprocess.run(['bash', '-c', run_step('Acceptance legs', ACCEPTANCE_WORKFLOW)],
-                                     env=dict(os.environ, PLATFORMS=platforms, GITHUB_OUTPUT=str(output)),
+                                     env=dict(os.environ, FEEDER='candidate', PLATFORMS=platforms,
+                                              GITHUB_OUTPUT=str(output)),
                                      capture_output=True)
                 self.assertNotEqual(run.returncode, 0, platforms)
                 self.assertEqual(output.read_text(), '')
