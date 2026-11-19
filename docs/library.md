@@ -369,15 +369,18 @@ command.Exit(command.Main(context.Background(), "example-host", os.Args[1:], os.
 
 Call `Main` from a process dedicated to it, such as a child the host starts for one command line. It sets the
 command's process-wide policy when it is called, never when the package is imported, and does not undo it when it
-returns: the Azure SDK's own log is turned off, SIGINT, SIGTERM and SIGHUP stop the run, SIGPIPE is ignored, and a
-run that has not finished stopping within the shutdown grace ends the process. Terminal detection (`--format auto`,
+returns: the Azure SDK's own log is turned off, SIGINT, SIGTERM and SIGHUP (unless SIGHUP was ignored at start)
+stop the run, SIGPIPE is ignored, and a run that a signal, `--max-duration`, `--stall-timeout` or
+`--spill-wait-timeout` stopped and that has not finished stopping within the shutdown grace ends the process.
+Cancelling `ctx` stops the run too, without that forced exit. Terminal detection (`--format auto`,
 color, the live progress line) follows the `stdout` and `stderr` given to `Main`: a writer that is not an `*os.File`
 is not a terminal. `command.Exit` ends the process as the binary does: on Unix, a run a signal stopped dies by that
 signal.
 
 `host` names the program this copy is built into (the binary passes `""`), and `--version` then says so. The version that
 `--version`, the run report, the journal, Parquet `created_by` and the User-Agent give is swath's own: the version
-of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision.
+of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision, unless
+the host's build sets swath's version or revision at link time.
 
 ## Not in the library yet
 
