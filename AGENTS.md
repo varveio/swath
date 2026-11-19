@@ -54,6 +54,24 @@ mid-crash resume, or concurrency guard should be independently authored or revie
 possible. Test tiers are documented in
 [`docs/internals/testing.md`](docs/internals/testing.md).
 
+## Tests that come with a change
+
+Most tests here are written by the agent that wrote the code, in the same change. These rules keep such a
+test worth having; a reviewer checks each one.
+
+- **Show that the test can fail.** A test that passes with and without the change proves nothing. For a fix,
+  run the new test against the code without the fix and put the failing output in the pull request. For new
+  behavior, break the behavior once and say what failed.
+- **A changed assertion is a reviewed change.** When a pull request edits an existing test, its description
+  says for each edited assertion whether it is now stronger, equal or weaker. A weaker one names the test that
+  still covers what was dropped and says whether that test compares exact output. Never weaken or delete an
+  assertion to make a run green.
+- **Build the state; do not wait for it.** No sleep and no retry-until-it-happens. A test that needs a state
+  reaches it through a barrier or a hold that fails when it does not engage. A test of a watchdog, a deadline
+  or a grace period blocks the run at a fault point and lets the timer fire, so load can make it slower and
+  never wrong. The policy and its history are in
+  [`docs/internals/testing.md`](docs/internals/testing.md#flakes).
+
 ## Instrument algorithm changes
 
 Every new algorithm path—pivot choice, split trigger, seed path, pacing gate, retry
