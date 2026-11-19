@@ -111,6 +111,11 @@ Notable changes per release. The human summary of the current release is in the
   a page as the new `ListRequest`, a lookup's HeadObject and HeadBucket as `MetadataRequest`.
 - GCS: a redirect's error message leaves out the target's query. Azure Blob: the Azure SDK's log never sees an
   error answer's body, so a SAS echoed in it is not logged; swath still reports the service's error code.
+- `reader/du` (experimental) sums a walk's entries, live or from an inventory, per requested key prefix by du's
+  rules: space on disk with directories' own blocks, and a file with several hard links once within each prefix.
+  A local entry without its allocation or identity counts in `AllocatedMissing` or `Unidentified` and in no total,
+  so `Allocated` is a lower bound of `du -sB1` on an acyclic traversal scope, also after a walk stopped early.
+  It imports only `reader/listing`; `swath du` does not use it ([reader guide](reader/README.md#the-du-tally)).
 
 ### Release
 
