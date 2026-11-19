@@ -85,6 +85,11 @@ that run the built binaries as a user does, on every platform, against v0.4.0 an
   explicit say, and the pull request lists each changed scenario with the reason for its change.
 - A failing scenario is fixed in the product, or reported to the owner as an intended behavior
   change. Never edit a scenario on your own judgment to make it pass.
+- The same holds outside `acceptance/` for whatever decides what the suite runs and what counts as
+  its passing: what `.github/workflows/acceptance.yml` runs, the acceptance jobs and their gates in
+  `.github/workflows/ci.yml`, and the acceptance selection in `scripts/ci/go-ci-policy.py`. A change
+  that narrows the scenarios, targets or events it runs on, or what its result decides, needs the
+  owner's explicit say; no label check enforces this.
 - Never apply the label `acceptance-change`: the owner applies it. CI fails a pull request that
   adds, modifies, renames or deletes any file under `acceptance/` without it.
 

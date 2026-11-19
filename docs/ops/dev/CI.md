@@ -337,9 +337,15 @@ pull request carries the label `acceptance-change`, which only the owner applies
 pull request that adds a scenario waits for the owner's label too. It compares the pull request's
 head with its merge base, so a change `main` made since does not count; a diff that cannot run (a
 revision the clone lacks) fails the job rather than reading as no change; and a label change reruns
-`ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone
-who can label a pull request can pass it, so it makes a change to the suite a recorded decision
-rather than a side effect.
+`ci.yml`, so the check follows the label. It is a tripwire, not access control: anyone who can label
+a pull request can pass it, so it makes a change to the suite a recorded decision rather than a side
+effect.
+
+The suite can also be weakened from outside `acceptance/`: through what `acceptance.yml` runs, the
+acceptance jobs and gates in `ci.yml`, or the acceptance selection in `go-ci-policy.py`. `AGENTS.md`
+puts those changes under the same owner rule, but the tripwire does not watch the files: they change
+with routine CI work and the weekly action bumps, and a label needed every week stops meaning
+anything.
 
 A full `main` run holds four macOS runners at once (two `go-xos` legs and the candidate's
 `macos-latest` and `macos-15-intel` legs), six when the baseline runs too, of the five concurrent
