@@ -19,8 +19,7 @@
 // the object's CRC32C; ranged reads carry no checksum the SDK checks.
 //
 // The SDK's reader requests the rest of a range by itself when a body fails
-// part way, checks only that answer's status, and for one labelled
-// Content-Encoding: gzip skips as many bytes of it as it had read. The client
+// part way and checks only that answer's status. The client
 // objfile/remote builds validates every response to a request for one byte
 // range (a batch never asks for more than one range a request): its status,
 // Content-Range, length and lack of transport decompression, then ends a

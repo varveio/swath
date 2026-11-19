@@ -99,11 +99,11 @@ func TestServedRange(t *testing.T) {
 			}
 			partial(w, data, start+1, end+1)
 		}},
-		// An object stored with Content-Encoding: gzip, read as stored: the
-		// SDK requests the rest itself and skips as many bytes of that
-		// answer as it had read, so without the transport (which ends the
-		// cut body instead) the read joins two parts of the object.
-		{"gzip, cut at a quarter, then the rest", wrong, exact, func(w http.ResponseWriter, start, end int, attempt int32) {
+		// An object stored with Content-Encoding: gzip, read as stored:
+		// without the transport the SDK requests the rest itself and reads
+		// that 206 from its start; with it the cut body ends and objfile
+		// requests the rest.
+		{"gzip, cut at a quarter, then the rest", exact, exact, func(w http.ResponseWriter, start, end int, attempt int32) {
 			w.Header().Set("Content-Encoding", "gzip")
 			if attempt == 1 {
 				cut(w, data, start, end, 4)
@@ -210,10 +210,10 @@ func wholeClientOver(t *testing.T, url string, guard bool, base http.RoundTrippe
 }
 
 // TestReadObjectCut: a whole-object read of a gzip-labelled object whose
-// body is cut at a quarter. The SDK requests the rest itself and skips as
-// many bytes of that answer as it had read, joining two parts of the
-// object; with the transport the body ends where it was cut instead, and
-// ReadObject reads the rest as a checked ranged read.
+// body is cut at a quarter reads the object at its generation. Without the
+// transport the SDK requests the rest itself and reads that 206 from its
+// start; with it the body ends where it was cut, and ReadObject reads the
+// rest as a checked ranged read.
 func TestReadObjectCut(t *testing.T) {
 	data := objfiletest.Data(10000, 4) // a quarter is not a multiple of Data's period
 	for _, guard := range []bool{false, true} {
@@ -227,12 +227,8 @@ func TestReadObjectCut(t *testing.T) {
 			_, _ = w.Write(data)
 		})
 		b, id, err := gcs.New(wholeClient(t, url, guard), bucket).(objfile.ObjectReader).ReadObject(context.Background(), "obj", 1<<20)
-		exact := err == nil && bytes.Equal(b, data)
-		if guard && (!exact || id != "7") {
-			t.Fatalf("guarded ReadObject of a cut body: %d bytes, %q, %v; want the object", len(b), id, err)
-		}
-		if !guard && exact {
-			t.Fatal("unguarded ReadObject of a cut gzip body read the object: the SDK no longer joins parts, so the transport may not be needed")
+		if err != nil || !bytes.Equal(b, data) || id != "7" {
+			t.Fatalf("ReadObject of a cut body (guarded=%t): %d bytes, %q, %v; want the object", guard, len(b), id, err)
 		}
 	}
 }
