@@ -192,7 +192,9 @@ jobs:
           native() { if [ "$RUNNER_OS" = Windows ]; then cygpath -w "$1"; else printf '%s\n' "$1"; fi; }
           released="$temp/baseline/swath-$BASELINE_VERSION-$TARGET"
           for cmd in swath swath-replay; do
-            "$released/$cmd$ext" --version | tee /dev/stderr | grep -q "^$cmd $BASELINE_VERSION "
+            version=$("$released/$cmd$ext" --version)
+            echo "$version"
+            grep -q "^$cmd $BASELINE_VERSION " <<<"$version"
           done
           swath="$released/swath$ext"
           replay="$released/swath-replay$ext"
@@ -201,7 +203,9 @@ jobs:
             built="$temp/candidate/$TARGET"
             chmod +x "$built/swath$ext" "$built/swath-replay$ext"
             for cmd in swath swath-replay; do
-              "$built/$cmd$ext" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+              version=$("$built/$cmd$ext" --version)
+              echo "$version"
+              grep -q "$GITHUB_SHA" <<<"$version"
             done
             swath="$built/swath$ext"
             expect=current
