@@ -1,0 +1,269 @@
+name: Acceptance
+
+# The black-box acceptance suite (acceptance/README.md): its own Go module, outside go.work, that runs
+# built binaries as a user does, with a pinned DuckDB CLI as the independent Parquet reader. Two
+# feeders, one leg per target:
+#
+# - baseline: the published v0.4.0 archive for the runner's OS and architecture, checked against the
+#   release's SHA256SUMS (itself pinned below), both binaries from it, SWATH_EXPECT=v0.4.0;
+# - candidate: the swath that ci.yml go-build built from the commit (the `acceptance-candidate`
+#   artifact of the same run) against the v0.4.0 swath-replay, so client and server cannot change
+#   together, SWATH_EXPECT=current; then the replay scenarios alone with the candidate swath-replay.
+#
+# ci.yml calls it with both inputs (scripts/ci/go-ci-policy.py picks them). A dispatch runs the
+# baseline. With `platforms` off it runs one leg whose steps skip, so a caller's job succeeds
+# without a job-level `if:` (ci-gate counts a skipped job as a failure).
+on:
+  workflow_call:
+    inputs:
+      feeder:
+        description: "baseline (the published v0.4.0 archives) or candidate (ci.yml go-build's binaries, same run)"
+        type: string
+        required: true
+      platforms:
+        description: "off, linux (linux-amd64 only) or all (the five targets)"
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "The baseline on linux (linux-amd64 only) or all five targets"
+        type: choice
+        options: [all, linux]
+        default: all
+
+permissions:
+  contents: read
+
+# The baseline is fixed: the release, and the SHA-256 of its SHA256SUMS, which names every archive's.
+# DuckDB is bumped by hand, as in ci.yml; the legs' assets and their SHA-256 are in the plan below.
+env:
+  BASELINE_REPO: varveio/swath
+  BASELINE_VERSION: "0.4.0"
+  BASELINE_SUMS_SHA256: 8472fae05ddcf1864365a7b8673d54307f6f6647278740333dd7023d3e3b9af1
+  DUCKDB_VERSION: v2.0.0
+
+jobs:
+  # The legs: one per target, with its runner and its DuckDB CLI asset; `off` is one leg on
+  # ubuntu-latest whose steps skip.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.legs.outputs.matrix }}
+    steps:
+      - name: Acceptance legs
+        id: legs
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          all=$(jq -c . <<'EOF'
+          [
+            {"target": "linux-amd64", "runner": "ubuntu-latest",
+             "duckdb": "duckdb-cli-linux-amd64.tar.gz",
+             "duckdb_sha256": "c6507206baf7793c6013dbd82368469a45f20dc0e17a6f92f204602f652ed2bc"},
+            {"target": "linux-arm64", "runner": "ubuntu-24.04-arm",
+             "duckdb": "duckdb-cli-linux-arm64.tar.gz",
+             "duckdb_sha256": "859e1875d2a9515fbb4bf8871061437a14af82320da68c753f094c4b776348fe"},
+            {"target": "darwin-arm64", "runner": "macos-latest",
+             "duckdb": "duckdb-cli-osx-arm64.tar.gz",
+             "duckdb_sha256": "188a36fe8883ef52e69165a0cbb6031ef679c8e6c448a1ce22951964149b7f96"},
+            {"target": "darwin-amd64", "runner": "macos-15-intel",
+             "duckdb": "duckdb-cli-osx-amd64.tar.gz",
+             "duckdb_sha256": "fbc7013ba09d117396dabf16783281c2add47fc01cdac4855464a03526dc96ee"},
+            {"target": "windows-amd64", "runner": "windows-latest",
+             "duckdb": "duckdb-cli-windows-amd64.tar.gz",
+             "duckdb_sha256": "91663c2f36c2a334b0e5e639006d8c29c29e013af0c477d80bb931df68870312"}
+          ]
+          EOF
+          )
+          case "$PLATFORMS" in
+            all) matrix=$all ;;
+            linux) matrix=$(jq -c '[.[] | select(.target == "linux-amd64")]' <<<"$all") ;;
+            off) matrix='[{"target":"off","runner":"ubuntu-latest"}]' ;;
+            *) echo "::error::platforms is all, linux or off, not '$PLATFORMS'"; exit 1 ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "acceptance legs: $matrix"
+
+  scenarios:
+    needs: plan
+    name: ${{ inputs.feeder || 'baseline' }} (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: matrix.target != 'off'
+        with:
+          persist-credentials: false
+
+      # The toolchain the repository builds with; no cache: the module's one dependency
+      # (testscript) is small, and a Go cache here would add a family per runner to the
+      # repository's budget (docs/ops/dev/CI.md#caching) for seconds of compiling.
+      - name: Set up Go (version from go.mod)
+        if: matrix.target != 'off'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Paths below are relative to the directory each step works in: Git Bash's tar reads a
+      # Windows drive letter as a remote host.
+      - name: Install the DuckDB CLI (checksum-verified)
+        if: matrix.target != 'off'
+        env:
+          ASSET: ${{ matrix.duckdb }}
+          WANT: ${{ matrix.duckdb_sha256 }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/duckdb"
+          mkdir -p "$dir"
+          cd "$dir"
+          curl -fsSL "https://github.com/duckdb/duckdb/releases/download/$DUCKDB_VERSION/$ASSET" -o duckdb.tar.gz
+          got=$( (sha256sum duckdb.tar.gz 2>/dev/null || shasum -a 256 duckdb.tar.gz) | cut -d' ' -f1)
+          if [ "$got" != "$WANT" ]; then
+            echo "::error::$ASSET: SHA-256 $got, want $WANT"
+            exit 1
+          fi
+          tar -xzf duckdb.tar.gz
+          ./duckdb --version
+          if [ "$RUNNER_OS" = Windows ]; then cygpath -w "$dir" >> "$GITHUB_PATH"; else echo "$dir" >> "$GITHUB_PATH"; fi
+
+      # Both feeders: the candidate runs against this archive's swath-replay.
+      - name: Download the v0.4.0 archive and check it against SHA256SUMS
+        if: matrix.target != 'off'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/baseline"
+          mkdir -p "$dir"
+          cd "$dir"
+          archive="swath-$BASELINE_VERSION-$TARGET.tar.gz"
+          if [ "$RUNNER_OS" = Windows ]; then archive="swath-$BASELINE_VERSION-$TARGET.zip"; fi
+          gh release download "v$BASELINE_VERSION" --repo "$BASELINE_REPO" --pattern "$archive" --pattern SHA256SUMS
+          sha256() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
+          if [ "$(sha256 SHA256SUMS)" != "$BASELINE_SUMS_SHA256" ]; then
+            echo "::error::SHA256SUMS of v$BASELINE_VERSION is not the pinned one ($BASELINE_SUMS_SHA256)"
+            exit 1
+          fi
+          want=$(awk -v name="$archive" '$2 == name { print $1 }' SHA256SUMS)
+          got=$(sha256 "$archive")
+          if [ -z "$want" ] || [ "$got" != "$want" ]; then
+            echo "::error::$archive: SHA-256 $got, SHA256SUMS says '$want'"
+            exit 1
+          fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            pwsh -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath ."
+          else
+            tar -xzf "$archive"
+          fi
+          ls -l "swath-$BASELINE_VERSION-$TARGET"
+
+      - name: Download go-build's binaries
+        if: matrix.target != 'off' && inputs.feeder == 'candidate'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: acceptance-candidate
+          path: ${{ runner.temp }}/candidate
+
+      # The suite's inputs, as native absolute paths (Windows ones on Windows, for go test there).
+      # Each binary's version is checked first: the baseline's names the release, the candidate's
+      # this commit (go-build stamps it).
+      - name: Select the binaries under test
+        id: binaries
+        if: matrix.target != 'off'
+        env:
+          FEEDER: ${{ inputs.feeder || 'baseline' }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          temp=$RUNNER_TEMP ext=
+          if [ "$RUNNER_OS" = Windows ]; then temp=$(cygpath -u "$RUNNER_TEMP") ext=.exe; fi
+          native() { if [ "$RUNNER_OS" = Windows ]; then cygpath -w "$1"; else printf '%s\n' "$1"; fi; }
+          released="$temp/baseline/swath-$BASELINE_VERSION-$TARGET"
+          for cmd in swath swath-replay; do
+            "$released/$cmd$ext" --version | tee /dev/stderr | grep -q "^$cmd $BASELINE_VERSION "
+          done
+          swath="$released/swath$ext"
+          replay="$released/swath-replay$ext"
+          expect=v$BASELINE_VERSION
+          if [ "$FEEDER" = candidate ]; then
+            built="$temp/candidate/$TARGET"
+            chmod +x "$built/swath$ext" "$built/swath-replay$ext"
+            for cmd in swath swath-replay; do
+              "$built/$cmd$ext" --version | tee /dev/stderr | grep -q "$GITHUB_SHA"
+            done
+            swath="$built/swath$ext"
+            expect=current
+            echo "CANDIDATE_REPLAY_BIN=$(native "$built/swath-replay$ext")" >> "$GITHUB_ENV"
+          fi
+          {
+            echo "SWATH_BIN=$(native "$swath")"
+            echo "SWATH_REPLAY_BIN=$(native "$replay")"
+            echo "SWATH_EXPECT=$expect"
+          } | tee -a "$GITHUB_ENV"
+          mkdir -p "$temp/acceptance-logs"
+
+      # Once per change to the suite: the baseline runs exactly then (and on dispatch).
+      - name: gofmt and go vet (acceptance module)
+        if: matrix.target == 'linux-amd64' && inputs.feeder != 'candidate'
+        working-directory: acceptance
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt -l lists files that are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+
+      # -count=1: the binaries are inputs go test cannot see, so a cached result would be stale.
+      - name: go test (every scenario)
+        if: ${{ !cancelled() && steps.binaries.outcome == 'success' }}
+        working-directory: acceptance
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          command -v duckdb
+          go test -count=1 -v -timeout 10m ./... 2>&1 | tee "$RUNNER_TEMP/acceptance-logs/scenarios.log"
+
+      # The candidate swath-replay against the same scenarios' expected rows, whatever the full
+      # run's result. A pattern that selects nothing would pass, so a replay scenario must pass.
+      - name: go test (replay scenarios, candidate swath-replay)
+        if: ${{ !cancelled() && steps.binaries.outcome == 'success' && inputs.feeder == 'candidate' }}
+        working-directory: acceptance
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          export SWATH_REPLAY_BIN="$CANDIDATE_REPLAY_BIN"
+          log="$RUNNER_TEMP/acceptance-logs/replay-candidate.log"
+          go test -count=1 -v -timeout 10m -run 'TestScenarios/.*replay' ./... 2>&1 | tee "$log"
+          if ! grep -q -- '--- PASS: TestScenarios/[^ ]*replay' "$log"; then
+            echo "::error::no replay scenario ran"
+            exit 1
+          fi
+
+      - name: Upload the go test -v output
+        if: always() && matrix.target != 'off'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: acceptance-${{ inputs.feeder || 'baseline' }}-${{ matrix.target }}
+          path: ${{ runner.temp }}/acceptance-logs/
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true

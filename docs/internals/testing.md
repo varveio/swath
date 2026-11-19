@@ -28,6 +28,9 @@ workflows are in `.github/workflows/`. The one required check is `ci.yml` `ci-ga
 | Cross-OS default tier, Windows | every selected module without `-race` ([cross-OS](#cross-os)) | Escalated PRs; main, dispatch: always. Nightly main-module suite | windows-latest (amd64) | `ci.yml` `go-xos (windows-latest, LEG)` ([Windows legs](#windows-legs)); `nightly.yml` `go-xos-windows (LEG)` |
 | Builds and the Go images | static builds for 5 targets, the version stamp, the journal's Windows test compile, the license gate; selected image builds/smokes | PR: main selected; images on packaging/dependency/full escalation. Main, dispatch: all | ubuntu-latest | `ci.yml` `go-build` |
 | Replay fixture tier (`SWATH_REPLAY_FIXTURES`) | the Go replay store and evidence replays on the fixtures `bench/replay/fixtures` writes | PR: main/reader or provider evidence; main, dispatch: always | ubuntu-latest | `ci.yml` `go-fixtures` |
+| Acceptance suite, candidate | the commit's `swath`, as `go-build` built it, in the black-box scenarios of [`acceptance/`](../../acceptance/README.md) against the v0.4.0 `swath-replay`, datasets read by DuckDB; then the replay scenarios with the commit's `swath-replay` ([acceptance suite](#acceptance-suite)) | PR: main selected (linux-amd64); suite changes, full-scope PRs, main, dispatch: the five targets | ubuntu-latest; ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest | `ci.yml` `acceptance-candidate` (`acceptance.yml`) |
+| Acceptance suite, baseline | the same scenarios on the published v0.4.0 archives, with v0.4.0's expectations | PR, main: a change under `acceptance/` or to `acceptance.yml`; dispatch | the five above | `ci.yml` `acceptance-baseline`; `acceptance.yml` dispatched |
+| Acceptance tripwire | no existing file under `acceptance/` modified, renamed or deleted without the owner's label `acceptance-change` | PR | ubuntu-latest | `ci.yml` `acceptance-tripwire` |
 | Stress repeats | one test or pattern repeated N times on a chosen OS, race setting and `GOMAXPROCS` | dispatch only | input: ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest | `go-stress.yml` `stress` |
 | Opt-in Go tiers | full-scale laws, fuzzing, replay load, the durable spill campaign, `verify.py`, the replay oracle against Java | manual only | a contributor's or a benchmark host | none ([opt-in tiers](#opt-in-tiers)) |
 | Live buckets and benchmark sweeps | behavior and performance on real providers | manual only, never scheduled | cloud batch hosts | none ([live runs](#live-runs)) |
@@ -89,10 +92,15 @@ suites for changed modules and their dependants, not a guessed subset of individ
 | Main/reader selected | main lint/race/non-race/build and replay fixture tiers; reader job when selected |
 | Provider evidence (`docs/replay-provider-*`) | main and the fixture tier (the fixtures are written from it, and client tests read it directly) |
 | `go.work` (the workspace joining the three modules) | main, reader and object-file module, with platforms and images |
-| Shared workflows, actions, CI scripts, toolchain changes, unknown ownership or `ci:full` label | every module and tier |
+| `acceptance/**`, `.github/workflows/acceptance.yml` | no Go module; the [acceptance suite](#acceptance-suite)'s baseline and candidate on the five targets (the workflow, as a shared workflow, also every module and tier) |
+| Shared workflows, actions, CI scripts, toolchain changes, unknown ownership or `ci:full` label | every module and tier, and the acceptance candidate on the five targets |
+
+The acceptance candidate runs on linux-amd64 whenever main is selected, and needs `go-build`'s binaries, so
+`go-build` builds them whenever the candidate runs, a change to the suite alone included.
 
 Dependency closure follows local module references (a `require` of a nested module's path), including test dependencies.
-A new or removed nested module fails selection until its jobs and ownership are updated. Shared cache
+A new or removed nested module fails selection until its jobs and ownership are updated; `acceptance/go.mod`, a
+module outside `go.work` that imports nothing of the repository, is the one the policy expects beside the three. Shared cache
 keys do not create dependency edges. Changing an independent module's dependencies does not select
 unrelated modules. Module dependency changes do request all platform tests for the selected modules;
 main/reader dependency changes also request image builds.
@@ -104,14 +112,16 @@ all label events reevaluate selection, so an unrelated label change also replace
 Full main validation covers the configurations an ordinary PR defers.
 
 Every push to **main** and every manual **dispatch** selects all Go modules, platforms, fixtures,
-images and the docs tier, even for a documentation-only change. PRs use `git diff --no-renames` against the base:
+images, the docs tier and the acceptance candidate on the five targets, even for a documentation-only change; a
+dispatch also runs the acceptance baseline. PRs use `git diff --no-renames` against the base:
 renames select both old and new owners, and deletions select the former owner. Missing/zero base or
 an empty diff runs full validation; an unreadable git diff fails instead of silently skipping work.
 
 Each job still runs, but an unaffected job skips its work and succeeds. `ci-gate` rejects failed,
 cancelled **and skipped jobs on every event**. Matrix jobs emit a single cheap `off` leg when no
-work is selected. Full-scope PRs and main/dispatch additionally emit **`go-full-gate`** only after every Go job passes, all Go
-selections are true, and both expanded matrices match full validation. Release requires that qualification from the main push run of its
+work is selected. Full-scope PRs and main/dispatch additionally emit **`go-full-gate`** only after every Go job and both
+acceptance jobs pass, all Go selections are true, the acceptance candidate runs on all five targets, and both expanded
+matrices match full validation. Release requires that qualification from the main push run of its
 exact commit; a green PR or mere ancestry in main is insufficient.
 
 ### Docs tier
@@ -147,7 +157,7 @@ runs the tier and prints its command; `UPDATE=1` with that command rewrites the 
 | `go-docs` | `scripts/ci/go-docs-tests.sh`: `go test -count=1 -v -run '^TestDocs'` on the packages whose tests import `./docs` ([docs tier](#docs-tier)); its steps skip unless the docs tier is selected | ubuntu-latest |
 | `go-race (SHARD)` | `go test -race -count=1 -timeout 20m -json` on one shard, one leg per shard below; the JSON stream is the `go-race-SHARD` artifact. Without a selected main module, a single `go-race (off)` leg whose steps skip | per shard |
 | `go-nonrace` | the tests that measure the process and must not run under `-race`: `SWATH_HEAP_GATES=1 go test -count=1 -timeout 15m -run '^TestWriterAdmissionCoversHeap$' ./internal/inventory` and `go test -count=1 -timeout 15m -run '^TestShapes$' ./internal/shapes`; then `scripts/ci/seekparquet-conformance.sh` ([SeekParquet conformance](#seekparquet-conformance)) | ubuntu-latest |
-| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit; `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
+| `go-build` | `CGO_ENABLED=0` builds (`./build.sh`) of `swath` and `swath-replay` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each linux/amd64 `--version` naming the commit, and the same files under their installed names (`.exe` on Windows), one directory per target, as the `acceptance-candidate` artifact (one day) for the [acceptance suite](#acceptance-suite); `GOOS=windows CGO_ENABLED=0 go test -c ./internal/journal` (`go-xos (windows)` runs those tests); selected Go lister/replay image builds and smokes ([swath-replay.md](swath-replay.md#continuous-integration)); the [license gate](#license-gate) runs directly when image builds are deferred | ubuntu-latest |
 | `go-objfile`, `go-reader` | in the nested module's directory (`objfile`, `reader`): `go vet ./...`, `go mod tidy -diff`, `go test -race -count=1 ./...` (the reader's includes `TestNoCloudSDK`: no cloud SDK and not the lister's module in its packages or module graph, read with the workspace off whatever workspace the test runs in) and `CGO_ENABLED=0` builds for the five targets | ubuntu-latest |
 | `go-xos (OS)` | main module: `go vet` and `go test -count=1 -timeout 25m` on the shard table's `--arm64-extra` package list for ordinary PRs, or `./...` for full platform runs; selected nested modules: vet and `go test -count=1 -timeout 15m ./...` on full platform runs | ubuntu-24.04-arm; macos-latest for escalated PRs, main and dispatch |
 | `go-xos (windows-latest, LEG)` | full platform runs on Windows, one leg per row of the [Windows legs](#windows-legs): `go test -count=1 -timeout 25m` once per race shard of the leg; the leg holding `rest` also runs `go vet ./...` and the selected nested modules | windows-latest for escalated PRs, main and dispatch |
@@ -189,7 +199,7 @@ and removes CodeQL PR dependency copies, preserving scanning and main's shared c
 Deletion uses a deduplicated snapshot and creation order, so overlapping main runs cannot delete
 a newer cache just because it belongs to another commit. `ci-gate` does not need housekeeping.
 See [CI architecture](../ops/dev/CI.md#caching) for the policy and trust boundary.
-The DuckDB downloads of the Go image smoke and `release.yml` do not retry.
+The DuckDB downloads of the Go image smoke, `release.yml` and `acceptance.yml` do not retry.
 SeekParquet conformance's `pip install` retries ten times.
 
 No per-push job races `internal/inventory` or `command` on linux/amd64 (`go-nonrace` runs one `inventory` test there, without `-race`): they are raced on arm64 when main is selected and on
@@ -333,6 +343,49 @@ macOS and Windows run the crash, durable and kill matrices without `-race`.
 The object-file S3 dataset test creates an unsynced local fixture when directory sync is unavailable.
 It tests remote reading, verification, ranges and listing, not durable publication; those assertions
 still run on Windows. Application publication/durability behavior is unchanged.
+
+### Acceptance suite
+
+[`acceptance/`](../../acceptance/README.md) is a Go module of its own (`varve.io/swath-acceptance`), outside
+`go.work`, whose scenarios run built binaries as a user does; [CI](../ops/dev/CI.md#the-acceptance-suite) says
+why it is kept apart from the tests above. It reads `SWATH_BIN`, `SWATH_REPLAY_BIN` (absolute paths to the
+executables), `SWATH_EXPECT` (`v0.4.0` or `current`) and a `duckdb` CLI on `PATH`, needs no network and no
+credentials, and fails when an input is missing. [`acceptance.yml`](../../.github/workflows/acceptance.yml)
+runs it in each leg, in `acceptance/` with `GOWORK=off`:
+
+| Feeder | `SWATH_BIN` | `SWATH_REPLAY_BIN` | `SWATH_EXPECT` | Commands |
+|---|---|---|---|---|
+| baseline (`acceptance-baseline`) | the v0.4.0 archive's `swath` | the v0.4.0 archive's `swath-replay` | `v0.4.0` | `go test -count=1 -v -timeout 10m ./...`; on linux-amd64 also `gofmt -l .` (must be empty) and `go vet ./...` |
+| candidate (`acceptance-candidate`) | `go-build`'s `swath` of the commit | the v0.4.0 archive's `swath-replay` | `current` | `go test -count=1 -v -timeout 10m ./...`, then with the commit's `swath-replay` `go test -count=1 -v -timeout 10m -run 'TestScenarios/.*replay' ./...`, which must pass a replay scenario |
+
+| Target | Runner | DuckDB v2.0.0 asset |
+|---|---|---|
+| linux-amd64 | ubuntu-latest | `duckdb-cli-linux-amd64.tar.gz` |
+| linux-arm64 | ubuntu-24.04-arm | `duckdb-cli-linux-arm64.tar.gz` |
+| darwin-arm64 | macos-latest | `duckdb-cli-osx-arm64.tar.gz` |
+| darwin-amd64 | macos-15-intel | `duckdb-cli-osx-amd64.tar.gz` |
+| windows-amd64 | windows-latest | `duckdb-cli-windows-amd64.tar.gz` |
+
+Each leg checks the DuckDB asset against the SHA-256 in the workflow's leg table, downloads the v0.4.0 archive of
+its target (`swath-0.4.0-OS-ARCH.tar.gz`, `.zip` on Windows) with the release's `SHA256SUMS`, whose own SHA-256 the
+workflow pins, checks the archive against it and requires each binary's `--version` to name its build: `0.4.0`
+for the archive's, the commit for `go-build`'s. Go is the toolchain `go.mod` names, set up without a cache. The
+leg keeps its output as the `acceptance-FEEDER-TARGET` artifact (`scenarios.log`, and the candidate's
+`replay-candidate.log`) for 14 days, pass or fail. `gh workflow run acceptance.yml --ref BRANCH` runs the
+baseline (`-f platforms=linux` for linux-amd64 alone); `gh workflow run ci.yml --ref BRANCH` runs both
+feeders on the five targets. Locally, with the binaries built into an absolute directory DIR (`./build.sh -o DIR/swath
+./cmd/swath`, likewise `swath-replay`) and DuckDB on `PATH`:
+
+```bash
+cd acceptance && SWATH_BIN=DIR/swath SWATH_REPLAY_BIN=DIR/swath-replay SWATH_EXPECT=current \
+  GOWORK=off go test -count=1 ./...
+```
+
+`acceptance-tripwire` runs `git diff --no-renames --name-status BASE...HEAD -- acceptance/` between the pull
+request's base and head: any status but `A` (added) fails the job unless the pull request carries the label
+`acceptance-change`, which the owner alone applies ([`AGENTS.md`](../../AGENTS.md#the-acceptance-suite)). A
+rename is a deletion and an addition, so it fails too. `scripts/ci/test-ci-policy.py` runs the step against a
+real history, and the acceptance legs' selection and the workflow's leg table.
 
 ### Nightly
 
