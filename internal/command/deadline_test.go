@@ -342,9 +342,21 @@ func TestUnwritableReportAndStaleErrorJSON(t *testing.T) {
 	}
 }
 
+// testGrace is the shutdown grace the forced-exit tests give the process
+// (SWATH_TEST_GRACE). Each holds its run at a hang point that never
+// returns, so the grace fires whatever its length; a short one spares the
+// test the 15 s of shutdownGrace.
+const testGrace = 2 * time.Second
+
+// graceEnv is a forced-exit test's environment: the process hangs at hang
+// (SWATH_TEST_HANG_AT, "point:n") and its shutdown grace is testGrace.
+func graceEnv(hang string) []string {
+	return append(os.Environ(), "SWATH_TEST_HANG_AT="+hang, "SWATH_TEST_GRACE="+testGrace.String())
+}
+
 // TestDeadlineExitsAfterGrace: a run whose journal sync never returns (a
 // goroutine blocked on I/O that no context reaches) cannot outlive
-// --max-duration: shutdownGrace after the deadline the process exits 124,
+// --max-duration: the grace after the deadline the process exits 124,
 // as it exits after a signal (before, only a signal had the forced exit and
 // the process hung).
 func TestDeadlineExitsAfterGrace(t *testing.T) {
@@ -355,8 +367,9 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 	s := newRowlessService(t)
 	var stderr bytes.Buffer
 	dir := filepath.Join(t.TempDir(), "ds")
-	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--max-duration", "1s")...)...)
-	cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=journal-sync:1")
+	const deadline, hang = time.Second, "journal-sync:1"
+	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--max-duration", deadline.String())...)...)
+	cmd.Env = graceEnv(hang)
 	cmd.Stderr = &stderr
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
@@ -367,16 +380,19 @@ func TestDeadlineExitsAfterGrace(t *testing.T) {
 	var err error
 	select {
 	case err = <-done:
-	case <-time.After(shutdownGrace + 30*time.Second):
+	case <-time.After(deadline + testGrace + forcedAllowance + 10*time.Second):
 		cmd.Process.Kill()
 		<-done
-		t.Fatalf("still running %s after the deadline: %s", time.Since(start), stderr.String())
+		t.Fatalf("still running %s after the start: %s", time.Since(start), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), hangMarker(hang)) {
+		t.Fatalf("the journal sync never hung: %s", stderr.String())
 	}
 	ee, ok := err.(*exec.ExitError)
 	if !ok || ee.ExitCode() != exitDeadline {
 		t.Fatalf("exit %v, want %d: %s", err, exitDeadline, stderr.String())
 	}
-	if d := time.Since(start); d < shutdownGrace || !strings.Contains(stderr.String(), "still stopping (--max-duration)") {
+	if d := time.Since(start); d < deadline+testGrace || !strings.Contains(stderr.String(), "still stopping (--max-duration)") {
 		t.Fatalf("exited after %s without the forced exit: %s", d, stderr.String())
 	}
 	var o outcome

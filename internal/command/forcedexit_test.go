@@ -6,11 +6,16 @@
 package command
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -71,6 +76,54 @@ func fillPipe(t *testing.T, w *os.File) {
 	}
 }
 
+// sawLine reads r until the line marker and reports whether it came
+// before r ended.
+func sawLine(r io.Reader, marker string) bool {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		if sc.Text() == marker {
+			return true
+		}
+	}
+	return false
+}
+
+// holdWatch is a child's stderr that closes held once the hang point
+// spec's marker line (hangMarker) is written: the run is then held there.
+type holdWatch struct {
+	syncBuffer
+	marker string
+	held   chan struct{}
+	once   sync.Once
+}
+
+func newHoldWatch(spec string) *holdWatch {
+	return &holdWatch{marker: hangMarker(spec) + "\n", held: make(chan struct{})}
+}
+
+func (h *holdWatch) Write(p []byte) (int, error) {
+	n, err := h.syncBuffer.Write(p)
+	if strings.Contains(h.String(), h.marker) {
+		h.once.Do(func() { close(h.held) })
+	}
+	return n, err
+}
+
+// gateGrace gives cmd's process the grace gate (SWATH_TEST_GRACE_GATE): its
+// grace starts only once the returned open is called, when the test's state
+// is built, however long the run took to reach it.
+func gateGrace(t *testing.T, cmd *exec.Cmd) (open func()) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close(); w.Close() })
+	cmd.ExtraFiles = append(cmd.ExtraFiles, r)
+	cmd.Env = append(cmd.Env, fmt.Sprintf("SWATH_TEST_GRACE_GATE=%d", 2+len(cmd.ExtraFiles)))
+	return func() { w.Close() }
+}
+
 // TestForcedExitWithFullStderr (durability review): the
 // process's stderr is a pipe nobody drains, filled after startup, and the
 // journal sync hangs. A deadline (124) and a stall (75) still end the
@@ -79,6 +132,9 @@ func fillPipe(t *testing.T, w *os.File) {
 // (the notice, the warnings, a dump that falls back to stderr, the
 // timeout line) is bounded, and the exit has a backstop. Before, the
 // forced path's first stderr write blocked and the process never exited.
+// The pipe is filled once the sync hangs (its marker read from the pipe),
+// and only then does the grace start (gateGrace), so the forced path finds
+// it full.
 func TestForcedExitWithFullStderr(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -105,19 +161,36 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer r.Close()
+			defer w.Close()
+			const hang = "journal-sync:1"
 			dir := filepath.Join(t.TempDir(), "ds")
 			cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, tc.flags...)...)...)
-			cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=journal-sync:1")
+			cmd.Env = graceEnv(hang)
 			cmd.Stderr = w
+			open := gateGrace(t, cmd)
 			start := time.Now()
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
-			time.Sleep(200 * time.Millisecond) // after startup
-			fillPipe(t, w)
 			done := make(chan error, 1)
 			go func() { done <- cmd.Wait() }()
-			limit := tc.wait + shutdownGrace + forcedAllowance + 3*time.Second
+			limit := tc.wait + testGrace + forcedAllowance + 3*time.Second
+			held := make(chan bool, 1)
+			go func() { held <- sawLine(r, hangMarker(hang)) }()
+			select {
+			case ok := <-held:
+				if !ok {
+					t.Fatal("stderr closed before the journal sync hung")
+				}
+			case err := <-done:
+				t.Fatalf("exited (%v) before the journal sync hung", err)
+			case <-time.After(limit + 10*time.Second):
+				cmd.Process.Kill()
+				<-done
+				t.Fatal("the journal sync never hung")
+			}
+			fillPipe(t, w)
+			open()
 			select {
 			case err = <-done:
 			case <-time.After(limit + 10*time.Second):
@@ -130,8 +203,8 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 			if !ok || ee.ExitCode() != tc.code {
 				t.Fatalf("exit %v, want %d", err, tc.code)
 			}
-			if d := time.Since(start); d < shutdownGrace || d > limit {
-				t.Fatalf("exited after %s, want between %s and %s", d.Round(time.Millisecond), shutdownGrace, limit)
+			if d := time.Since(start); d < tc.wait+testGrace || d > limit {
+				t.Fatalf("exited after %s, want between %s and %s", d.Round(time.Millisecond), tc.wait+testGrace, limit)
 			}
 			var o outcome
 			readJSON(t, filepath.Join(dir, errorName), &o)
@@ -148,6 +221,7 @@ func TestForcedExitWithFullStderr(t *testing.T) {
 // the report (--report) says committed and complete with the run's
 // statistics, and no error.json is left. Before, the forced path built an
 // unstarted report (status failed, complete false) and wrote error.json.
+// SIGTERM is sent once the run report's write hangs, after the commit.
 func TestForcedExitAfterCommit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -160,31 +234,37 @@ func TestForcedExitAfterCommit(t *testing.T) {
 	s := newRowlessService(t)
 	dir := filepath.Join(t.TempDir(), "ds")
 	report := filepath.Join(t.TempDir(), "report.json")
+	const hang = "run-report:1"
+	stderr := newHoldWatch(hang)
 	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--report", report)...)...)
-	cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=run-report:1")
+	cmd.Env = graceEnv(hang)
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			cmd.Process.Kill()
-			<-done
-			t.Fatal("no commit within 30 s")
-		}
+	select {
+	case <-stderr.held:
+	case err := <-done:
+		t.Fatalf("exited (%v) before the run report hung: %s", err, stderr.String())
+	case <-time.After(30 * time.Second):
+		cmd.Process.Kill()
+		<-done
+		t.Fatalf("the run report did not hang within 30 s: %s", stderr.String())
 	}
-	time.Sleep(100 * time.Millisecond) // into the blocked report write
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+		cmd.Process.Kill()
+		<-done
+		t.Fatalf("the run report hung before the commit: %v", err)
+	}
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
 	var err error
 	select {
 	case err = <-done:
-	case <-time.After(shutdownGrace + forcedAllowance + 10*time.Second):
+	case <-time.After(testGrace + forcedAllowance + 10*time.Second):
 		cmd.Process.Kill()
 		<-done
 		t.Fatal("still running after the forced exit's limit")
@@ -287,23 +367,36 @@ func TestForcedExitAtCommit(t *testing.T) {
 // with the deadline's code within the grace plus forcedAllowance: the
 // backstop is armed before anything that waits. Before, the forced exit
 // waited for that lock before arming it and never exited (eighth review).
+// The grace starts only once the classification holds the lock (gateGrace),
+// so the forced exit never takes the result first.
 func TestForcedExitBackstopFirst(t *testing.T) {
 	bin := buildSwath(t)
 	t.Parallel()
 	s := newRowlessService(t)
 	s.set("hung")
 	dir := filepath.Join(t.TempDir(), "ds")
-	const deadline = time.Second
+	const deadline, hang = time.Second, "classify:1"
+	stderr := newHoldWatch(hang)
 	cmd := exec.Command(bin, append([]string{"list"}, s.args(dir, "--max-duration", deadline.String())...)...)
-	cmd.Env = append(os.Environ(), "SWATH_TEST_HANG_AT=classify:1")
+	cmd.Env = graceEnv(hang)
+	cmd.Stderr = stderr
+	open := gateGrace(t, cmd)
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	limit := deadline + shutdownGrace + forcedAllowance + 3*time.Second
+	limit := deadline + testGrace + forcedAllowance + 3*time.Second
+	select {
+	case <-stderr.held:
+		open()
+	case <-time.After(limit + 10*time.Second):
+		cmd.Process.Kill()
+		cmd.Wait()
+		t.Fatalf("the classification never hung: %s", stderr.String())
+	}
 	code, took := waitExit(t, cmd, start, limit)
-	if code != exitDeadline || took < shutdownGrace || took > limit {
-		t.Fatalf("exit %d after %s, want %d between %s and %s", code, took.Round(time.Millisecond), exitDeadline, shutdownGrace, limit)
+	if code != exitDeadline || took < deadline+testGrace || took > limit {
+		t.Fatalf("exit %d after %s, want %d between %s and %s", code, took.Round(time.Millisecond), exitDeadline, deadline+testGrace, limit)
 	}
 	if _, err := os.Stat(filepath.Join(dir, errorName)); !os.IsNotExist(err) {
 		t.Fatalf("an outcome written without the run's result: %v", err)

@@ -64,14 +64,21 @@ import (
 )
 
 // shutdownGrace bounds the time a stopped run (a signal, the deadline, a
-// stall) spends stopping.
-const shutdownGrace = 15 * time.Second
+// stall) spends stopping. A variable only for the process tests, which set
+// a shorter one (SWATH_TEST_GRACE, testHooks); the release binary has no
+// way to change it.
+var shutdownGrace = 15 * time.Second
 
 // exitAfterGrace exits the process with code if it is still running
 // shutdownGrace after a stop began: blocked disk I/O or code that does not
 // watch its context cannot outlive a signal, --max-duration or the stall
 // timeout. Main sets it; tests run the command in process and leave it nil.
 var exitAfterGrace func(code int, why string)
+
+// graceGate, nil in the release binary, holds the start of the grace until
+// a test has built the state its forced exit needs (SWATH_TEST_GRACE_GATE,
+// testHooks).
+var graceGate func()
 
 // host is the program this copy of swath is built into, as Main was given
 // it; empty in the swath binary.
@@ -119,6 +126,7 @@ func Main(ctx context.Context, hostName string, args []string, stdout, stderr io
 	// A closed stdout pipe is an error to the writer, not a fatal signal:
 	// a text stream whose reader went away ends with exit 0.
 	signal.Ignore(syscall.SIGPIPE)
+	testHooks() // before anything that reads shutdownGrace
 	finished := make(chan struct{})
 	defer close(finished)
 	// The forced exit is the one path on which Main ends the process
@@ -126,6 +134,9 @@ func Main(ctx context.Context, hostName string, args []string, stdout, stderr io
 	// whatever blocks it.
 	exitAfterGrace = func(code int, why string) {
 		go func() {
+			if graceGate != nil {
+				graceGate()
+			}
 			select {
 			case <-finished:
 			case <-time.After(shutdownGrace):
@@ -175,7 +186,6 @@ func Main(ctx context.Context, hostName string, args []string, stdout, stderr io
 		}
 	}()
 	statusOnSignal()
-	testHooks()
 	return conclude(dispatch(ctx, args, stdout))
 }
 
