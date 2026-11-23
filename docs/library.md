@@ -355,7 +355,7 @@ library guarantees:
   keyed with a final `/` as in `logs/2026/`, `file`, `symlink`, `other` for a FIFO, socket or device, or
   `unknown` when its stat fails) and what `lstat` gives of it: size, space on disk, modification time,
   device, inode and link count. The prefix's own directory comes back as the `Self` of the level's first page,
-  beside its children: `Limit` bounds the children only. A directory on another device is listed like any
+  beside its children: `Limit` bounds the children only. A directory on another device (or another macOS volume) is listed like any
   other, and a page of it fails with `listing.ErrOtherDevice`.
 - **Pages continue by key.** A token resumes the level after the last key it read, so a directory that changes
   between pages repeats no key, keeps byte order across pages and skips no name that stayed; a name added

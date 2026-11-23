@@ -7,11 +7,19 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Added
 
+- Local inventories made with `--one-file-system` record the directories where traversal stopped in
+  `coverage.filesystem_boundaries`, including with `--no-dirs`. The reader exposes the optional record;
+  older datasets remain readable.
+
 - A dataset's manifest records the build that wrote it (`extensions.swath.written_by`: tool, version and
   revision). The member is optional: older readers ignore it and older manifests open without it.
   `swath show -v` prints it.
 
 ### Changed
+
+- On macOS, `--one-file-system` and the live local library also check the containing volume of each
+  opened directory. A scan rooted at `/` stops at APFS Data even when its stat device matches System's;
+  Linux retains device-based boundaries. Ordinary `dev` and `inode` columns are unchanged (#502).
 
 - Package `github.com/varveio/swath/command` (experimental) is public again: a Go program can build the swath
   command line into its own binary and run it in a child process dedicated to the call with

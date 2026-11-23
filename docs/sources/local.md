@@ -32,12 +32,21 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 | `--metadata names\|stat\|statx` | what is read per entry: names only (no size or time), `stat` (the default), or `statx`, which adds `created_at` (Linux) |
 | `--no-dirs` | omit the directories' rows (they are still walked) |
 | `--no-link-target` | do not read symbolic links' targets |
-| `--one-file-system` | do not walk into a directory on another device (a mount point), as `du -x` and `find -xdev`; its row is kept |
+| `--one-file-system` | stop at a filesystem boundary; on macOS, also stop at a different volume even when its device number matches; keep the directory row |
 
 `swath du` leads with the space on disk, as `du` does, and also takes `-A`, `--apparent-size` (the files'
 lengths instead), `--allocated` (require the space on disk) and `-l`, `--count-links`
 (count a hard-linked file under each of its names; by default it counts once), and `--max-inodes`, the most
 hard-linked files it remembers ([How sizes are counted](../totals.md#how-sizes-are-counted)).
+
+On Linux, `--one-file-system` compares device numbers, like `du -x` and `find -xdev`;
+a bind mount on the same device is still traversed. On macOS it also checks the containing
+volume of each opened directory. A scan of `/` therefore stops at APFS Data through both
+firmlinks such as `/Users` and `/System/Volumes/Data`, even when their ordinary device numbers
+match System's. Selecting a directory on Data as the root scans that volume normally.
+A volume identity lookup failure prevents descent and counts as unreadable, not as a confirmed boundary.
+The dataset records the [directories where traversal stopped](../dataset.md#filesystem-boundaries),
+including with `--no-dirs`; ordinary `dev` and `inode` columns keep their original stat values.
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole directory (`coverage.filters` holds
 `no_dirs` or `one_file_system`). `--one-file-system` and `--allocated` need each entry's stat: they are refused

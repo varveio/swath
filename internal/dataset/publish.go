@@ -304,13 +304,14 @@ type Scope struct {
 // point-in-time snapshot: entries that changed while it ran may or may not
 // be in it.
 type Coverage struct {
-	Complete          bool            `json:"complete"`    // the listing reached the end of the scope, and unreadable is 0
-	StopReason        string          `json:"stop_reason"` // "end_of_scope" (the end of the scope reached), or why it stopped early
-	Unreadable        int64           `json:"unreadable"`  // entries missing because they could not be read
-	Exclusions        []string        `json:"exclusions"`
-	Filters           []reader.Filter `json:"filters"`
-	ListingStartedAt  jsontime.Time   `json:"listing_started_at"`
-	ListingFinishedAt jsontime.Time   `json:"listing_finished_at"`
+	FilesystemBoundaries *reader.FilesystemBoundaries `json:"filesystem_boundaries,omitempty"`
+	Complete             bool                         `json:"complete"`    // the listing reached the end of the scope, and unreadable is 0
+	StopReason           string                       `json:"stop_reason"` // "end_of_scope" (the end of the scope reached), or why it stopped early
+	Unreadable           int64                        `json:"unreadable"`  // entries missing because they could not be read
+	Exclusions           []string                     `json:"exclusions"`
+	Filters              []reader.Filter              `json:"filters"`
+	ListingStartedAt     jsontime.Time                `json:"listing_started_at"`
+	ListingFinishedAt    jsontime.Time                `json:"listing_finished_at"`
 }
 
 // Collected is what a listing read beyond its schema's columns that every

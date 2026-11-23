@@ -94,16 +94,21 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   open was, plus, past the limit, one per name between the ancestor and the directory, which on a deep
   narrow tree grows with the square of its depth. With `--one-file-system` each directory opened below the
   root, and each intermediate on the way from an ancestor, is `fstat`ed against the root's device; the first
-  on another device is not walked and that is no error, as at a mount point (`other_device_dirs`). The
+  on another device is not walked and that is no error, as at a mount point (`other_device_dirs`).
+  On macOS, `fstatfs` also compares the containing volume (`f_fsid`) with the opened root's, before reading
+  entries; equal stat devices with different volume IDs stop as `other_volume_dirs`.
+  `filesystem_boundary` names the mechanism (`device` or `device_and_fsid`). A failed volume lookup
+  prevents descent, increments `open_errors` and its subset `filesystem_identity_errors`, and reduces
+  coverage; it is never recorded as a boundary. The
   report's `dir_opens` counts `opened`, `redescents` (opens from an ancestor), `refused` (directories not
   kept), `failed` by reason (`not_found`, `permission`, `not_directory`, `symlink`, `name_too_long`,
-  `other_device`, `other`), `peak_kept` and `max_kept`.
+  `other_device`, `other_volume`, `filesystem_identity`, `other`), `peak_kept` and `max_kept`.
 - **A held root** (`OpenDir`, Linux and macOS; no command option uses it). A caller that opened the root
   itself (`O_DIRECTORY`, not following a link) hands the open file to the provider, which never resolves the
   root by a path: it lists the directory at a prefix below it (`""`, or a directory key `a/b/`, keys staying
   relative to the root), opening that directory and every one below it relative to the held descriptor, one
   name at a time with `O_NOFOLLOW` (the root itself as `.`, so the walk has its own read offset), each checked
-  against the root's device, the prefix's ancestors included (`OneFilesystem` is set; a stat tier is
+  against the root's device and, on macOS, its volume, the prefix's ancestors included (`OneFilesystem` is set; a stat tier is
   required). The prefix's own entry is not listed (`Lookup` answers it). The caller keeps the file open until
   every range is expanded or disposed. `Lookup` resolves one key the same way: `ENOENT` or `ENOTDIR` at the
   key, or at a directory on the way whose name is no symbolic link (`fstatat` tells), is absent; a symbolic link at the key is present as itself; a symbolic link or
@@ -169,7 +174,10 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   is not valid UTF-8 is listed with its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on Windows), and `emit` keeps a `dir` row whose `dev` differs but hands on no child range for it
-  (counter `other_device_dirs`); `Report` adds `one_file_system` to the coverage's filters, so a dataset says it
+  (counter `other_device_dirs`). On macOS the opened-handle volume check also stops same-device
+  foreign volumes. `Report` records each observed stop in
+  [`coverage.filesystem_boundaries`](../../dataset.md#filesystem-boundaries), even without directory rows,
+  and adds `one_file_system` to the coverage's filters, so a dataset says it
   stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no `dir` row, and
   `Report` adds `no_dirs` to the filters likewise. `Report` names the tier and, where a stat tier reads them
   (`--no-link-target` off), `link_target` as collected (the manifest's `collected`).

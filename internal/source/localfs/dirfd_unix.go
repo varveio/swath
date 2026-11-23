@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strings"
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
@@ -115,6 +116,12 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	var fd int
 	if r.at == nil {
 		fd, err = longpath.OpenFD(p.root, unix.O_RDONLY|unix.O_DIRECTORY)
+		if err == nil && p.opt.OneFilesystem {
+			if err = p.checkVolume(fd); err != nil {
+				unix.Close(fd)
+				return nil, false, fmt.Errorf("the root's filesystem changed or cannot be checked: %w", err)
+			}
+		}
 	} else {
 		if r.below > 1 && r.at != p.held {
 			st.DirOpens.Redescents++
@@ -138,14 +145,28 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	if r.at != p.held {
 		st.DirOpens.fail(reason)
 	}
+	key := r.prefix
+	var failure *descentFailure
+	if errors.As(err, &failure) && (errors.Is(err, errOtherDevice) || errors.Is(err, errOtherVolume)) {
+		names := longpath.Components(r.prefix)
+		key = strings.Join(names[:failure.level], "/") + "/"
+	}
 	p.unread(st, r.prefix, unreadReason(err))
 	switch {
+	case errors.Is(err, errOtherVolume):
+		st.OtherVolume++
+		p.noteBoundary(key)
+		return nil, false, nil
 	case errors.Is(err, errOtherDevice):
 		st.OtherDevice++
+		p.noteBoundary(key)
 		return nil, false, nil
 	case errors.Is(err, errSymlink):
 		st.note(&st.Unsafe, r.path, err)
 	default:
+		if errors.Is(err, errFilesystemIdentity) {
+			st.FilesystemIdentityErrors++
+		}
 		st.note(&st.OpenErrors, r.path, err)
 	}
 	p.unreadableDir(r)
@@ -175,12 +196,24 @@ func (p *Provider) descend(ctx context.Context, r Range) (int, error) {
 			unix.Close(dir)
 		}
 		if err != nil {
-			return -1, fmt.Errorf("level %d below the root: %w", i+1, err)
+			return -1, &descentFailure{level: i + 1, err: err}
 		}
 		dir = fd
 	}
 	return dir, nil
 }
+
+// Preserve the failed component for coverage; the queued range can be
+// several levels below a directory replaced since it was enumerated.
+type descentFailure struct {
+	level int
+	err   error
+}
+
+func (e *descentFailure) Error() string {
+	return fmt.Sprintf("level %d below the root: %v", e.level, e.err)
+}
+func (e *descentFailure) Unwrap() error { return e.err }
 
 // openAt opens the directory name in dir, never following a symbolic
 // link: to read it if last, else only to resolve names in it
@@ -199,11 +232,12 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 		return fd, nil
 	}
 	var s unix.Stat_t
-	if err := unix.Fstat(fd, &s); err != nil || int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
+	err = unix.Fstat(fd, &s)
+	if err == nil {
+		err = p.checkFilesystem(fd, int64(s.Dev)) //nolint:unconvert // Dev's type differs by platform
+	}
+	if err != nil {
 		unix.Close(fd)
-		if err == nil {
-			err = errOtherDevice
-		}
 		return -1, err
 	}
 	return fd, nil
@@ -256,6 +290,10 @@ func classifyOpen(dir int, name string, err error) error {
 // LongPaths.Failed.
 func openReason(err error) string {
 	switch {
+	case errors.Is(err, errOtherVolume):
+		return "other_volume"
+	case errors.Is(err, errFilesystemIdentity):
+		return "filesystem_identity"
 	case errors.Is(err, errOtherDevice):
 		return "other_device"
 	case errors.Is(err, errSymlink):

@@ -56,6 +56,10 @@ func OpenDir(root *os.File, prefix string, opt Options) (*Opened, error) {
 		prefix:   prefix,
 	}
 	p.keep.limit = keepLimit()
+	var err error
+	if p.fsid, err = readFilesystemID(int(root.Fd())); err != nil {
+		return nil, fmt.Errorf("localfs: the root's filesystem identity: %w", err)
+	}
 	b, err := bind.Provider[Range, Entry](p, &Schema)
 	if err != nil {
 		return nil, err
@@ -160,10 +164,12 @@ func (p *Provider) resolve(ctx context.Context, names []string) (int, *LookupRes
 		switch err := lookupFstat(fd, &s); {
 		case err != nil:
 			r = lookupUnknown(err)
-		case int64(s.Dev) != p.dev: //nolint:unconvert // Dev's type differs by platform
-			r = lookupUnknown(fmt.Errorf("level %d below the root: %w", i+1, errOtherDevice))
 		default:
-			continue
+			if err := p.checkFilesystem(fd, int64(s.Dev)); err != nil { //nolint:unconvert // Dev's type differs by platform
+				r = lookupUnknown(levelError(i+1, err))
+			} else {
+				continue
+			}
 		}
 		unix.Close(fd)
 		return -1, &r, nil

@@ -222,9 +222,9 @@ func (p *Provider) openLevel(ctx context.Context, names []string) (int, unix.Sta
 		unix.Close(fd)
 		return -1, s, unreadReason(levelError(len(names), err))
 	}
-	if int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
+	if err := p.checkFilesystem(fd, int64(s.Dev)); err != nil { //nolint:unconvert // Dev's type differs by platform
 		unix.Close(fd)
-		return -1, s, fmt.Errorf("%w: %w", listing.ErrOtherDevice, levelError(len(names), errOtherDevice))
+		return -1, s, unreadReason(levelError(len(names), err))
 	}
 	return fd, s, nil
 }

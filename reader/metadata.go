@@ -110,13 +110,27 @@ type Scope struct {
 // point-in-time snapshot: entries that changed while it ran may or may
 // not be in it.
 type Coverage struct {
-	Complete          *bool      `json:"complete"`
-	StopReason        *string    `json:"stop_reason"`
-	Unreadable        *int64     `json:"unreadable"`
-	Exclusions        []string   `json:"exclusions"`
-	Filters           []Filter   `json:"filters"`
-	ListingStartedAt  *time.Time `json:"listing_started_at"`
-	ListingFinishedAt *time.Time `json:"listing_finished_at"`
+	FilesystemBoundaries *FilesystemBoundaries `json:"filesystem_boundaries,omitempty"`
+	Complete             *bool                 `json:"complete"`
+	StopReason           *string               `json:"stop_reason"`
+	Unreadable           *int64                `json:"unreadable"`
+	Exclusions           []string              `json:"exclusions"`
+	Filters              []Filter              `json:"filters"`
+	ListingStartedAt     *time.Time            `json:"listing_started_at"`
+	ListingFinishedAt    *time.Time            `json:"listing_finished_at"`
+}
+
+// FilesystemBoundaries records observed stops of a one-filesystem walk.
+// KeysBase64 contains base64-encoded, root-relative directory keys ending
+// in '/'. The directory itself may have a row; its descendants were not
+// enumerated at this stop. TotalCount counts stop decisions (a changing
+// ancestor may be encountered again). Complete says all those decisions
+// have a retained key, not that the listing reached the end of its scope.
+// Missing boundary metadata is unknown, not an empty set of boundaries.
+type FilesystemBoundaries struct {
+	KeysBase64 []string `json:"keys_base64"`
+	TotalCount int64    `json:"total_count"`
+	Complete   bool     `json:"complete"`
 }
 
 // Filter is one filter that limited a listing: the option's name in snake

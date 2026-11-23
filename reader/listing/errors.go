@@ -31,8 +31,8 @@ var (
 	// ErrNotDirectory is a local prefix that names an entry other than a
 	// directory.
 	ErrNotDirectory = errors.New("listing: not a directory")
-	// ErrOtherDevice is a local prefix on another device than the
-	// source's root.
+	// ErrOtherDevice is a local prefix beyond the source's filesystem
+	// boundary: another device, or on macOS another containing volume.
 	ErrOtherDevice = errors.New("listing: on another device")
 	// ErrAuth is a credential that does not load or that the store
 	// refuses, or an access denial.
