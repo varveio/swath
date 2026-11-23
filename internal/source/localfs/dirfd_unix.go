@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strings"
 	"sync/atomic"
 
 	"golang.org/x/sys/unix"
@@ -138,6 +137,10 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 		return nil, false, err
 	}
 
+	if r.prefix == "" {
+		return nil, false, fmt.Errorf("the root directory cannot be opened or checked: %w", err)
+	}
+
 	reason := openReason(err)
 	if long {
 		st.LongPaths.fail(reason)
@@ -145,21 +148,13 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	if r.at != p.held {
 		st.DirOpens.fail(reason)
 	}
-	key := r.prefix
-	var failure *descentFailure
-	if errors.As(err, &failure) && (errors.Is(err, errOtherDevice) || errors.Is(err, errOtherVolume)) {
-		names := longpath.Components(r.prefix)
-		key = strings.Join(names[:failure.level], "/") + "/"
-	}
 	p.unread(st, r.prefix, unreadReason(err))
 	switch {
 	case errors.Is(err, errOtherVolume):
 		st.OtherVolume++
-		p.noteBoundary(key)
 		return nil, false, nil
 	case errors.Is(err, errOtherDevice):
 		st.OtherDevice++
-		p.noteBoundary(key)
 		return nil, false, nil
 	case errors.Is(err, errSymlink):
 		st.note(&st.Unsafe, r.path, err)
@@ -196,24 +191,12 @@ func (p *Provider) descend(ctx context.Context, r Range) (int, error) {
 			unix.Close(dir)
 		}
 		if err != nil {
-			return -1, &descentFailure{level: i + 1, err: err}
+			return -1, fmt.Errorf("level %d below the root: %w", i+1, err)
 		}
 		dir = fd
 	}
 	return dir, nil
 }
-
-// Preserve the failed component for coverage; the queued range can be
-// several levels below a directory replaced since it was enumerated.
-type descentFailure struct {
-	level int
-	err   error
-}
-
-func (e *descentFailure) Error() string {
-	return fmt.Sprintf("level %d below the root: %v", e.level, e.err)
-}
-func (e *descentFailure) Unwrap() error { return e.err }
 
 // openAt opens the directory name in dir, never following a symbolic
 // link: to read it if last, else only to resolve names in it

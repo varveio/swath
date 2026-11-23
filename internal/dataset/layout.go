@@ -67,11 +67,11 @@ const MaxParts = 100_000
 // ManifestLimits bound what swath's readers (show, --seed-from) accept of
 // a manifest (seekparquet.ParseManifest), so that every dataset swath can
 // write reads back: MaxParts parts, each priced at manifestKeyBytes for
-// both bounds (base64) plus 1 KiB for the rest of its entry, and 3 MiB for
-// the rest of the manifest (bounded filesystem boundaries included). About 1.1 GiB: the module's default, 64 MiB,
+// both bounds (base64) plus 1 KiB for the rest of its entry, and 1 MiB for
+// the rest of the manifest. About 1.1 GiB: the module's default, 64 MiB,
 // refuses 30,000 parts of 1,024-byte keys.
 var ManifestLimits = seekparquet.Limits{Parts: MaxParts,
-	ManifestBytes: MaxParts*(2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes))+1<<10) + 3<<20}
+	ManifestBytes: MaxParts*(2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes))+1<<10) + 1<<20}
 
 // manifestKeyBytes is the longest key ManifestLimits provides for: the
 // object stores' 1,024-byte cap, and a local path at Linux's PATH_MAX.

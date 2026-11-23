@@ -45,8 +45,8 @@ volume of each opened directory. A scan of `/` therefore stops at APFS Data thro
 firmlinks such as `/Users` and `/System/Volumes/Data`, even when their ordinary device numbers
 match System's. Selecting a directory on Data as the root scans that volume normally.
 A volume identity lookup failure prevents descent and counts as unreadable, not as a confirmed boundary.
-The dataset records the [directories where traversal stopped](../dataset.md#filesystem-boundaries),
-including with `--no-dirs`; ordinary `dev` and `inode` columns keep their original stat values.
+Ordinary `dev` and `inode` columns keep their original stat values. The dataset records the
+`one_file_system` filter, but does not identify individual stopped directories.
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole directory (`coverage.filters` holds
 `no_dirs` or `one_file_system`). `--one-file-system` and `--allocated` need each entry's stat: they are refused

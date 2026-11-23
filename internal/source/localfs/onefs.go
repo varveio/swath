@@ -4,13 +4,9 @@
 package localfs
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
-	"slices"
-
-	"github.com/varveio/swath/reader"
 )
 
 // Replaced by tests to exercise volume boundaries on either Unix platform.
@@ -37,36 +33,6 @@ func (p *Provider) checkFilesystem(fd int, dev int64) error {
 		return errOtherDevice
 	}
 	return p.checkVolume(fd)
-}
-
-const (
-	maxBoundaryKeys  = 4096
-	maxBoundaryBytes = 1 << 20
-)
-
-// noteBoundary records the traversal decision, independently of whether a
-// row filter keeps the boundary's own row. Keys are copied out of row arenas.
-func (p *Provider) noteBoundary(key string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.boundaryCount++
-	n := base64.StdEncoding.EncodedLen(len(key))
-	if len(p.boundaryKeys) < maxBoundaryKeys && p.boundaryBytes+n <= maxBoundaryBytes {
-		p.boundaryKeys = append(p.boundaryKeys, base64.StdEncoding.EncodeToString([]byte(key)))
-		p.boundaryBytes += n
-	}
-}
-
-func (p *Provider) filesystemBoundaries() *reader.FilesystemBoundaries {
-	if !p.opt.OneFilesystem {
-		return nil
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	keys := append([]string{}, p.boundaryKeys...)
-	slices.Sort(keys)
-	return &reader.FilesystemBoundaries{KeysBase64: keys, TotalCount: p.boundaryCount,
-		Complete: int64(len(keys)) == p.boundaryCount}
 }
 
 // rootDevice is the device of the root fi describes, which

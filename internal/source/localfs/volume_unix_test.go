@@ -7,7 +7,6 @@ package localfs
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -66,6 +65,8 @@ func TestVolumeBoundaryWalk(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					var unread unreads
+					unread.to(o)
 					c := &collect{}
 					if count {
 						err = countOpened(context.Background(), o, 4, c)
@@ -87,11 +88,12 @@ func TestVolumeBoundaryWalk(t *testing.T) {
 					if !slices.Equal(keys, want) {
 						t.Fatalf("keys %q, want %q (same-device volume must not be entered)", keys, want)
 					}
+					if got := unread.sorted(); !slices.Equal(got, []string{"other_device m/"}) {
+						t.Fatalf("stop notifications %q", got)
+					}
 					cov := o.Report().Coverage
-					b := cov.FilesystemBoundaries
-					if !cov.Complete || cov.Unreadable != 0 || b == nil || !b.Complete || b.TotalCount != 1 ||
-						!slices.Equal(b.KeysBase64, []string{base64.StdEncoding.EncodeToString([]byte("m/"))}) {
-						t.Fatalf("coverage %+v boundaries %+v", cov, b)
+					if !cov.Complete || cov.Unreadable != 0 {
+						t.Fatalf("boundary counted as unreadable: %+v", cov)
 					}
 					st := o.p.Stats()
 					if st.OtherVolume != 1 || st.OtherDevice != 0 || st.PrunedDirs != 0 || st.Errors() != 0 || st.FilesystemBoundary != filesystemMechanism {
@@ -173,7 +175,7 @@ func TestVolumeIdentityFailure(t *testing.T) {
 		t.Fatalf("keys %q: failed identity must prevent descent", keys)
 	}
 	cov, st := o.Report().Coverage, o.p.Stats()
-	if cov.Complete || cov.Unreadable != 1 || cov.FilesystemBoundaries.TotalCount != 0 || st.OpenErrors != 1 || st.FilesystemIdentityErrors != 1 || st.OtherVolume != 0 {
+	if cov.Complete || cov.Unreadable != 1 || st.OpenErrors != 1 || st.FilesystemIdentityErrors != 1 || st.OtherVolume != 0 {
 		t.Fatalf("identity failure mislabeled: coverage %+v, stats %+v", cov, st)
 	}
 	live, err := OpenLive(holdDir(t, root))
@@ -202,16 +204,15 @@ func TestVolumeBoundaryReopen(t *testing.T) {
 	if _, ok, err := o.p.openRange(context.Background(), r, &st); ok || err != nil {
 		t.Fatalf("open: %v %v", ok, err)
 	}
-	b := o.Report().Coverage.FilesystemBoundaries
-	if b.TotalCount != 1 || !slices.Equal(b.KeysBase64, []string{"bS8="}) {
-		t.Fatalf("wrong boundary %+v", b)
+	if st.OtherVolume != 1 {
+		t.Fatalf("redescent did not stop at foreign volume: %+v", st)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, ok, err := o.p.openRange(ctx, r, &st); ok || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled descent: %v %v", ok, err)
 	}
-	if got := o.Report().Coverage.FilesystemBoundaries.TotalCount; got != 1 {
+	if got := st.OtherVolume; got != 1 {
 		t.Fatalf("cancelled descent recorded a boundary: %d", got)
 	}
 }
@@ -234,7 +235,38 @@ func TestVolumeBoundaryReplacement(t *testing.T) {
 	if _, ok, err := o.p.openRange(context.Background(), r, &st); ok || err != nil {
 		t.Fatalf("replacement entered: %v %v", ok, err)
 	}
-	if calls.Load() != 1 || st.OtherVolume != 1 || o.Report().Coverage.FilesystemBoundaries.KeysBase64[0] != "cGVuZGluZy8=" {
+	if calls.Load() != 1 || st.OtherVolume != 1 {
 		t.Fatalf("replacement not identified: %+v", st)
+	}
+}
+
+// A root identity failure is fatal, for owned and held roots alike.
+func TestVolumeRootMismatch(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held=%v", held), func(t *testing.T) {
+			root := t.TempDir()
+			var p *Provider
+			if held {
+				p = mustOpenDir(t, holdDir(t, root), Options{}).p
+			} else {
+				var err error
+				p, err = New(root, Options{OneFilesystem: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			p.fsid[0]++
+			var st Stats
+			fd, ok, err := p.openRange(context.Background(), p.Root(), &st)
+			if fd != nil {
+				fd.release()
+			}
+			if ok || !errors.Is(err, errOtherVolume) {
+				t.Fatalf("root mismatch was not fatal: ok=%v err=%v", ok, err)
+			}
+			if st.OtherVolume != 0 || st.OtherDevice != 0 {
+				t.Fatalf("root reported as a skipped child: %+v", st)
+			}
+		})
 	}
 }

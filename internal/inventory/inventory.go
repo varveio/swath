@@ -925,7 +925,6 @@ func manifestMeta(s schema.Info, loc source.Locator, rep *source.Report, started
 	}
 	m.Coverage.Complete, m.Coverage.StopReason, m.Coverage.Unreadable = c.Complete, c.StopReason, c.Unreadable
 	m.Coverage.Exclusions, m.Coverage.Filters = c.Exclusions, c.Filters
-	m.Coverage.FilesystemBoundaries = c.FilesystemBoundaries
 	m.Collected = dataset.Collected{Metadata: rep.Fields, Columns: rep.Collected}
 	return m
 }

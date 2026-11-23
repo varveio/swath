@@ -99,9 +99,6 @@ func TestDarwinHFSBoundary(t *testing.T) {
 		if keys := countKeys(t, o, 2); !slices.Equal(keys, []string{"mounted/"}) {
 			t.Fatalf("keys %q", keys)
 		}
-		if b := o.Report().Coverage.FilesystemBoundaries; b.TotalCount != 1 || !b.Complete {
-			t.Fatalf("boundaries %+v", b)
-		}
 		selected, err := Open(mount, Options{OneFilesystem: true, Portable: portable}, nil)
 		if err != nil {
 			t.Fatal(err)

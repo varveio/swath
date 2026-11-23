@@ -175,9 +175,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on Windows), and `emit` keeps a `dir` row whose `dev` differs but hands on no child range for it
   (counter `other_device_dirs`). On macOS the opened-handle volume check also stops same-device
-  foreign volumes. `Report` records each observed stop in
-  [`coverage.filesystem_boundaries`](../../dataset.md#filesystem-boundaries), even without directory rows,
-  and adds `one_file_system` to the coverage's filters, so a dataset says it
+  foreign volumes. `Report` adds `one_file_system` to the coverage's filters, so a dataset says it
   stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no `dir` row, and
   `Report` adds `no_dirs` to the filters likewise. `Report` names the tier and, where a stat tier reads them
   (`--no-link-target` off), `link_target` as collected (the manifest's `collected`).

@@ -365,7 +365,7 @@ func TestManifestShape(t *testing.T) {
 // TestManifestLimitsReadSwathsLargest: every manifest swath can write reads
 // back. A part entry written at manifestKeyBytes is within its price in
 // ManifestLimits (two base64 bounds and 1 KiB), so MaxParts of them and
-// 3 MiB for the rest fit: the proof. (The module's default, 64 MiB, would
+// 1 MiB for the rest fit: the proof. (The module's default, 64 MiB, would
 // refuse 30,000 one-row parts of 1,024-byte keys, about 82 MB.) A manifest
 // of 3,000 such parts reads within ManifestLimits, and the same manifest
 // is refused under a limit one byte short of it (ErrLimitExceeded).
@@ -389,7 +389,7 @@ func TestManifestLimitsReadSwathsLargest(t *testing.T) {
 	}
 	entry := int64(len(manifest(part(0, manifestKeyBytes), part(1, manifestKeyBytes))) - len(manifest(part(0, manifestKeyBytes))))
 	price := 2*int64(base64.StdEncoding.EncodedLen(manifestKeyBytes)) + 1<<10
-	if entry > price || MaxParts*price+3<<20 > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
+	if entry > price || MaxParts*price+1<<20 > ManifestLimits.ManifestBytes || ManifestLimits.Parts < MaxParts {
 		t.Fatalf("a part entry at %d-byte keys is %d bytes, priced %d; ManifestLimits %+v", manifestKeyBytes, entry, price, ManifestLimits)
 	}
 	// Written as JSON directly (MarshalManifest would check it again).

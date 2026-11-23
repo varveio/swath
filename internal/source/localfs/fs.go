@@ -292,14 +292,11 @@ type Range struct {
 
 // Provider lists one root. It implements source.Provider[Range, Entry].
 type Provider struct {
-	root          string
-	opt           Options
-	native        bool
-	dev           int64    // the root's device (OneFilesystem)
-	fsid          [2]int32 // the root's containing macOS volume, zero on other platforms
-	boundaryKeys  []string // retained base64 keys; protected by mu
-	boundaryBytes int
-	boundaryCount int64
+	root   string
+	opt    Options
+	native bool
+	dev    int64    // the root's device (OneFilesystem)
+	fsid   [2]int32 // the root's containing macOS volume, zero on other platforms
 	// held is the directory the caller holds open (OpenDir), never
 	// closed here, and prefix the key of the directory listed below it;
 	// nil and "" for a root opened by its path (New). heldFile keeps the
@@ -566,7 +563,6 @@ func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, E
 		switch {
 		case stop:
 			st.OtherDevice++
-			p.noteBoundary(row.Key)
 			p.unread(st, row.Key, unreadReason(errOtherDevice))
 		case p.prune != nil && p.prune(row.Key):
 			st.PrunedDirs++

@@ -154,7 +154,6 @@ A local listing also records its metadata tier and its filesystem's space (the p
 | `coverage.stop_reason` | `end_of_scope` (the listing reached the end of its scope, whatever it could not read), or why it stopped early (`max_keys` only in a diagnostic sample, `unreported`, ...) |
 | `coverage.unreadable` | Entries that could not be read and are missing from the dataset (a local tree's: permissions, a directory replaced while the walk ran). An entry that vanished during the walk is not counted (it is no longer in the tree), nor a symbolic link whose target could not be read (its row is kept) |
 | `coverage.filters` | The filters the run applied, one object each: `filter`, the option's name in snake case (`include`, `include_regex`, `exclude`, `exclude_regex`, `min_size`, `max_size`, `modified_since`, `modified_until`, `storage_class`, and the local options that leave entries out, `one_file_system` and `no_dirs`), and `value`, as given (each pattern and storage class its own object), a time as RFC 3339 in UTC with six fraction digits (`--modified-since 7d` as the time it named), `null` for an option that takes no value |
-| `coverage.filesystem_boundaries` | Optional record of filesystem-boundary stops; see [Filesystem boundaries](#filesystem-boundaries) |
 | `coverage.exclusions` | What the listing left out by design (an output directory inside a listed tree) |
 | `coverage.listing_started_at`, `listing_finished_at` | Bounds on when the entries were observed, across resumes |
 | `collected` | What the listing read beyond the columns every row carries. `metadata` is a local listing's tier (`--metadata`: `names`, `stat` or `statx`; at `names` every stat column is null, and `swath du --from-dataset` then counts hard-linked files under every name, as the live run does); absent for an object store. `columns` names the optional columns the run asked for: `link_target` unless `--no-link-target` or the `names` tier; `owner_id` and `owner_display_name` with `--s3-fetch-owner`; Azure's `metadata`, `tags`, and `immutability_policy_until`, `immutability_policy_mode` and `legal_hold`, with `--azure-fetch-metadata`, `--azure-fetch-tags` and `--azure-fetch-immutability`. A null in a column it names means the source had no value; a null in an optional column it does not name means the run did not ask |
@@ -169,26 +168,6 @@ can be absent: treat an absent or `null` member as unknown (a missing `coverage.
 missing `filters` is not empty). Do not depend on the order of the manifest's members. swath publishes the
 complete result of the live listing it performed; it is not a point-in-time snapshot of a source that changes
 during the run.
-
-### Filesystem boundaries
-
-A local listing with `--one-file-system` writes `coverage.filesystem_boundaries`:
-`keys_base64` (an array), `total_count` (an integer), and `complete` (a boolean).
-Each key is the standard base64 encoding of a root-relative directory key with a trailing slash.
-Base64 preserves filenames that are not valid UTF-8. These are observed traversal stops, not a
-mount-table inventory: the boundary directory may have its own row, but its descendants were
-not enumerated at that stop. Rows already read from a changing tree are not retracted.
-The record is present even with `--no-dirs`, and includes different-device Linux stops and
-same-device, different-volume macOS stops. Ordinary exclusions and read errors are not boundaries.
-
-The writer retains at most 4,096 keys and 1 MiB of base64 payload, sorts the retained encodings,
-and keeps counting stops after either limit. `total_count` counts stop decisions; an ancestor
-reopened after the tree changes can be encountered more than once. `complete` says every observed
-stop has a retained key, independently of `coverage.complete` and whether the scan reached its end.
-No stops produces an explicit complete empty array. An absent record in an older dataset means
-unknown, not no boundaries. A partial boundary record cannot prove that an unlisted directory
-was traversed. Other filters and unreadable entries still limit coverage even with a complete
-boundary record. The Go reader exposes this as `Coverage.FilesystemBoundaries`.
 
 ## Schema registry
 
