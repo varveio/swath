@@ -115,6 +115,12 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	var fd int
 	if r.at == nil {
 		fd, err = longpath.OpenFD(p.root, unix.O_RDONLY|unix.O_DIRECTORY)
+		if err == nil && p.opt.OneFilesystem {
+			if err = p.checkVolume(fd); err != nil {
+				unix.Close(fd)
+				return nil, false, fmt.Errorf("the root's filesystem changed or cannot be checked: %w", err)
+			}
+		}
 	} else {
 		if r.below > 1 && r.at != p.held {
 			st.DirOpens.Redescents++
@@ -131,6 +137,10 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 		return nil, false, err
 	}
 
+	if r.prefix == "" {
+		return nil, false, fmt.Errorf("the root directory cannot be opened or checked: %w", err)
+	}
+
 	reason := openReason(err)
 	if long {
 		st.LongPaths.fail(reason)
@@ -140,12 +150,18 @@ func (p *Provider) openRange(ctx context.Context, r Range, st *Stats) (d *dirFD,
 	}
 	p.unread(st, r.prefix, unreadReason(err))
 	switch {
+	case errors.Is(err, errOtherVolume):
+		st.OtherVolume++
+		return nil, false, nil
 	case errors.Is(err, errOtherDevice):
 		st.OtherDevice++
 		return nil, false, nil
 	case errors.Is(err, errSymlink):
 		st.note(&st.Unsafe, r.path, err)
 	default:
+		if errors.Is(err, errFilesystemIdentity) {
+			st.FilesystemIdentityErrors++
+		}
 		st.note(&st.OpenErrors, r.path, err)
 	}
 	p.unreadableDir(r)
@@ -199,11 +215,12 @@ func (p *Provider) openAt(dir int, name string, last bool) (int, error) {
 		return fd, nil
 	}
 	var s unix.Stat_t
-	if err := unix.Fstat(fd, &s); err != nil || int64(s.Dev) != p.dev { //nolint:unconvert // Dev's type differs by platform
+	err = unix.Fstat(fd, &s)
+	if err == nil {
+		err = p.checkFilesystem(fd, int64(s.Dev)) //nolint:unconvert // Dev's type differs by platform
+	}
+	if err != nil {
 		unix.Close(fd)
-		if err == nil {
-			err = errOtherDevice
-		}
 		return -1, err
 	}
 	return fd, nil
@@ -256,6 +273,10 @@ func classifyOpen(dir int, name string, err error) error {
 // LongPaths.Failed.
 func openReason(err error) string {
 	switch {
+	case errors.Is(err, errOtherVolume):
+		return "other_volume"
+	case errors.Is(err, errFilesystemIdentity):
+		return "filesystem_identity"
 	case errors.Is(err, errOtherDevice):
 		return "other_device"
 	case errors.Is(err, errSymlink):

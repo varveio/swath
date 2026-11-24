@@ -24,6 +24,34 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## macOS volume boundary checks (2026-11-23)
+
+Commit `fbfb8344`, Go 1.27.4, GitHub Actions `macos-latest` arm64, on the
+[native check run](https://github.com/varveio/swath/actions/runs/45270238281).
+`TestDarwinSystemDataBoundary` passed with System filesystem ID `(16777232, 26)` and Data
+`(16777228, 26)`: Data was refused through both `/Users` and `/System/Volumes/Data`, and
+accepted when selected as the root. `TestDarwinHFSBoundary` also passed using a temporary
+32 MiB HFS+ disk image. Neither integration fixture skipped.
+
+`TestDarwinVolumeWalkCost` generated a synthetic tree of 500 directories, each containing two
+five-byte files, and listed its 1,500 entries with four workers and `--one-file-system`.
+The baseline substituted the known root filesystem ID for the additional `fstatfs` call;
+device checks and the rest of traversal were the same. Each arm ran three times, baseline first:
+
+| Opened-directory check | Mean listing time |
+|---|---:|
+| Device only (additional volume lookup bypassed) | 5.638222 ms |
+| Device and containing-volume ID | 5.349916 ms |
+
+This small warm-cache run on a shared runner resolves no added slowdown. It is not evidence
+of a speedup or a bound on cost for large trees or network filesystems. The implementation adds
+one `fstatfs` per opened same-device directory when the boundary rule is enabled on macOS;
+Linux adds no filesystem-identity syscall. `BenchmarkDarwinFilesystemCheck` can measure the
+isolated syscall path on a dedicated Mac. The captured test stream is the run's
+`go-stress-macOS-ARM64` artifact. Reproduce the native tests through `go-stress.yml` with
+package `./internal/source/localfs`, run `TestDarwin|TestVolume`, count `1`, race `false`, and
+OS `macos-latest`.
+
 ## Output identity with the Java tool
 
 Every comparison was row-identical on the 13 canonical columns, with identical minimum and maximum keys

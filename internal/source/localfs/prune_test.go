@@ -562,14 +562,12 @@ func TestPruneUnreadableDescendant(t *testing.T) {
 // its directory row unless NoDirs requests otherwise.
 func TestPruneOtherDevicePrecedence(t *testing.T) {
 	for _, noDirs := range []bool{false, true} {
-		p, err := New(t.TempDir(), Options{NoDirs: noDirs})
-		if err != nil {
-			t.Fatal(err)
-		}
 		// Supply the device metadata directly so no mount or platform's
 		// stat implementation is needed to exercise the shared emitter.
-		p.opt.OneFilesystem, p.dev = true, 17
+		// Every directory stops here, so emit needs no parent descriptor.
+		p := &Provider{opt: Options{NoDirs: noDirs, OneFilesystem: true}, dev: 17}
 		spec := filter.Spec{Exclude: []string{"mount/**"}}
+		var err error
 		p.prune, _, err = spec.PruneDirectories()
 		if err != nil {
 			t.Fatal(err)
@@ -580,7 +578,7 @@ func TestPruneOtherDevicePrecedence(t *testing.T) {
 		}
 		em := &pruneEmitter{}
 		var stats Stats
-		if err := emitRoot(t, p, rows, em, &stats); err != nil {
+		if err := p.emit(p.Root(), nil, rows, em, &stats); err != nil {
 			t.Fatal(err)
 		}
 		want := []string{"mount/", "tail"}

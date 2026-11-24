@@ -13,6 +13,10 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Changed
 
+- On macOS, `--one-file-system` and the live local library also check the containing volume of each
+  opened directory. A scan rooted at `/` stops at APFS Data even when its stat device matches System's;
+  Linux retains device-based boundaries. Ordinary `dev` and `inode` columns are unchanged (#502).
+
 - Package `github.com/varveio/swath/command` (experimental) is public again: a Go program can build the swath
   command line into its own binary and run it in a child process dedicated to the call with
   `command.Exit(command.Main(...))` ([library guide](docs/library.md#run-the-command-line)).

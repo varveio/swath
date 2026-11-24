@@ -61,8 +61,8 @@ type Options struct {
 	LinkTarget bool            // read symlink targets (stat tiers)
 	Skip       map[string]bool // the run's own output: keys neither emitted nor, for a directory ("a/b/"), walked
 	Portable   bool            // use the portable engine even where a native one exists
-	// OneFilesystem lists a directory on another device than the root
-	// (a mount point) but does not walk it, as du -x and find -xdev.
+	// OneFilesystem keeps boundary directory rows without walking their
+	// contents: another device, or on macOS another containing volume.
 	OneFilesystem bool
 }
 
@@ -90,8 +90,11 @@ type Stats struct {
 	Samples          []string `json:"error_samples,omitempty"`
 	// OtherDevice counts directories listed and not walked, on another
 	// device than the root (OneFilesystem).
-	OtherDevice int64 `json:"other_device_dirs"`
-	PrunedDirs  int64 `json:"pruned_dirs"`
+	OtherDevice              int64  `json:"other_device_dirs"`
+	OtherVolume              int64  `json:"other_volume_dirs"`             // same stat device, different macOS filesystem ID
+	FilesystemIdentityErrors int64  `json:"filesystem_identity_errors"`    // subset of open_errors
+	FilesystemBoundary       string `json:"filesystem_boundary,omitempty"` // selected mechanism, only with OneFilesystem
+	PrunedDirs               int64  `json:"pruned_dirs"`
 	// FilteredStatErrors counts entries whose stat failed that the filters
 	// leave out by their key alone (Provider.leftOut): not unreadable.
 	FilteredStatErrors int64           `json:"filtered_stat_errors"`
@@ -260,6 +263,8 @@ func (s *Stats) add(o *Stats) {
 	s.ReaddirplusHints += o.ReaddirplusHints
 	s.Presized += o.Presized
 	s.OtherDevice += o.OtherDevice
+	s.OtherVolume += o.OtherVolume
+	s.FilesystemIdentityErrors += o.FilesystemIdentityErrors
 	s.PrunedDirs += o.PrunedDirs
 	s.FilteredStatErrors += o.FilteredStatErrors
 	s.KeyTooLong += o.KeyTooLong
@@ -290,7 +295,8 @@ type Provider struct {
 	root   string
 	opt    Options
 	native bool
-	dev    int64 // the root's device (OneFilesystem)
+	dev    int64    // the root's device (OneFilesystem)
+	fsid   [2]int32 // the root's containing macOS volume, zero on other platforms
 	// held is the directory the caller holds open (OpenDir), never
 	// closed here, and prefix the key of the directory listed below it;
 	// nil and "" for a root opened by its path (New). heldFile keeps the
@@ -349,12 +355,16 @@ func New(root string, opt Options) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	var d *os.File
 	if fi.IsDir() {
-		d, err := longpath.Open(root)
+		d, err = longpath.Open(root)
 		if err != nil {
 			return nil, err
 		}
-		_ = d.Close()
+		defer d.Close()
+		if fi, err = d.Stat(); err != nil {
+			return nil, err
+		}
 	}
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")
@@ -364,6 +374,11 @@ func New(root string, opt Options) (*Provider, error) {
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
 			return nil, err
+		}
+		if d != nil {
+			if p.fsid, err = readFilesystemID(int(d.Fd())); err != nil {
+				return nil, fmt.Errorf("the root's filesystem identity: %w", err)
+			}
 		}
 	}
 	return p, nil
@@ -394,6 +409,9 @@ func (p *Provider) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.stats
+	if p.opt.OneFilesystem {
+		s.FilesystemBoundary = filesystemMechanism
+	}
 	s.Samples = slices.Clone(s.Samples)
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
 	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
@@ -470,7 +488,7 @@ func unreadReason(err error) error {
 	switch {
 	case errors.Is(err, errSymlink):
 		class = listing.ErrNotDirectory
-	case errors.Is(err, errOtherDevice):
+	case errors.Is(err, errOtherDevice), errors.Is(err, errOtherVolume):
 		class = listing.ErrOtherDevice
 	case errors.Is(err, fs.ErrPermission):
 		class = listing.ErrAuth

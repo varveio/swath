@@ -248,7 +248,7 @@ sizes) with exit 2.
   do not read symbolic links' targets
 
 - <a id="option-one-file-system"></a>[`-x, --one-file-system`](#option-one-file-system)\
-  do not walk into a mount point below the root, as du -x
+  stay on the root filesystem (macOS: its volume); keep boundary rows
 
 ### Performance
 

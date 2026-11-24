@@ -5,8 +5,35 @@ package localfs
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 )
+
+// Replaced by tests to exercise volume boundaries on either Unix platform.
+var readFilesystemID = filesystemID
+
+var (
+	errOtherVolume        = errors.New("on another volume than the root (same stat device)")
+	errFilesystemIdentity = errors.New("cannot read filesystem identity")
+)
+
+func (p *Provider) checkVolume(fd int) error {
+	id, err := readFilesystemID(fd)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errFilesystemIdentity, err)
+	}
+	if id != p.fsid {
+		return errOtherVolume
+	}
+	return nil
+}
+
+func (p *Provider) checkFilesystem(fd int, dev int64) error {
+	if dev != p.dev {
+		return errOtherDevice
+	}
+	return p.checkVolume(fd)
+}
 
 // rootDevice is the device of the root fi describes, which
 // Options.OneFilesystem compares each directory's with. It needs each

@@ -51,7 +51,7 @@ type Unread struct {
 	Key []byte
 	// Reason says why, an error matching one of the error classes:
 	// ErrAuth for a refused access (EACCES, EPERM), ErrOtherDevice for a
-	// directory on another device than the source's root, which is listed
+	// directory on another device or macOS volume than the source's root, which is listed
 	// as a KindDir and not entered, ErrNotDirectory for a symbolic link
 	// found where a directory was opened, ErrUnsupported for a name the
 	// system refuses as too long or a directory too large to read, and

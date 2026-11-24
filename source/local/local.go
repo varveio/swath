@@ -23,7 +23,7 @@ import (
 // open until the source's Close returns; Close does not close it. The
 // source never resolves root by a path: it opens every directory it reads
 // relative to root's descriptor, one name at a time, never following a
-// symbolic link, and refuses one on another device than root's. Keys are
+// symbolic link, and refuses one on another device or macOS volume than root's. Keys are
 // relative to root: "" pages root itself, "a/b/" the directory a/b below
 // it.
 //
