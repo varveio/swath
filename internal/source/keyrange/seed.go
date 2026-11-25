@@ -362,14 +362,16 @@ func (p *Engine[P]) seedFirst(ctx context.Context, nodes []seedNode, b *seedBudg
 	if !page.Truncated && start != "" && p.endChecks() {
 		// A resume's first page that says the scope ends there is checked
 		// as a range's end (endcheck.go).
-		if page, ferr = p.checkEnd(ctx, q, page, start); ferr != nil {
-			return chains, nil, false, ferr
+		more, _, cerr := p.checkEnd(ctx, q, page, start)
+		if cerr != nil {
+			return chains, nil, false, cerr
 		}
-		if page.Truncated {
-			// Keys followed after all: the page is discarded and the seed
+		if more {
+			// Keys follow after all: the page is discarded and the seed
 			// tiles from start, its delimiter requests asked again (they
 			// were cancelled).
 			chains, err = p.seedLevel(ctx, nodes, b)
+			return chains, nil, false, err
 		}
 	}
 	if fits = !page.Truncated; fits {

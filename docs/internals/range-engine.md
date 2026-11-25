@@ -92,8 +92,11 @@ overfetched keys, the seed, structure probes; never a synthesized pivot, a prior
   - the witness, by a listing of its own prefix with no `start-after` (the shape those services answer whole):
     gone, the claim stands (`end_check.raced_gone`);
   - the claim, by `start-after=L` (after `L`'s longest accepted prefix, keys up to `L` dropped, when the
-    provider refuses `L` as a bound): keys after `L` now, the chain goes on from them, and their page's end
-    is checked in turn (`end_check.raced_new_keys`). A key at or below `L` on that chain is an invalid page.
+    provider refuses `L` as a bound; those pages must ascend and their tokens progress): keys after `L` now,
+    the page is not final (`end_check.raced_new_keys`). The chain emits it, fences at `L` and goes on after
+    `L` through its own page path, so each page is emitted and checked as it comes and none is buffered. A
+    key at or below `L` on that chain is an invalid page; a chain after `L` that keeps listing nothing while
+    asking again lists keys after it is an omission.
 
 A witness that stays while `start-after=L` still ends the listing below it is an omission: the run fails
 with cause `omitted_keys` (`source.ErrOmitted`, `end_check.omitted`), resumable, since the range never

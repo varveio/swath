@@ -540,16 +540,34 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 	if p.opt.Resume != nil {
 		in.After, skip = p.safeStart(p.opt.Resume.After), p.opt.Resume.After
 	}
+	stalls := 0 // restarts after the same key that listed nothing (endcheck.go)
 	for {
 		out, err := p.list(ctx, in)
 		if err != nil {
 			return err
 		}
+		restart := "" // keys follow this final page after all: the chain goes on after it
 		if !out.Truncated && in.After != "" && p.endChecks() {
 			// A resumed chain started after a key: its end is checked as a
-			// range's (endcheck.go).
-			if out, err = p.checkEnd(ctx, in, out, max(last, in.After)); err != nil {
+			// range's (endcheck.go, expandRange).
+			more, l, err := p.checkEnd(ctx, in, out, max(last, in.After))
+			if err != nil {
 				return err
+			}
+			if more && len(out.Rows) == 0 {
+				if l == in.After && in.Token == "" {
+					if stalls++; stalls > endTries {
+						return p.stalled(in, l)
+					}
+				}
+				if ctx.Err() != nil {
+					return context.Cause(ctx)
+				}
+				in.After, in.Token = l, ""
+				continue
+			}
+			if more {
+				restart = l
 			}
 		}
 		dropped := 0
@@ -609,13 +627,17 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		if err := p.emit(rows, e); err != nil {
 			return err
 		}
-		if stop && (n < len(out.Rows) || out.Truncated) {
+		if stop && (n < len(out.Rows) || out.Truncated || restart != "") {
 			// The cap left rows out, or may have: a page the store says
 			// is the last, emitted whole, is the end of the scope.
 			p.c.Set(cTruncated, 1)
 		}
-		if stop || !out.Truncated {
+		if stop || !out.Truncated && restart == "" {
 			return nil
+		}
+		if restart != "" {
+			in.After, in.Token = restart, ""
+			continue
 		}
 		if out.Token == "" {
 			return fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
