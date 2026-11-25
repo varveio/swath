@@ -331,6 +331,13 @@ func (p *Engine[P]) confirm(ctx context.Context, l string) (string, error) {
 		// covers them all. Its key found past l is l's witness; past it
 		// only, or its failure, leaves l its own ladder.
 		p.seen.mu.Lock()
+		// The floor again, under the lock: a ladder that ended since the
+		// first look set it, and its flight is gone.
+		if f := p.seen.floor.Load(); f != nil && l >= *f {
+			p.seen.mu.Unlock()
+			p.c.Inc(cEndFloor)
+			return "", nil
+		}
 		var wait *flight
 		for _, f := range p.seen.flights {
 			if f.l <= l && (wait == nil || f.l > wait.l) {

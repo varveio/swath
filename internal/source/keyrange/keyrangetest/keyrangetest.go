@@ -64,9 +64,13 @@ type Sorted struct {
 	// below the request's prefix, more than MaxKeys keys start with that
 	// folder's name followed by a byte below '/' ("a-x/…" before "a/").
 	Omits bool
-	mu    sync.Mutex
-	seed  int64
-	Calls int
+	// OmitsShort makes Omits answer with the first half of the true page,
+	// still marked not truncated, instead of an empty one (MinIO answered
+	// start-after=e/&max-keys=100 with 61 keys).
+	OmitsShort bool
+	mu         sync.Mutex
+	seed       int64
+	Calls      int
 	// Starts are the data (non-delimiter) requests' exclusive start keys:
 	// the start-after, or for a continuation the key before its position
 	// ("" from the scope's start). Read under Lock.
@@ -154,8 +158,12 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 		f.mu.Unlock()
 	}
 	out := &Page{}
+	short := false
 	if f.Omits && delim == "" && in.ContinuationToken == "" && f.omitted(prefix, in.StartAfter, in.MaxKeys) {
-		return out, nil
+		if !f.OmitsShort {
+			return out, nil
+		}
+		short = true
 	}
 	n := 0
 	for ; i < len(f.Keys) && strings.HasPrefix(f.Keys[i], prefix); i++ {
@@ -187,6 +195,9 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 		}
 		out.Contents = append(out.Contents, Object{Key: k, Size: int64(len(k))})
 		n++
+	}
+	if short && out.IsTruncated {
+		out.Contents, out.IsTruncated, out.NextContinuationToken = out.Contents[:len(out.Contents)/2], false, ""
 	}
 	return out, nil
 }

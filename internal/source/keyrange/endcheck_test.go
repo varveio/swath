@@ -450,7 +450,7 @@ func TestEndCheckNeverShortOnOmittingStore(t *testing.T) {
 					opt.SplitCoin = coin
 				}
 				f := newSorted(keys, s%4 == 3, int64(s))
-				f.Omits = true
+				f.Omits, f.OmitsShort = true, s%5 == 1 // short final pages as well as empty ones
 				got, st, err := runEnd(t, f, opt, w, true)
 				what := fmt.Sprintf("scope %q seed %d workers %d", scope, s, w)
 				if err == nil && !slices.Equal(got, want) {
