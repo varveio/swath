@@ -78,9 +78,10 @@ func TestEndCheckCatchesOmission(t *testing.T) {
 // On a store that answers correctly the check finds nothing to contradict:
 // the same keys, no contradiction and no request asked again, across the
 // keyspaces, worker counts, short pages, the seed and structure probes. Its
-// only requests are ladders, each at most one per folder level of its
-// claim and two per level above, and few: a ladder's floor covers every
-// later claim above it.
+// only requests are ladders: at most one per claim, each at most one
+// request for its claim's folder and two per level above. (A ladder's
+// floor covers every later claim above it; how many that saves depends on
+// the order the claims end in, measured on AWS in range-engine.md.)
 func TestEndCheckHealthyStoresCostLittle(t *testing.T) {
 	spaces := keyspaces()
 	for name, keys := range hostile() {
@@ -111,7 +112,10 @@ func TestEndCheckHealthyStoresCostLittle(t *testing.T) {
 				for _, k := range want {
 					depth = max(depth, int64(strings.Count(k, "/")))
 				}
-				if l, r := st.Get(cEndLadders), st.Get(cEndLadderRequests); r > l*(2*depth+1) || l > int64(w)+2 {
+				// How many ladders run depends on the order the claims end in
+				// (a claim below the floor needs its own), so the bound is per
+				// claim, not per run.
+				if l, r := st.Get(cEndLadders), st.Get(cEndLadderRequests); r > l*(2*depth+1) || l > st.Get(cEndClaims) {
 					t.Fatalf("%s: %d ladders, %d ladder requests (depth %d) for %d claims", what, l, r, depth, st.Get(cEndClaims))
 				}
 			}
