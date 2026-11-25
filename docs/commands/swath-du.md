@@ -49,12 +49,12 @@ sizes) with exit 2.
 - <a id="option-allocated"></a>[`--allocated`](#option-allocated)\
   local: show and --sort size by the space on disk, and require it
 
-  The entries' st_blocks x 512, directories' included, as du counts them: a local tree's default where its listing reads them, so this only makes it required. A file without them fails the count; the names metadata tier, which reads none, refuses it. TSV and JSONL rows carry both figures either way.
+  The entries' st_blocks x 512 (on Windows the directory listing's allocation size), directories' included, as du counts them: a local tree's default where its listing reads them, so this only makes it required. A file without them fails the count; the names metadata tier, which reads none, refuses it. TSV and JSONL rows carry both figures either way.
 
 - <a id="option-apparent-size"></a>[`-A, --apparent-size`](#option-apparent-size)\
   show and --sort size by the files' lengths, as du -A
 
-  An object store's default, and a local tree's where its listing reads no blocks (the names metadata tier, Windows). Not with --allocated.
+  An object store's default, and a local tree's where its listing reads no blocks (the names metadata tier). Not with --allocated.
 
 - <a id="option-count-links"></a>[`-l, --count-links`](#option-count-links)\
   local: count a file with several hard links under each of its names

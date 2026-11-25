@@ -20,6 +20,13 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Changed
 
+- On Windows a stat tier fills `allocated_bytes` (the space on disk) and `inode` (the file ID, where the filesystem
+  has one) from the directory listing swath already reads, with no call per file (a directory's own space on disk
+  through a handle, one per directory, as the listing gives directories none), so `swath du` leads with the
+  space on disk there as on Linux and macOS and takes `--allocated`. The figure can lag under a hard link's other
+  names and for a file still being written ([How sizes are counted](docs/totals.md#how-sizes-are-counted)).
+  Link counts are still not read on Windows, so every name of a hard-linked file counts (#568).
+
 - On Windows, `--one-file-system` is accepted, and the dataset records the `one_file_system` filter as on Linux and
   macOS. The walk never enters a junction or a volume mount point, with or without it; no device or volume is
   compared, so a DFS link or a share the server maps to another volume is still walked. A junction or a volume mount point is now listed as kind `symlink` with its target in `link_target`,
@@ -37,8 +44,8 @@ Notable changes per release. The human summary of the current release is in the
   view's figure is `on disk`, `--sort size` orders by it, and the closing line gives it. A directory's own blocks
   count in it, as `du` counts them, so a tree's total is `du -s`'s less the source directory's own blocks
   (not with a size or time filter, which tests a directory by its own size and time).
-  `-A`, `--apparent-size`, gives the lengths as before. A listing that reads no blocks (Windows,
-  `--metadata names`), an object store, and a saved dataset without allocated bytes lead with the lengths.
+  `-A`, `--apparent-size`, gives the lengths as before. A listing that reads no blocks (`--metadata names`), an
+  object store, and a saved dataset without allocated bytes lead with the lengths.
   `--allocated` now only requires the space on disk. TSV and JSONL rows keep both figures under the same names;
   their `primary`, the order with `--sort size`, `allocated_bytes` (now with directories' blocks) and
   `allocated_bytes_missing` (now counting directories without blocks: an empty directory's is unknown at

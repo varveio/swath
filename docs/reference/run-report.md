@@ -152,7 +152,7 @@ touched). `totals` is a
 `prefixes` (the rows printed, the total included), `max_prefixes` (the cap), `primary` (the figure `--sort size`
 orders by: `allocated_bytes` or `size`) and `primary_reason` (why: `flag`, `--allocated` or `--apparent-size`;
 `default`, a local tree whose listing reads blocks; `object_store`; `names_tier`; `platform`, a listing that
-reads no blocks, as on Windows; `dataset`, a saved dataset whose files have no allocated bytes), the total's `objects` (directories excluded) and
+reads no blocks, on a platform other than Linux, macOS and Windows; `dataset`, a saved dataset whose files have no allocated bytes), the total's `objects` (directories excluded) and
 `dirs`, its `size` (null when unknown: no object had one) and `allocated_bytes` (the files' and the directories'
 own; null when unknown: no entry had one, or a source without allocated bytes) with `size_missing` (the objects
 counted without a size) and `allocated_bytes_missing` (the entries, directories too, without allocated bytes), its

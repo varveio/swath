@@ -85,9 +85,9 @@ exec swath du t -d 2 --max-prefixes 4 --format jsonl --no-stats
 [!windows] cmpform stdout want-du-2.jsonl
 # Windows reads no blocks: allocated_bytes is null, and the size comes first.
 [windows] [expect:v0.4.0] cmp stdout want-du-2-windows-v040.jsonl
-# #660: the directories' blocks count too, each prefix's own directory among
-# them, so they are missing as well on Windows.
-[windows] [expect:current] cmp stdout want-du-2-windows.jsonl
+# #660, #568: the directories' blocks count too, and Windows reads every
+# entry's: only links_once differs from the other platforms.
+[windows] [expect:current] cmpform stdout want-du-2-windows.jsonl
 
 # --work-dir belongs to a dataset in a bucket: with a local dataset it is
 # refused (exit 2) and nothing is created.
@@ -180,10 +180,10 @@ swath: totals: more than 2 distinct prefixes at depth 2 (lower --depth, or raise
 {"row_type":"prefix","depth":2,"prefix":"a/b/","objects":1,"dirs":0,"size":7,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 -- want-du-2-windows.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":3,"size":12,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":6,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":1,"size":7,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":2,"prefix":"a/b/","objects":1,"dirs":0,"size":7,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"total","depth":0,"prefix":"","objects":3,"dirs":3,"size":12,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":1,"size":7,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":false}
+{"row_type":"prefix","depth":2,"prefix":"a/b/","objects":1,"dirs":0,"size":7,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"$PRIMARY","sort":"name","links_once":false}
 -- want-one-fs-windows-v040.txt --
 swath: staying on one filesystem needs each directory's device, which this platform's engine does not read
 -- want-work-dir.txt --

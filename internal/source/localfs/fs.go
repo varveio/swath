@@ -620,6 +620,7 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 	default:
 		if fi, err = os.Lstat(p.root); err == nil {
 			fromFileInfo(&row.Data, fi)
+			fillRoot(p.root, &row.Data)
 		}
 	}
 	if tooLong(err) {
@@ -649,8 +650,9 @@ func sortRows(rows []Row) {
 	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
 }
 
-// expandPortable lists a directory with os.File.ReadDir and a stat per
-// entry (statEntry).
+// expandPortable lists a directory with os.File.ReadDir (readDir: on
+// Windows its own read, which keeps what the enumeration says of each
+// entry) and a stat per entry (statEntry).
 func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter[Range, Entry], st *Stats) error {
 	d, ok, err := p.openPortable(ctx, r, st)
 	if !ok {
@@ -658,7 +660,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	}
 	st.DirsRead++
 	defer d.release() // statEntry and readlinkIn read relative to it (Linux, macOS); subdirectories take their own references
-	ents, err := d.f.ReadDir(-1)
+	ents, err := readDir(d.f)
 	if err != nil {
 		p.readFailed(r, st, err)
 	}
@@ -699,6 +701,9 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 				}
 				p.statFailed(key, path, st, err)
 				continue
+			}
+			if dirBlocks && row.Data.Kind == KindDir {
+				fillDirBlocks(path, &row.Data) // Windows: the enumeration gives a directory none
 			}
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
 				if t, err := readlinkIn(f, path, name); err == nil {

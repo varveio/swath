@@ -102,9 +102,9 @@ func TestDuFromDatasetLocal(t *testing.T) {
 	if err := run(context.Background(), []string{root, "-o", ds, "--no-stats"}, io.Discard, false); err != nil {
 		t.Fatal(err)
 	}
-	extras := [][]string{nil, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}, {"--apparent-size"}}
-	if runtime.GOOS != "windows" { // Windows reads no allocated bytes, link count or inode
-		extras = append(extras, []string{"--allocated"}, []string{"-l"})
+	extras := [][]string{nil, {"--exclude", "a/**"}, {"--min-size", "2", "--include", "*/*"}, {"--modified-since", "2026-01-02T03:30:00Z"}, {"--apparent-size"}, {"--allocated"}}
+	if runtime.GOOS != "windows" { // Windows reads no link count (#364)
+		extras = append(extras, []string{"-l"})
 	}
 	for _, extra := range extras {
 		for depth := range 4 {
@@ -527,7 +527,8 @@ func TestDuFromDatasetRefusesBrokenSchema(t *testing.T) {
 }
 
 // unblockedRow is a local tree's row as a listing that reads no blocks,
-// links or inodes writes it (Windows): every column present, those null.
+// links or inodes writes it (the names tier's columns, or a platform
+// whose listing reads none): every column present, those null.
 type unblockedRow struct {
 	Key            []byte  `parquet:"key"`
 	Size           *int64  `parquet:"size,optional"`
@@ -547,8 +548,8 @@ type unblockedRow struct {
 }
 
 // TestDuFromDatasetWithoutBlocks: a local tree's dataset listed at a stat
-// tier where blocks are not read (Windows: the column there, its values
-// null) totals by size, as the live run there does, the whole count by
+// tier where blocks are not read (a platform that reads none, or 0.4.0 on
+// Windows: the column there, its values null) totals by size, as the live run there does, the whole count by
 // the one figure: also where some files have blocks and others do not, and
 // where the filters keep no file but a directory, which has none either.
 // --allocated, which requires them, fails.

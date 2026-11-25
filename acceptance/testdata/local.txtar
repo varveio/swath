@@ -14,10 +14,12 @@ mktree t tree.spec
 
 # Platform facts. Windows reports a file's mode as 0666 (438) and a
 # directory's as 0777 (511) whatever mktree asks, a directory's size as 0,
-# and reads no owner, link count, inode, device, blocks or change time: those
-# are null, every file lacks allocated bytes, and du cannot tell two names of
-# one file apart (links_once false). A Linux listing reads no birth time;
-# macOS and Windows record one.
+# and reads no owner, link count, device or change time: those are null, and
+# du cannot tell two names of one file apart (links_once false). 0.4.0 read
+# no inode or blocks there either; since #568 Windows reads the file ID
+# (inode) and the space on disk (allocated_bytes), a non-empty file's
+# positive. A Linux listing reads no birth time; macOS and Windows record
+# one.
 [linux] env BORN=\N BORN_US=NULL
 [darwin] env BORN={time} BORN_US={int}
 
@@ -35,7 +37,9 @@ cmp stdout want-files.tsv
 # The bare output on a pipe: TSV, this header, every column of every entry.
 exec swath list t
 [!windows] cmpform stdout want-bare.tsv
-[windows] cmpform stdout want-bare-windows.tsv
+[windows] [expect:v0.4.0] cmpform stdout want-bare-windows-v040.tsv
+# #568: Windows reads the file ID and the space on disk.
+[windows] [expect:current] cmpform stdout want-bare-windows.tsv
 
 exec swath list t --format jsonl --columns key,size,last_modified,kind --no-dirs
 cmp stdout want-files.jsonl
@@ -58,23 +62,22 @@ cmp rows.tsv want-files.tsv
 
 # Totals. The bare output on a pipe is TSV, the total first.
 [expect:v0.4.0] env PRIMARY=size
-# #660: a local tree whose listing reads blocks leads with the space on disk.
-[expect:current] [!windows] env PRIMARY=allocated_bytes
-# #660: Windows reads no blocks, so the lengths lead.
-[expect:current] [windows] env PRIMARY=size
-# Windows: every file lacks blocks; #660 counts the directories too, which
-# lack them as well.
+# #660: a local tree whose listing reads blocks leads with the space on disk;
+# #568: Windows reads them too.
+[expect:current] env PRIMARY=allocated_bytes
+# 0.4.0 on Windows: every file lacks blocks.
 [expect:v0.4.0] [windows] env NOBLOCKS=9
-[expect:current] [windows] env NOBLOCKS=15
 exec swath du t
 [!windows] cmpform stdout want-du.tsv
-[windows] cmpform stdout want-du-windows.tsv
+[windows] [expect:v0.4.0] cmpform stdout want-du-windows-v040.tsv
+# #568: every entry's space on disk is known on Windows.
+[windows] [expect:current] cmpform stdout want-du-windows.tsv
 
 exec swath du t -d 1 --apparent-size --format jsonl
 [!windows] cmpform stdout want-du-1.jsonl
 [windows] [expect:v0.4.0] cmpform stdout want-du-1-windows-v040.jsonl
-# #660: a prefix counts its own directory's blocks, missing on Windows, and
-# its allocated bytes are null when none of its entries has blocks.
+# #660, #568: a prefix counts its own directory's blocks, which Windows reads
+# too; only links_once differs from the other platforms.
 [windows] [expect:current] cmpform stdout want-du-1-windows.jsonl
 
 # The table names the zone it prints times in (TZ is UTC; Windows keeps the runner's zone).
@@ -87,7 +90,9 @@ exec swath du t -d 1 --apparent-size --format jsonl
 # A filter leaves out the directories and the files it does not select.
 exec swath du t --include '*.txt' --apparent-size --format tsv --no-header
 [!windows] cmpform stdout want-du-txt.tsv
-[windows] cmpform stdout want-du-txt-windows.tsv
+[windows] [expect:v0.4.0] cmpform stdout want-du-txt-windows-v040.tsv
+# #568: the kept files' space on disk is known on Windows.
+[windows] [expect:current] cmpform stdout want-du-txt-windows.tsv
 
 # The dataset: its parts' schema, its rows in stored order, its manifest and
 # its run report.
@@ -106,7 +111,9 @@ dataset ds 'SELECT column_name, column_type FROM (DESCRIBE ds)'
 cmp stdout want-types.tsv
 dataset ds 'SELECT decode(key), kind, size, epoch_us(last_modified), mode, uid, gid, nlink, inode, dev, allocated_bytes, epoch_us(metadata_changed_at), epoch_us(accessed_at), epoch_us(created_at), decode(link_target) FROM ds'
 [!windows] cmpform stdout want-rows.tsv
-[windows] cmpform stdout want-rows-windows.tsv
+[windows] [expect:v0.4.0] cmpform stdout want-rows-windows-v040.tsv
+# #568: the dataset records the file ID and the space on disk on Windows.
+[windows] [expect:current] cmpform stdout want-rows-windows.tsv
 
 json ds/manifest.json format format_version draft_revision schema_id key extensions.swath.version
 cmp stdout want-manifest-head.txt
@@ -146,7 +153,9 @@ exec swath show -v ds
 # here), and name the listing they come from.
 exec swath du --from-dataset ds --apparent-size --format jsonl
 [!windows] cmpform stdout want-saved-du.jsonl
-[windows] cmpform stdout want-saved-du-windows.jsonl
+[windows] [expect:v0.4.0] cmpform stdout want-saved-du-windows-v040.jsonl
+# #568: a dataset listed on Windows holds the space on disk.
+[windows] [expect:current] cmpform stdout want-saved-du-windows.jsonl
 
 # A non-empty output is refused, and left as it was; --overwrite replaces
 # the dataset.
@@ -262,7 +271,7 @@ empty/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{i
 ünïcødé/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
 ünïcødé/日本語/	{pos}	2026-01-01T00:00:00.000000Z	dir	493	$UID	{int}	{int}	{int}	{int}	{int}	{time}	{time}	$BORN	\N
 ünïcødé/日本語/ファイル 名.txt	800	2026-06-01T00:00:00.000000Z	file	420	$UID	{int}	1	{int}	{int}	{pos}	{time}	2026-06-01T00:00:00.000000Z	$BORN	\N
--- want-bare-windows.tsv --
+-- want-bare-windows-v040.tsv --
 key	size	last_modified	kind	mode	uid	gid	nlink	inode	dev	allocated_bytes	metadata_changed_at	accessed_at	created_at	link_target
 B.txt	6	2026-01-06T00:00:00.000000Z	file	438	\N	\N	\N	\N	\N	\N	\N	2026-01-06T00:00:00.000000Z	{time}	\N
 a b	20	2026-01-02T00:00:00.000000Z	file	438	\N	\N	\N	\N	\N	\N	\N	2026-01-02T00:00:00.000000Z	{time}	\N
@@ -279,6 +288,23 @@ empty/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	\N	\N	\N	\N	{time}	{time}	
 ünïcødé/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	\N	\N	\N	\N	{time}	{time}	\N
 ünïcødé/日本語/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	\N	\N	\N	\N	{time}	{time}	\N
 ünïcødé/日本語/ファイル 名.txt	800	2026-06-01T00:00:00.000000Z	file	438	\N	\N	\N	\N	\N	\N	\N	2026-06-01T00:00:00.000000Z	{time}	\N
+-- want-bare-windows.tsv --
+key	size	last_modified	kind	mode	uid	gid	nlink	inode	dev	allocated_bytes	metadata_changed_at	accessed_at	created_at	link_target
+B.txt	6	2026-01-06T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-01-06T00:00:00.000000Z	{time}	\N
+a b	20	2026-01-02T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-01-02T00:00:00.000000Z	{time}	\N
+a-b	300	2026-01-03T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-01-03T00:00:00.000000Z	{time}	\N
+a.txt	4000	2026-01-04T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-01-04T00:00:00.000000Z	{time}	\N
+a/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	{int}	\N	{int}	\N	{time}	{time}	\N
+a/x	1	2026-03-01T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-03-01T00:00:00.000000Z	{time}	\N
+a0	50000	2026-01-05T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-01-05T00:00:00.000000Z	{time}	\N
+café crème.txt	70	2026-01-07T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-01-07T00:00:00.000000Z	{time}	\N
+deep/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	{int}	\N	{int}	\N	{time}	{time}	\N
+deep/er/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	{int}	\N	{int}	\N	{time}	{time}	\N
+deep/er/z.bin	0	2026-02-01T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{int}	\N	2026-02-01T00:00:00.000000Z	{time}	\N
+empty/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	{int}	\N	{int}	\N	{time}	{time}	\N
+ünïcødé/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	{int}	\N	{int}	\N	{time}	{time}	\N
+ünïcødé/日本語/	0	2026-01-01T00:00:00.000000Z	dir	511	\N	\N	\N	{int}	\N	{int}	\N	{time}	{time}	\N
+ünïcødé/日本語/ファイル 名.txt	800	2026-06-01T00:00:00.000000Z	file	438	\N	\N	\N	{int}	\N	{pos}	\N	2026-06-01T00:00:00.000000Z	{time}	\N
 -- want-files.jsonl --
 {"key":"B.txt","key_base64":null,"size":6,"last_modified":"2026-01-06T00:00:00.000000Z","kind":"file"}
 {"key":"a b","key_base64":null,"size":20,"last_modified":"2026-01-02T00:00:00.000000Z","kind":"file"}
@@ -316,9 +342,12 @@ a0
 -- want-du.tsv --
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
 total	0	9	6	55197	0	{pos}	0	2026-06-01T00:00:00.000000Z	$PRIMARY	name	true	
--- want-du-windows.tsv --
+-- want-du-windows-v040.tsv --
 row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
 total	0	9	6	55197	0	\N	$NOBLOCKS	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false	
+-- want-du-windows.tsv --
+row_type	depth	objects	dirs	size	size_missing	allocated_bytes	allocated_bytes_missing	max_last_modified	primary	sort	links_once	prefix
+total	0	9	6	55197	0	{pos}	0	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false	
 -- want-du-1.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
 {"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true}
@@ -332,11 +361,11 @@ total	0	9	6	55197	0	\N	$NOBLOCKS	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false
 {"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":0,"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 -- want-du-1-windows.jsonl --
-{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":15,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"deep/","objects":1,"dirs":1,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-02-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":1,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
-{"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":0,"size":1,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-03-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"deep/","objects":1,"dirs":1,"size":0,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":"2026-02-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"empty/","objects":0,"dirs":0,"size":0,"size_missing":0,"allocated_bytes":{int},"allocated_bytes_missing":0,"max_last_modified":null,"primary":"size","sort":"name","links_once":false}
+{"row_type":"prefix","depth":1,"prefix":"ünïcødé/","objects":1,"dirs":1,"size":800,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 -- want-du-table-v040.txt --
     size  files  dirs  last_modified (UTC)  path
      1 B      1     0  2026-03-01 00:00:00  a/
@@ -353,8 +382,10 @@ total	0	9	6	55197	0	\N	$NOBLOCKS	2026-06-01T00:00:00.000000Z	$PRIMARY	name	false
 53.9 KiB      9     6  2026-06-01 00:00:00  t (total)
 -- want-du-txt.tsv --
 total	0	4	0	4876	0	{pos}	0	2026-06-01T00:00:00.000000Z	size	name	true	
--- want-du-txt-windows.tsv --
+-- want-du-txt-windows-v040.tsv --
 total	0	4	0	4876	0	\N	4	2026-06-01T00:00:00.000000Z	size	name	false	
+-- want-du-txt-windows.tsv --
+total	0	4	0	4876	0	{pos}	0	2026-06-01T00:00:00.000000Z	size	name	false	
 -- want-schema.tsv --
 key	BYTE_ARRAY	REQUIRED	NULL
 size	INT64	OPTIONAL	INT_64
@@ -403,7 +434,7 @@ empty/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{
 ünïcødé/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
 ünïcødé/日本語/	dir	{pos}	1767225600000000	493	$UID	{int}	{int}	{int}	{int}	{int}	{int}	{int}	$BORN_US	NULL
 ünïcødé/日本語/ファイル 名.txt	file	800	1780272000000000	420	$UID	{int}	1	{int}	{int}	{pos}	{int}	1780272000000000	$BORN_US	NULL
--- want-rows-windows.tsv --
+-- want-rows-windows-v040.tsv --
 B.txt	file	6	1767657600000000	438	NULL	NULL	NULL	NULL	NULL	NULL	NULL	1767657600000000	{int}	NULL
 a b	file	20	1767312000000000	438	NULL	NULL	NULL	NULL	NULL	NULL	NULL	1767312000000000	{int}	NULL
 a-b	file	300	1767398400000000	438	NULL	NULL	NULL	NULL	NULL	NULL	NULL	1767398400000000	{int}	NULL
@@ -419,6 +450,22 @@ empty/	dir	0	1767225600000000	511	NULL	NULL	NULL	NULL	NULL	NULL	NULL	{int}	{int}
 ünïcødé/	dir	0	1767225600000000	511	NULL	NULL	NULL	NULL	NULL	NULL	NULL	{int}	{int}	NULL
 ünïcødé/日本語/	dir	0	1767225600000000	511	NULL	NULL	NULL	NULL	NULL	NULL	NULL	{int}	{int}	NULL
 ünïcødé/日本語/ファイル 名.txt	file	800	1780272000000000	438	NULL	NULL	NULL	NULL	NULL	NULL	NULL	1780272000000000	{int}	NULL
+-- want-rows-windows.tsv --
+B.txt	file	6	1767657600000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1767657600000000	{int}	NULL
+a b	file	20	1767312000000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1767312000000000	{int}	NULL
+a-b	file	300	1767398400000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1767398400000000	{int}	NULL
+a.txt	file	4000	1767484800000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1767484800000000	{int}	NULL
+a/	dir	0	1767225600000000	511	NULL	NULL	NULL	{int}	NULL	{int}	NULL	{int}	{int}	NULL
+a/x	file	1	1772323200000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1772323200000000	{int}	NULL
+a0	file	50000	1767571200000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1767571200000000	{int}	NULL
+café crème.txt	file	70	1767744000000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1767744000000000	{int}	NULL
+deep/	dir	0	1767225600000000	511	NULL	NULL	NULL	{int}	NULL	{int}	NULL	{int}	{int}	NULL
+deep/er/	dir	0	1767225600000000	511	NULL	NULL	NULL	{int}	NULL	{int}	NULL	{int}	{int}	NULL
+deep/er/z.bin	file	0	1769904000000000	438	NULL	NULL	NULL	{int}	NULL	{int}	NULL	1769904000000000	{int}	NULL
+empty/	dir	0	1767225600000000	511	NULL	NULL	NULL	{int}	NULL	{int}	NULL	{int}	{int}	NULL
+ünïcødé/	dir	0	1767225600000000	511	NULL	NULL	NULL	{int}	NULL	{int}	NULL	{int}	{int}	NULL
+ünïcødé/日本語/	dir	0	1767225600000000	511	NULL	NULL	NULL	{int}	NULL	{int}	NULL	{int}	{int}	NULL
+ünïcødé/日本語/ファイル 名.txt	file	800	1780272000000000	438	NULL	NULL	NULL	{int}	NULL	{pos}	NULL	1780272000000000	{int}	NULL
 -- want-manifest-head.txt --
 "seekparquet"
 0
@@ -454,8 +501,10 @@ true
 "swath/local-entries/v1"
 -- want-saved-du.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":true,"dataset":{"path":"ds","source":"$WORK/t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
--- want-saved-du-windows.jsonl --
+-- want-saved-du-windows-v040.jsonl --
 {"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":$NOBLOCKS,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"{path}\\t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
+-- want-saved-du-windows.jsonl --
+{"row_type":"total","depth":0,"prefix":"","objects":9,"dirs":6,"size":55197,"size_missing":0,"allocated_bytes":{pos},"allocated_bytes_missing":0,"max_last_modified":"2026-06-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false,"dataset":{"path":"ds","source":"{path}\\t","schema_id":"swath/local-entries/v1","listing_started_at":"{time}","listing_finished_at":"{time}","complete":true,"stop_reason":"end_of_scope","unreadable":0,"filters":[],"exclusions":[]}}
 -- refused.txt --
 swath: ds: output directory is not empty (use --overwrite to replace a previous dataset)
 -- want-txt-rows.tsv --
