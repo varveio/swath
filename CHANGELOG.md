@@ -14,7 +14,9 @@ Notable changes per release. The human summary of the current release is in the
   `SummaryOptions.Split` asks for groups by storage class (`StorageClass`), by size band (`SizeBounds`, how many
   entries and bytes lie in each band), or both, and `TargetSummary.Groups` holds them, ordered by class then band.
   The groups recombine to the target's `Totals`. Every subtree's totals are now counted by SeekParquet's
-  `FoldRows`, with the same row checks and errors as before.
+  `FoldRows`, which checks each summed column's presence, physical type and row values, as `Page`, `Lookup`
+  and `Walk` do. A dataset `Dataset.CheckSchema` would refuse can now be refused with another error class,
+  or summed where a logical annotation alone was wrong, for a caller that skips that check.
 
 ### Changed
 
