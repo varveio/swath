@@ -6,6 +6,7 @@
 package localfs
 
 import (
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,13 +64,54 @@ func volumeMount(t *testing.T, at, dir string) bool {
 	return true
 }
 
+// otherSurrogate makes the empty directory at dir a reparse point of tag, a
+// name surrogate other than a junction's (IO_REPARSE_TAG_WCI_LINK, which
+// Windows Container Isolation sets), with no data a filter reads. NTFS
+// keeps a Microsoft tag's data without reading it, but setting one may
+// need an administrator (as the CI runner is); elsewhere it skips,
+// reporting false.
+func otherSurrogate(t *testing.T, dir string, tag uint32) bool {
+	t.Helper()
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+	// REPARSE_DATA_BUFFER: the tag, the data's length, a reserved word,
+	// then the data.
+	buf := make([]byte, 8+8)
+	binary.LittleEndian.PutUint32(buf, tag)
+	binary.LittleEndian.PutUint16(buf[4:], 8)
+	var n uint32
+	if err := windows.DeviceIoControl(h, windows.FSCTL_SET_REPARSE_POINT, &buf[0], uint32(len(buf)), nil, 0, &n, nil); err != nil {
+		t.Logf("cannot set reparse tag %#x on %s: %v", tag, dir, err)
+		if err := os.Remove(dir); err != nil { // else listed as a directory
+			t.Fatal(err)
+		}
+		return false
+	}
+	return true
+}
+
 // TestJunctionAndMountPoint: a junction, to a directory outside the tree
 // or inside it, and a volume mount point list as kind symlink with their
 // targets, at every tier (no target at the names tier, nor without
 // LinkTarget), and the walk enters none, with or without OneFilesystem,
 // which Windows accepts: the coverage records the filter and the report
-// names the mechanism. Before, each was kind unknown, and OneFilesystem
-// was refused for want of a device.
+// names the mechanism. A directory whose reparse tag is another name
+// surrogate (WCI_LINK) is not one: it stays kind unknown, with no target
+// and no readlink error, and is not walked either. Before, each was kind
+// unknown, and OneFilesystem was refused for want of a device; then the
+// attributes alone made the WCI_LINK directory a symlink whose target
+// could not be read.
 func TestJunctionAndMountPoint(t *testing.T) {
 	root := t.TempDir()
 	mk(t, root, "a/x", false)
@@ -79,11 +121,18 @@ func TestJunctionAndMountPoint(t *testing.T) {
 	links := map[string]string{"j": outside, "k": filepath.Join(root, "a")}
 	junction(t, filepath.Join(root, "j"), links["j"])
 	junction(t, filepath.Join(root, "k"), links["k"])
-	want := []string{"a/", "a/x", "j", "k", "z"}
+	want := []string{"a/", "a/x", "j", "k"}
 	if volumeMount(t, filepath.Join(root, "m"), root) {
 		links["m"] = filepath.VolumeName(root) + `\`
-		want = []string{"a/", "a/x", "j", "k", "m", "z"}
+		want = append(want, "m")
 	}
+	const wciLink = 0xA0000027 // IO_REPARSE_TAG_WCI_LINK
+	unknown := map[string]bool{}
+	if otherSurrogate(t, filepath.Join(root, "w"), wciLink) {
+		unknown["w"] = true
+		want = append(want, "w")
+	}
+	want = append(want, "z")
 	for _, opt := range []Options{
 		{LinkTarget: true},
 		{LinkTarget: true, OneFilesystem: true},
@@ -98,6 +147,12 @@ func TestJunctionAndMountPoint(t *testing.T) {
 		var keys []string
 		for _, r := range rows {
 			keys = append(keys, r.Key)
+			if unknown[r.Key] {
+				if r.Data.Kind != KindUnknown || r.Data.Has(HasLink) {
+					t.Errorf("%+v: %s is %v (target %q), want unknown with none", opt, r.Key, r.Data.Kind, r.Data.LinkTarget)
+				}
+				continue
+			}
 			target, ok := links[r.Key]
 			if !ok {
 				continue
