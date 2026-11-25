@@ -49,6 +49,9 @@ func volumeMount(t *testing.T, at, dir string) bool {
 	}
 	if err := windows.SetVolumeMountPoint(mp, &guid[0]); err != nil {
 		t.Logf("cannot mount a volume (not an administrator?): %v", err)
+		if err := os.Remove(at); err != nil { // else listed as m/
+			t.Fatal(err)
+		}
 		return false
 	}
 	// Before t.TempDir's own cleanup, which runs later.
