@@ -242,10 +242,10 @@ func TestDuFile(t *testing.T) {
 // TestDuDefaultFigure: with neither --allocated nor --apparent-size, a
 // local tree leads with its space on disk, as du does, where its listing
 // reads blocks: the table's one figure is "on disk", the line under it
-// gives the lengths, and the report says why (primary_reason default).
-// Where the listing reads no blocks the size leads, and the report says
-// why: the names tier, Windows. -A is --apparent-size; a flag is the
-// reason when one chose.
+// gives the lengths, and the report says why (primary_reason default),
+// Windows included. Where the listing reads no blocks the size leads, and
+// the report says why: the names tier. -A is --apparent-size; a flag is
+// the reason when one chose.
 func TestDuDefaultFigure(t *testing.T) {
 	root, _ := depthTree(t)
 	stderr := captureStderr(t)
@@ -269,9 +269,6 @@ func TestDuDefaultFigure(t *testing.T) {
 		return r.Output.Totals
 	}
 	want, reason, line := totals.AllocatedBytes, totals.ReasonDefault, `^  [0-9.]+ [KMG]?i?B on disk in 4 files · 9 B of data\n$`
-	if runtime.GOOS == "windows" {
-		want, reason, line = totals.Size, totals.ReasonPlatform, `^  9 B in 4 files · on disk unknown\n$`
-	}
 	if tt := reported("-d", "1", "--format=table"); tt.Primary != want || tt.PrimaryReason != reason || !regexp.MustCompile(line).MatchString(stderr.String()) {
 		t.Fatalf("default: %s (%s), stderr %q", tt.Primary, tt.PrimaryReason, stderr.String())
 	}
@@ -287,10 +284,8 @@ func TestDuDefaultFigure(t *testing.T) {
 			t.Fatalf("%q: %s (%s), want %s (%s)", tc.args, tt.Primary, tt.PrimaryReason, tc.primary, tc.reason)
 		}
 	}
-	if runtime.GOOS != "windows" {
-		if tt := reported("--allocated", "--format=tsv"); tt.Primary != totals.AllocatedBytes || tt.PrimaryReason != totals.ReasonFlag {
-			t.Fatalf("--allocated: %s (%s)", tt.Primary, tt.PrimaryReason)
-		}
+	if tt := reported("--allocated", "--format=tsv"); tt.Primary != totals.AllocatedBytes || tt.PrimaryReason != totals.ReasonFlag {
+		t.Fatalf("--allocated: %s (%s)", tt.Primary, tt.PrimaryReason)
 	}
 	var u usageError
 	if err := runDu(context.Background(), []string{root, "-A", "--allocated"}, io.Discard); !errors.As(err, &u) {
