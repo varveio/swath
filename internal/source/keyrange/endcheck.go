@@ -5,9 +5,11 @@ package keyrange
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/varveio/swath/internal/source"
@@ -40,19 +42,30 @@ import (
 // run fails, resumable (source.ErrOmitted), with nothing past the range's
 // last fence declared.
 //
-// Not covered here: a claim with no witness past it (the scope's last
-// range; a range whose neighbours lie as well with no folder between, as
-// --no-seed or one worker can leave them), the seed's single first page,
-// the sequential chain, and versions listings. end_check.claims less
-// end_check.contradicted counts the claims left unverified.
+// A claim with no witness past it (the scope's last range; neighbours that
+// all lie with no folder seen between them, as --no-seed or one worker can
+// leave them) is confirmed by the ladder (confirm): requests, one round
+// trip, that ask whether any key follows L in shapes those services answer
+// whole, measured on MinIO (2026-11-25: 30,393 claims under four scopes, no
+// wrong answer). A confirmed claim is a floor: no later claim at or above
+// it needs another ladder. A key the ladder finds is a witness as above.
+//
+// The check covers range ends, the sequential chain's resume and the
+// seed's single first page from a resume key; a chain from the scope's
+// start is the service's own. Not covered: versions listings, and a claim
+// whose last key the provider refuses as a start bound
+// (end_check.unverified).
 
 // endTries is how many times checkEnd asks again before it calls a
 // contradicted page an omission.
 const endTries = 3
 
-// witnesses are the greatest key and common prefix the run has listed.
+// witnesses are the greatest key and common prefix the run has listed,
+// and the least claim a ladder confirmed (the floor).
 type witnesses struct {
-	key, prefix atomic.Pointer[string]
+	key, prefix, floor atomic.Pointer[string]
+	mu                 sync.Mutex
+	flights            []*flight // ladders in flight (confirm)
 }
 
 // raise sets *w to s when s is greater (a copy: page strings are views of
@@ -70,10 +83,10 @@ func raise(w *atomic.Pointer[string], s string) {
 	}
 }
 
-// endChecks: this engine checks range ends (Description.Unbounded, not a
-// versions listing, not the sequential chain).
+// endChecks: this engine checks the ends of chains that start after a key
+// (Description.Unbounded, not a versions listing).
 func (p *Engine[P]) endChecks() bool {
-	return p.d.Unbounded && !p.d.Groups && !p.opt.Sequential
+	return p.d.Unbounded && !p.d.Groups
 }
 
 // witness records a page's greatest key and common prefix.
@@ -111,7 +124,10 @@ func (p *Engine[P]) checkEnd(ctx context.Context, in *Query, out *Page[P], c str
 		p.c.Inc(cEndClaims)
 		w, folder := p.past(l)
 		if w == "" {
-			return out, nil
+			var err error
+			if w, err = p.confirm(ctx, l); err != nil || w == "" {
+				return out, err
+			}
 		}
 		p.c.Inc(cEndContradicted)
 		more, err := p.askAgain(ctx, in, l, w, folder)
@@ -210,4 +226,138 @@ func (p *Engine[P]) exists(ctx context.Context, w string) (bool, error) {
 		return false, err
 	}
 	return len(out.Rows) > 0, nil
+}
+
+// confirm asks whether any key follows l in the scope, for a claim no
+// witness contradicts: the key found, or "" when none follows. The ladder
+// asks, with max-keys 1 and in one round trip, the folder of l after l,
+// then each folder above it up to the scope after its child folder (the
+// child's name and '0', the byte after '/'), and the keys under that name
+// and '0' itself. No request starts after a key below a folder of its
+// prefix, the shape that omits keys.
+func (p *Engine[P]) confirm(ctx context.Context, l string) (string, error) {
+	for {
+		if f := p.seen.floor.Load(); f != nil && l >= *f {
+			p.c.Inc(cEndFloor)
+			return "", nil
+		}
+		// A ladder in flight from at or below l answers for l too: the
+		// ranges above the scope's last key end together, and one ladder
+		// covers them all. Its key found past l is l's witness; past it
+		// only, or its failure, leaves l its own ladder.
+		p.seen.mu.Lock()
+		var wait *flight
+		for _, f := range p.seen.flights {
+			if f.l <= l && (wait == nil || f.l > wait.l) {
+				wait = f
+			}
+		}
+		if wait == nil {
+			break
+		}
+		p.seen.mu.Unlock()
+		p.c.Inc(cEndLadderWaits)
+		select {
+		case <-wait.done:
+		case <-ctx.Done():
+			return "", context.Cause(ctx)
+		}
+		if wait.err == nil && wait.found > l {
+			return wait.found, nil
+		}
+		if wait.err != nil || wait.found != "" {
+			p.seen.mu.Lock()
+			break
+		}
+	}
+	f := &flight{l: l, done: make(chan struct{})}
+	p.seen.flights = append(p.seen.flights, f)
+	p.seen.mu.Unlock()
+	defer func() {
+		p.seen.mu.Lock()
+		p.seen.flights = slices.DeleteFunc(p.seen.flights, func(x *flight) bool { return x == f })
+		p.seen.mu.Unlock()
+		close(f.done)
+	}()
+	f.found, f.err = p.climb(ctx, l)
+	return f.found, f.err
+}
+
+// flight is a ladder in flight: its claim, and when done the key it found
+// past it ("" for none) or its error.
+type flight struct {
+	l, found string
+	err      error
+	done     chan struct{}
+}
+
+// climb runs the ladder for a claim after l (confirm).
+func (p *Engine[P]) climb(ctx context.Context, l string) (string, error) {
+	steps := ladder(l, p.opt.Prefix)
+	for _, q := range steps {
+		if q.After != "" && !p.safe(q.After) || !p.safe(q.Prefix) {
+			p.c.Inc(cEndUnverified)
+			return "", nil
+		}
+	}
+	p.c.Inc(cEndLadders)
+	p.c.Add(cEndLadderRequests, int64(len(steps)))
+	found := make([]string, len(steps))
+	errs := make([]error, len(steps))
+	var wg sync.WaitGroup
+	for i := range steps {
+		wg.Go(func() {
+			out, err := p.list(ctx, &steps[i])
+			if err == nil && len(out.Rows) > 0 {
+				found[i] = strings.Clone(out.Rows[0].Key)
+			}
+			errs[i] = err
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return "", err
+	}
+	for _, k := range found {
+		if k > l {
+			p.c.Inc(cEndLadderFound)
+			return k, nil
+		}
+	}
+	lower(&p.seen.floor, l)
+	return "", nil
+}
+
+// ladder is confirm's requests for a claim after l in the scope prefix.
+func ladder(l, prefix string) []Query {
+	j := strings.LastIndexByte(l, '/')
+	if j < len(prefix) {
+		return []Query{{Prefix: prefix, After: l, Max: 1}}
+	}
+	folder := l[:j+1]
+	steps := []Query{{Prefix: folder, After: l, Max: 1}}
+	for len(folder) > len(prefix) {
+		name := folder[:len(folder)-1]
+		parent := prefix
+		if k := strings.LastIndexByte(name, '/'); k >= len(prefix) {
+			parent = name[:k+1]
+		}
+		steps = append(steps, Query{Prefix: parent, After: name + "0", Max: 1}, Query{Prefix: name + "0", Max: 1})
+		folder = parent
+	}
+	return steps
+}
+
+// lower sets *w to s when s is less (or *w is unset).
+func lower(w *atomic.Pointer[string], s string) {
+	for {
+		cur := w.Load()
+		if cur != nil && s >= *cur {
+			return
+		}
+		v := strings.Clone(s)
+		if w.CompareAndSwap(cur, &v) {
+			return
+		}
+	}
 }

@@ -66,30 +66,47 @@ follow: MinIO, when more than about `max-keys` keys start with the folder's name
 `/` ([s3.md](../sources/s3.md#s3-compatible-stores), [measurements.md](measurements.md#durable-spill),
 `bench/minio_start_after.sh`).
 
-The end check (`keyrange/endcheck.go`, `Description.Unbounded`, S3's current-object listing) uses that. Every
-page records its greatest key and common prefix (the witnesses: ranges, overfetched keys, the seed, structure
-probes; never a synthesized pivot, a prior's cut or a resume key). When a range whose chain started after a
-key ends on a page that is not truncated, before the range declares its end (its last fence), the engine
-compares `L` with the greatest witness. None past `L`: the page stands, at no request (`end_check.claims`). A
-witness past `L` (`end_check.contradicted`) may be a write or a delete during the run, or a service whose
-listing lags, so the engine asks again, up to three times with the requeue backoff:
-- the witness, by a listing of its own prefix with no `start-after` (the shape those services answer whole):
-  gone, the page stands (`end_check.raced_gone`);
-- the claim, by `start-after=L`: keys after `L` now, the range goes on from them, and their page's end is
-  checked in turn (`end_check.raced_new_keys`).
+The end check (`keyrange/endcheck.go`, `Description.Unbounded`, S3's current-object listing) uses that. It
+checks every chain that started after a key and ends on a page that is not truncated (a claim,
+`end_check.claims`): a range's, before the range declares its end (its last fence); a resumed sequential
+chain's; and a resumed seed's single first page. A chain from the scope's start follows the service's own
+tokens and is not checked. Every page records its greatest key and common prefix (the witnesses: ranges,
+overfetched keys, the seed, structure probes; never a synthesized pivot, a prior's cut or a resume key).
+
+- **A witness past `L`** proves the claim wrong, at no request.
+- **No witness past `L`**: the claim is confirmed by a ladder (`end_check.ladders`). It is one round trip of
+  requests with max-keys 1:
+  - the folder of `L`, after `L`;
+  - each folder above it up to the scope, after its child folder (the child's name and `0`, the byte after `/`);
+  - the keys under that name and `0` itself.
+
+  No ladder request starts after a key below a folder of its prefix, the shape that omits keys. On MinIO the
+  ladder answered 30,393 claims under four scopes (`nara-1950-census`'s first 250,000 keys and the shapes
+  bucket, 2026-11-25) without a wrong answer. A key it finds contradicts the claim (`end_check.ladder_found`).
+  A confirmed claim is a floor: a later claim at or above it is confirmed at no request (`end_check.floor`),
+  and a claim waits for a ladder in flight from at or below it rather than ask its own
+  (`end_check.ladder_waits`). The ranges above the scope's last key end together, so one ladder usually
+  covers them all.
+- **A claim contradicted** (`end_check.contradicted`) may be a write or a delete during the run, or a service
+  whose listing lags, so the engine asks again, up to three times with the requeue backoff:
+  - the witness, by a listing of its own prefix with no `start-after` (the shape those services answer whole):
+    gone, the claim stands (`end_check.raced_gone`);
+  - the claim, by `start-after=L` (after `L`'s longest accepted prefix, keys up to `L` dropped, when the
+    provider refuses `L` as a bound): keys after `L` now, the chain goes on from them, and their page's end
+    is checked in turn (`end_check.raced_new_keys`). A key at or below `L` on that chain is an invalid page.
 
 A witness that stays while `start-after=L` still ends the listing below it is an omission: the run fails
 with cause `omitted_keys` (`source.ErrOmitted`, `end_check.omitted`), resumable, since the range never
-declared its end. A resume lists that range again and checks its end the same way, except when the seed's
-first data page from the resume key holds the whole rest of the scope: that page is not checked yet (below). On a correct service the check sends no request
-(`TestEndCheckHealthyStoresCostNothing`; the same requests as without it on AWS, Garage, SeaweedFS and
-versitygw, 2026-11-25). On MinIO with the first 250,000 keys of `nara-1950-census` it turns 107,651 listed
-keys and exit 0 into exit 1, `omitted_keys`, at 1, 8 and 64 workers.
+declared its end. A resume lists it again and checks it the same way.
 
-Not yet covered: a claim with no witness past it (`end_check.claims` less `end_check.contradicted`), such as
-the scope's last range or neighbours that all lie with no folder seen between them; the seed's single first
-page; the sequential chain and its resume; versions listings. A confirming request for those claims is the
-next step (varveio/swath#265).
+**Cost.** On a correct service the check asks nothing again: only ladders, one round trip each. On AWS, at
+1 and 64 workers (2026-11-25), it added 1 to 6 requests a run to listings of 2,180 to 62,557 keys
+(`TestEndCheckHealthyStoresCostLittle` bounds it on the fixtures). On MinIO it turns the 107,651 listed keys
+and exit 0 of `nara-1950-census`'s first 250,000 into exit 1, `omitted_keys`, at 1, 8 and 64 workers, with
+and without the seed. Garage, SeaweedFS and versitygw list the shapes bucket whole.
+
+Not covered: versions listings (`--all-versions`, whose `key-marker` shapes are not measured), and a claim a
+ladder step would start after a key the provider refuses as a bound (`end_check.unverified`).
 
 **Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --no-seed` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points

@@ -60,8 +60,10 @@ Notable changes per release. The human summary of the current release is in the
   more than about `max-keys` keys start with the folder's name followed by a character below `/`); swath took
   it as the end of the range and exited 0 (107,651 of 250,000 keys in testing). swath now checks each such page
   against the keys and folders the run has listed and asks again; a store that keeps omitting keys stops the
-  run with exit 1, cause `omitted_keys`, resumable. Correct stores see no extra request. Pages with nothing
-  listed past them, and versions listings, are not checked yet (#265).
+  run with exit 1, cause `omitted_keys`, resumable. A page with nothing listed past it is confirmed by one
+  round trip of small requests that these stores answer correctly; the check covers every range, a resumed
+  `--sequential` chain and a resumed first page, and adds a few requests a run on correct stores (1 to 6 on AWS).
+  Versions listings are not checked yet (#265).
 
 - `swath du --allocated`: the view's heading says `on disk`, not `size`, and the closing line gives the space on
   disk, not the lengths.

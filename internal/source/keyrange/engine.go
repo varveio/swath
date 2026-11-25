@@ -545,6 +545,13 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 		if err != nil {
 			return err
 		}
+		if !out.Truncated && in.After != "" && p.endChecks() {
+			// A resumed chain started after a key: its end is checked as a
+			// range's (endcheck.go).
+			if out, err = p.checkEnd(ctx, in, out, max(last, in.After)); err != nil {
+				return err
+			}
+		}
 		dropped := 0
 		for dropped < len(out.Rows) && skip != "" && out.Rows[dropped].Key <= skip {
 			dropped++

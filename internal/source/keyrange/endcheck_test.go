@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,10 +75,13 @@ func TestEndCheckCatchesOmission(t *testing.T) {
 	}
 }
 
-// On a store that answers correctly the check never asks anything: the same
-// keys, no contradiction, no request of its own, across the keyspaces,
-// worker counts, short pages, the seed and structure probes.
-func TestEndCheckHealthyStoresCostNothing(t *testing.T) {
+// On a store that answers correctly the check finds nothing to contradict:
+// the same keys, no contradiction and no request asked again, across the
+// keyspaces, worker counts, short pages, the seed and structure probes. Its
+// only requests are ladders, each at most one per folder level of its
+// claim and two per level above, and few: a ladder's floor covers every
+// later claim above it.
+func TestEndCheckHealthyStoresCostLittle(t *testing.T) {
 	spaces := keyspaces()
 	for name, keys := range hostile() {
 		spaces[name] = keys
@@ -98,9 +103,16 @@ func TestEndCheckHealthyStoresCostNothing(t *testing.T) {
 				if !slices.Equal(got, want) {
 					t.Fatalf("%s: %d keys, want %d", what, len(got), len(want))
 				}
-				if st.Get(cEndContradicted)+st.Get(cEndWitnessChecks)+st.Get(cEndAskedAgain) != 0 {
-					t.Fatalf("%s: contradicted %d, witness checks %d, asked again %d on a correct store", what,
-						st.Get(cEndContradicted), st.Get(cEndWitnessChecks), st.Get(cEndAskedAgain))
+				if st.Get(cEndContradicted)+st.Get(cEndWitnessChecks)+st.Get(cEndAskedAgain)+st.Get(cEndLadderFound) != 0 {
+					t.Fatalf("%s: contradicted %d, witness checks %d, asked again %d, ladder found %d on a correct store", what,
+						st.Get(cEndContradicted), st.Get(cEndWitnessChecks), st.Get(cEndAskedAgain), st.Get(cEndLadderFound))
+				}
+				depth := int64(0)
+				for _, k := range want {
+					depth = max(depth, int64(strings.Count(k, "/")))
+				}
+				if l, r := st.Get(cEndLadders), st.Get(cEndLadderRequests); r > l*(2*depth+1) || l > int64(w)+2 {
+					t.Fatalf("%s: %d ladders, %d ladder requests (depth %d) for %d claims", what, l, r, depth, st.Get(cEndClaims))
 				}
 			}
 		}
@@ -171,18 +183,36 @@ func TestEndCheckDecisions(t *testing.T) {
 	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
 	keys := []string{"a/1", "a/2", "a/3", "b/1", "b/2"}
 	empty := func() *Page[Object] { return &Page[Object]{} }
-	t.Run("no witness past the page: no request", func(t *testing.T) {
+	t.Run("no witness and nothing after: a ladder confirms, and is the floor", func(t *testing.T) {
 		f := newSorted(keys, false, 1)
-		got, st, err := checkOne(t, f, "a/1", "a/1", empty(), "a/1")
-		if err != nil || len(got.Rows) != 0 || f.Calls != 0 || st.Get(cEndClaims) != 1 || st.Get(cEndContradicted) != 0 {
-			t.Fatalf("rows %d err %v calls %d claims %d contradicted %d", len(got.Rows), err, f.Calls, st.Get(cEndClaims), st.Get(cEndContradicted))
+		p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range []string{"b/2", "b/3", "c"} {
+			if got, err := p.checkEnd(context.Background(), &Query{After: "a/1", Max: 5}, &Page[Object]{Rows: []Row{{Key: l}}}, "a/1"); err != nil || len(got.Rows) != 1 {
+				t.Fatalf("claim after %q: rows %d err %v", l, len(got.Rows), err)
+			}
+		}
+		st := p.Stats()
+		// b/2: the folder b/ after b/2, the scope after b0, and b0 itself.
+		if st.Get(cEndLadders) != 1 || st.Get(cEndLadderRequests) != 3 || f.Calls != 3 || st.Get(cEndFloor) != 2 || st.Get(cEndContradicted) != 0 {
+			t.Fatalf("ladders %d requests %d calls %d floor %d contradicted %d", st.Get(cEndLadders), st.Get(cEndLadderRequests), f.Calls,
+				st.Get(cEndFloor), st.Get(cEndContradicted))
+		}
+	})
+	t.Run("no witness, keys after: the ladder finds them", func(t *testing.T) {
+		f := newSorted(keys, false, 1)
+		got, st, err := checkOne(t, f, "", "a/1", empty(), "a/1")
+		if err != nil || st.Get(cEndLadderFound) != 1 || st.Get(cEndRacedNew) != 1 || !slices.Equal(keysOf(got.Rows), []string{"a/2", "a/3", "b/1", "b/2"}) {
+			t.Fatalf("err %v found %d raced %d keys %v", err, st.Get(cEndLadderFound), st.Get(cEndRacedNew), keysOf(got.Rows))
 		}
 	})
 	t.Run("a folder marker equal to the page's end is no witness", func(t *testing.T) {
 		f := newSorted([]string{"a/"}, false, 1)
 		_, st, err := checkOne(t, f, "a/", "", &Page[Object]{Rows: []Row{{Key: "a/"}}}, "")
-		if err != nil || st.Get(cEndContradicted) != 0 || f.Calls != 0 {
-			t.Fatalf("err %v contradicted %d calls %d", err, st.Get(cEndContradicted), f.Calls)
+		if err != nil || st.Get(cEndContradicted) != 0 || st.Get(cEndLadders) != 1 {
+			t.Fatalf("err %v contradicted %d ladders %d", err, st.Get(cEndContradicted), st.Get(cEndLadders))
 		}
 	})
 	t.Run("a store that keeps omitting: ErrOmitted", func(t *testing.T) {
@@ -256,4 +286,101 @@ func (e *echoAfter) List(ctx context.Context, in *keyrangetest.ListInput) (*keyr
 		return &keyrangetest.Page{Contents: []keyrangetest.Object{{Key: in.StartAfter}}}, nil
 	}
 	return e.sorted.List(ctx, in)
+}
+
+func TestLadder(t *testing.T) {
+	q := func(prefix, after string) Query { return Query{Prefix: prefix, After: after, Max: 1} }
+	for _, c := range []struct {
+		l, scope string
+		want     []Query
+	}{
+		{"k", "", []Query{q("", "k")}},
+		{"a/b/k", "", []Query{q("a/b/", "a/b/k"), q("a/", "a/b0"), q("a/b0", ""), q("", "a0"), q("a0", "")}},
+		{"a/b/k", "a/", []Query{q("a/b/", "a/b/k"), q("a/", "a/b0"), q("a/b0", "")}},
+		{"a/b/k", "a/b/", []Query{q("a/b/", "a/b/k")}},
+		// A scope that is not a folder: "a" covers a-x/ and a/.
+		{"a/b/k", "a", []Query{q("a/b/", "a/b/k"), q("a/", "a/b0"), q("a/b0", ""), q("a", "a0"), q("a0", "")}},
+		{"a/", "", []Query{q("a/", "a/"), q("", "a0"), q("a0", "")}},
+	} {
+		if got := ladder(c.l, c.scope); !slices.Equal(got, c.want) {
+			t.Errorf("ladder(%q, %q) = %+v, want %+v", c.l, c.scope, got, c.want)
+		}
+	}
+}
+
+// Whatever the tiling, an omitting store never ends a run with keys
+// missing and no error: random splits with the seed off (neighbours that
+// all lie), one worker (the lying tile is the last), several scopes.
+func TestEndCheckNeverShortOnOmittingStore(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	keys := naraShape(400)
+	for _, scope := range []string{"", "census", "census/"} {
+		var want []string
+		for _, k := range slices.Sorted(slices.Values(keys)) {
+			if strings.HasPrefix(k, scope) {
+				want = append(want, k)
+			}
+		}
+		for s := range 12 {
+			for _, w := range []int{1, 4, 16} {
+				rng := rand.New(rand.NewSource(int64(s*100 + w)))
+				var mu sync.Mutex
+				coin := func() bool { mu.Lock(); defer mu.Unlock(); return rng.Intn(3) == 0 }
+				opt := Options{Prefix: scope, Seed: s%2 == 0, SeedFirstPage: s%2 == 0, PageSize: 50}
+				if s%3 == 0 {
+					opt.SplitCoin = coin
+				}
+				f := newSorted(keys, s%4 == 3, int64(s))
+				f.Omits = true
+				got, st, err := runEnd(t, f, opt, w, true)
+				what := fmt.Sprintf("scope %q seed %d workers %d", scope, s, w)
+				if err == nil && !slices.Equal(got, want) {
+					t.Fatalf("%s: %d of %d keys and no error (claims %d, ladders %d, contradicted %d)", what, len(got), len(want),
+						st.Get(cEndClaims), st.Get(cEndLadders), st.Get(cEndContradicted))
+				}
+				if err != nil && !errors.Is(err, source.ErrOmitted) {
+					t.Fatalf("%s: %v", what, err)
+				}
+			}
+		}
+	}
+}
+
+// A resume from a key inside the omitting folder: the sequential chain and
+// the seed's single first page (the rest of the scope fits in one page)
+// check their end too.
+func TestEndCheckResumedChains(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	// The siblings hold 3,000 keys, more than a page; the rest of the scope
+	// after the resume key (the last folder's) fits in one.
+	keys := naraShape(1500)
+	after := "census/006-State/00006.jpg"
+	var rest int
+	for _, k := range keys {
+		if k > after {
+			rest++
+		}
+	}
+	for _, c := range []struct {
+		name string
+		opt  Options
+	}{
+		{"sequential", Options{Sequential: true, PageSize: 50}},
+		{"seed first page", Options{Seed: true, SeedFirstPage: true, PageSize: 1000}},
+	} {
+		f := newSorted(keys, false, 1)
+		f.Omits = true
+		c.opt.Resume = &Resume{After: after}
+		got, _, err := runEnd(t, f, c.opt, 4, false)
+		if err != nil || len(got) >= rest {
+			t.Fatalf("%s, check off: %d of %d keys, err %v: the fake does not omit keys", c.name, len(got), rest, err)
+		}
+		f = newSorted(keys, false, 1)
+		f.Omits = true
+		_, st, err := runEnd(t, f, c.opt, 4, true)
+		if !errors.Is(err, source.ErrOmitted) {
+			t.Fatalf("%s: err %v, want ErrOmitted (claims %d, ladders %d, found %d)", c.name, err,
+				st.Get(cEndClaims), st.Get(cEndLadders), st.Get(cEndLadderFound))
+		}
+	}
 }
