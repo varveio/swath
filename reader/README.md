@@ -144,7 +144,8 @@ The package [`github.com/varveio/swath/reader/listing`](listing/doc.go) holds th
 answers about a listed location, from a live source (package `github.com/varveio/swath/source` in the root
 module, [the Go library](../docs/library.md)) or from an opened inventory: Page (the next children of a
 prefix), Lookup (what is at exactly one key) and Walk (every entry under a prefix), and an inventory's Summarize
-(count, bytes, space on disk and newest change under each of several targets). It defines their requests and results, the
+(count, bytes, space on disk and newest change under each of several targets, and, asked for a `Split`, the same
+totals for each storage class or size band). It defines their requests and results, the
 common `Entry`, the `Evidence` every answer carries (its acquisition interval, scope and unlocated gaps), the
 `Unread` places a live walk could not read, and the error classes. No call has a time limit of its own: a context
 deadline bounds it.
@@ -159,9 +160,11 @@ inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller ope
 refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with
 `listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque tokens bound to the manifest
 digest and the prefix; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
-`Summarize` reads the entries at its targets' keys, then aggregates its subtree targets' rows in one
-`AggregateRows` call, checking their key order: to size a page's child folders, summarize its `KindDir` and
-`KindPrefix` entries as subtree targets. A walk or summary sets no limit: a caller stops it by cancelling
+`Summarize` reads the entries at its targets' keys, then counts its subtree targets' rows in one
+`FoldRows` call, checking their key order: to size a page's child folders, summarize its `KindDir` and
+`KindPrefix` entries as subtree targets. With `SummaryOptions.Split` it also gives each target's `Groups`: its
+totals by storage class, by size band (how many entries and bytes lie in each band `SizeBounds` marks), or by both,
+which recombine to the target's totals. A local inventory has no storage class. A walk or summary sets no limit: a caller stops it by cancelling
 its context. An object store's prefix may be any key prefix; a local one is empty or a
 directory key, and a local inventory has no row for its root.
 

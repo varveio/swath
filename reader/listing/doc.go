@@ -43,7 +43,9 @@
 // Summarize counts an inventory's entries at or under each of several
 // targets and sums their sizes, space on disk and newest change, one
 // TargetSummary per target, in the order of targets, each saying whether
-// it is complete. It aggregates key ranges.
+// it is complete. It aggregates key ranges. Asked for a Split, it also
+// divides each target's totals into groups by storage class, by size
+// band, or by both.
 //
 // # Keys
 //

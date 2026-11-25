@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"slices"
-	"time"
 
 	seekparquet "github.com/varveio/seekparquet/go"
 
@@ -53,160 +51,147 @@ func (s selection) countsAny(rows rowShape) bool {
 		s.counts(listing.KindUnknown)
 }
 
-// The reductions of a set of rows, in result order: an object's, then a
-// local entry's space on disk.
-var (
-	objectReductions = []seekparquet.Reduction{
-		{Op: seekparquet.CountRows},
-		{Op: seekparquet.Sum, Column: "size"},
-		{Op: seekparquet.CountNulls, Column: "size"},
-		{Op: seekparquet.Max, Column: "last_modified"},
-		{Op: seekparquet.CountNulls, Column: "last_modified"},
-	}
-	localReductions = append(slices.Clip(objectReductions),
-		seekparquet.Reduction{Op: seekparquet.Sum, Column: "allocated_bytes"},
-		seekparquet.Reduction{Op: seekparquet.CountNulls, Column: "allocated_bytes"},
-	)
-)
-
-const (
-	reduceCount = iota
-	reduceBytes
-	reduceUnsized
-	reduceNewest
-	reduceUndated
-	reduceAllocated
-	reduceUnallocated
-)
-
-// errUnknownTotal reports a reduction SeekParquet left unknown, which with
-// no value budget it reads every value to give.
+// errUnknownTotal reports a span whose fold SeekParquet left inexact,
+// which with no value budget it reads every value to give.
 var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total unknown")
 
-// aggregate counts and sums the rows of the selection's kinds in each
-// span, in one aggregation that reads every value it needs and checks the
+// fold counts the rows of the selection's kinds in each span into their
+// groups, in one fold that reads every value it needs and checks the
 // order of every key it counts.
-func (inv *Inventory) aggregate(ctx context.Context, spans []seekparquet.RowSpan, sel selection) ([]*listing.Totals, error) {
-	out := make([]*listing.Totals, len(spans))
-	if len(spans) == 0 {
-		return out, nil
-	}
-	if !sel.countsAny(inv.rows) {
-		for i := range out {
-			out[i] = zeroTotals()
-		}
-		return out, nil
-	}
-
-	reductions := objectReductions
+func (inv *Inventory) fold(ctx context.Context, spans []seekparquet.RowSpan, sel selection, split listing.Split) ([]tallies, error) {
+	f := objectFold(split)
 	if inv.rows.local {
-		reductions = localReductions
+		f = localFold(sel, split)
 	}
-	opt := seekparquet.AggregateOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: true, Filter: inv.filter(sel)}
-	results, err := inv.sp.AggregateRows(ctx, spans, reductions, opt, nil)
+	opt := seekparquet.FoldOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: true}
+	results, err := seekparquet.FoldRows(ctx, inv.sp, spans, f, opt, nil)
 	if err != nil {
 		return nil, err
 	}
 
+	out := make([]tallies, len(results))
 	for i, r := range results {
-		if out[i], err = inv.totals(r); err != nil {
-			return nil, err
+		if r.Status != seekparquet.AggregateExact {
+			return nil, errUnknownTotal
 		}
+		out[i] = r.Value
 	}
 	return out, nil
 }
 
-// totals reads one span's reductions. A sum that overflows, or that a
-// counted row cannot supply, is nil.
-func (inv *Inventory) totals(r []seekparquet.AggregateResult) (*listing.Totals, error) {
-	for _, x := range r {
-		if x.Status != seekparquet.AggregateExact && x.Status != seekparquet.AggregateOverflow {
-			return nil, errUnknownTotal
+// The slots of the folds' projections.
+const (
+	foldObjectSize = iota
+	foldObjectModified
+	foldObjectClass // projected only when the split asks for it
+)
+
+const (
+	foldLocalSize = iota
+	foldLocalModified
+	foldLocalAllocated
+	foldLocalKind
+)
+
+// objectFold counts an object inventory's rows, checking every row as the
+// view checks an entry. Its rows have no space on disk.
+func objectFold(split listing.Split) seekparquet.Fold[tallies] {
+	columns := []string{"size", "last_modified"}
+	if split.StorageClass {
+		columns = append(columns, "storage_class")
+	}
+	return seekparquet.Fold[tallies]{
+		Columns: columns,
+		Add: func(acc *tallies, b *seekparquet.ValueBatch) error {
+			size := b.Column(foldObjectSize)
+			modified := b.Column(foldObjectModified)
+			if err := present(modified, "last_modified", seekparquet.KindInt64); err != nil {
+				return err
+			}
+			if err := sizes(size, "size"); err != nil {
+				return err
+			}
+			var class seekparquet.ColumnView
+			if split.StorageClass {
+				class = b.Column(foldObjectClass)
+				if err := present(class, "storage_class", seekparquet.KindByteArray); err != nil {
+					return err
+				}
+			}
+
+			for i := range b.Len() {
+				it := item{size: int64Of(size, i), modified: int64Of(modified, i)}
+				if split.StorageClass && !class.IsNull(i) {
+					it.class, it.classed = class.Bytes(i), true
+				}
+				acc.add(it, split.SizeBounds)
+			}
+			return nil
+		},
+		Merge: merge,
+	}
+}
+
+// localFold counts a local inventory's rows of the selection's kinds,
+// checking every row as the view checks an entry. Its rows have no
+// storage class.
+func localFold(sel selection, split listing.Split) seekparquet.Fold[tallies] {
+	return seekparquet.Fold[tallies]{
+		Columns: []string{"size", "last_modified", "allocated_bytes", "kind"},
+		Add: func(acc *tallies, b *seekparquet.ValueBatch) error {
+			kind := b.Column(foldLocalKind)
+			size := b.Column(foldLocalSize)
+			allocated := b.Column(foldLocalAllocated)
+			modified := b.Column(foldLocalModified)
+			if err := checkLocal(kind, size, allocated, modified); err != nil {
+				return err
+			}
+
+			for i := range b.Len() {
+				if !sel.counts(localKinds[string(kind.Bytes(i))]) {
+					continue
+				}
+				it := item{size: int64Of(size, i), allocated: int64Of(allocated, i), modified: int64Of(modified, i)}
+				acc.add(it, split.SizeBounds)
+			}
+			return nil
+		},
+		Merge: merge,
+	}
+}
+
+// checkLocal refuses a batch of local rows the view would refuse as
+// entries: a column absent or of another type, a kind swath does not
+// write, a negative size.
+func checkLocal(kind, size, allocated, modified seekparquet.ColumnView) error {
+	if err := present(kind, "kind", seekparquet.KindByteArray); err != nil {
+		return err
+	}
+	if err := present(modified, "last_modified", seekparquet.KindInt64); err != nil {
+		return err
+	}
+	for i := range kind.Len() {
+		if _, ok := localKinds[string(kind.Bytes(i))]; kind.IsNull(i) || !ok {
+			return &reader.SemanticError{Kind: reader.KindRow, Column: "kind", Err: errors.New("null, or not a kind swath writes")}
 		}
 	}
-	if r[reduceCount].Status != seekparquet.AggregateExact {
-		return nil, wrap(listing.ErrUnsupported, "a count of rows overflowed")
+	if err := sizes(size, "size"); err != nil {
+		return err
 	}
-
-	t := &listing.Totals{Entries: r[reduceCount].Value.Int64()}
-	t.Bytes = sum(r[reduceBytes], r[reduceUnsized])
-	if v := r[reduceNewest]; v.Status == seekparquet.AggregateExact && !v.Value.IsNull() && none(r[reduceUndated]) {
-		newest := time.UnixMicro(v.Value.Int64()).UTC()
-		t.Newest = &newest
-	}
-	switch {
-	case inv.rows.local:
-		t.AllocatedBytes = sum(r[reduceAllocated], r[reduceUnallocated])
-	case t.Entries == 0:
-		t.AllocatedBytes = new(int64)
-	}
-	return t, nil
+	return sizes(allocated, "allocated_bytes")
 }
 
-// sum is an exact sum over rows none of which lacks the value.
-func sum(total, nulls seekparquet.AggregateResult) *int64 {
-	if total.Status != seekparquet.AggregateExact || !none(nulls) {
-		return nil
+// int64Of is row i's value of a checked int64 column, absent for a null.
+func int64Of(c seekparquet.ColumnView, i int) optional {
+	if c.IsNull(i) {
+		return optional{}
 	}
-	v := total.Value.Int64()
-	return &v
-}
-
-func none(count seekparquet.AggregateResult) bool {
-	return count.Status == seekparquet.AggregateExact && count.Value.Int64() == 0
+	return optional{v: c.Int64(i), ok: true}
 }
 
 // zeroTotals are the totals of no counted entry.
 func zeroTotals() *listing.Totals {
 	return &listing.Totals{Bytes: new(int64), AllocatedBytes: new(int64)}
-}
-
-// entryTotals are the totals of one entry, or of none.
-func entryTotals(e *listing.Entry, sel selection) *listing.Totals {
-	if e == nil || !sel.counts(e.Kind) {
-		return zeroTotals()
-	}
-	return &listing.Totals{Entries: 1, Bytes: clone(e.Size), AllocatedBytes: clone(e.AllocatedBytes), Newest: clone(e.LastModified)}
-}
-
-// filter checks every row an aggregation reads, as the view checks an
-// entry, and keeps those of the selection's kinds. It reads the columns
-// the reductions read, so it adds no page.
-func (inv *Inventory) filter(sel selection) *seekparquet.BatchFilter {
-	if !inv.rows.local {
-		return &seekparquet.BatchFilter{
-			Columns: []string{"size", "last_modified"},
-			Apply: func(b *seekparquet.ValueBatch, _ []bool) error {
-				if err := present(b.Column(1), "last_modified", seekparquet.KindInt64); err != nil {
-					return err
-				}
-				return sizes(b.Column(0), "size")
-			},
-		}
-	}
-	return &seekparquet.BatchFilter{
-		Columns: []string{"kind", "size", "allocated_bytes", "last_modified"},
-		Apply: func(b *seekparquet.ValueBatch, keep []bool) error {
-			kind := b.Column(0)
-			if err := present(kind, "kind", seekparquet.KindByteArray); err != nil {
-				return err
-			}
-			if err := present(b.Column(3), "last_modified", seekparquet.KindInt64); err != nil {
-				return err
-			}
-			for i := range b.Len() {
-				k, ok := localKinds[string(kind.Bytes(i))]
-				if kind.IsNull(i) || !ok {
-					return &reader.SemanticError{Kind: reader.KindRow, Column: "kind", Err: errors.New("null, or not a kind swath writes")}
-				}
-				keep[i] = sel.counts(k)
-			}
-			if err := sizes(b.Column(1), "size"); err != nil {
-				return err
-			}
-			return sizes(b.Column(2), "allocated_bytes")
-		},
-	}
 }
 
 // present refuses a column a part lacks or holds with another physical

@@ -10,6 +10,13 @@ Notable changes per release. The human summary of the current release is in the
 - A dataset's manifest records the build that wrote it (`extensions.swath.written_by`: tool, version and
   revision). The member is optional: older readers ignore it and older manifests open without it.
   `swath show -v` prints it.
+- The reader's `Summarize` (package `reader/view`, experimental) can split each target's totals into groups:
+  `SummaryOptions.Split` asks for groups by storage class (`StorageClass`), by size band (`SizeBounds`, how many
+  entries and bytes lie in each band), or both, and `TargetSummary.Groups` holds them, ordered by class then band.
+  The groups recombine to the target's `Totals`. Every subtree's totals are now counted by SeekParquet's
+  `FoldRows`, which checks each summed column's presence, physical type and row values. A dataset
+  `Dataset.CheckSchema` would refuse can now be refused with another error class, or summed where a logical
+  annotation alone was wrong, for a caller that skips that check.
 
 ### Changed
 
