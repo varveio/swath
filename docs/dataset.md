@@ -265,7 +265,8 @@ Under `--metadata names` (no stat) the stat columns are null.
 the root has no row. Summing `size` over every row gives entry bytes, directories' own `st_size` included: not
 the files' content bytes, and not disk usage (`allocated_bytes`). For files only, leave out `kind = 'dir'`.
 Summing `allocated_bytes` over every row, directories included, gives `swath du`'s on-disk total. Either
-SQL sum counts a hard-linked file once per name; `swath du --from-dataset DIR` counts it once, and
+SQL sum counts a hard-linked file once per name; `swath du --from-dataset DIR` counts it once where the dataset
+records its links (`nlink`, `dev` and `inode`: not a dataset listed on Windows, where every name counts), and
 `swath du --from-dataset DIR --count-links` gives the same sum as the SQL. Under `--metadata names` the sizes are
 null, so a sum is no total.
 
