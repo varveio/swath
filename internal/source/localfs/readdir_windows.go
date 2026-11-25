@@ -240,9 +240,6 @@ func fillRoot(path string, r *Entry) {
 	if windows.GetFileInformationByHandleEx(h, windows.FileStandardInfo, (*byte)(unsafe.Pointer(&s)), uint32(unsafe.Sizeof(s))) != nil {
 		return
 	}
-	if true { // DEMO ONLY
-		return
-	}
 	r.Blocks, r.Present = s.AllocationSize, r.Present|HasBlocks
 	var flags uint32
 	var bh windows.ByHandleFileInformation
