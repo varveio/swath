@@ -34,8 +34,22 @@ func TestOneFilesystem(t *testing.T) {
 	if _, err := New(root, Options{OneFilesystem: true, Fields: Names}); err == nil || !strings.Contains(err.Error(), "names metadata tier") {
 		t.Fatalf("names tier: %v", err)
 	}
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		// The portable engine reads no device on Windows.
+	switch runtime.GOOS {
+	case "linux", "darwin":
+	case "windows":
+		// No device is read, and none is needed: the walk never enters a
+		// mount point (TestJunctionAndMountPoint), so the whole tree is listed.
+		rows, st := list(t, root, Options{OneFilesystem: true}, 4, 1<<12)
+		var keys []string
+		for _, r := range rows {
+			keys = append(keys, r.Key)
+		}
+		if want := oracle(t, root, true); !slices.Equal(keys, want) || st.OtherDevice != 0 || st.FilesystemBoundary != "reparse_point" {
+			t.Fatalf("%d keys %.10q, want %d %.10q; other_device_dirs %d, filesystem_boundary %q", len(keys), keys, len(want), want, st.OtherDevice, st.FilesystemBoundary)
+		}
+		return
+	default:
+		// The portable engine reads no device elsewhere.
 		if _, err := New(root, Options{OneFilesystem: true}); err == nil {
 			t.Fatal("no device, yet one filesystem")
 		}

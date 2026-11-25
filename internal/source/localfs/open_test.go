@@ -46,6 +46,8 @@ func TestReportFilters(t *testing.T) {
 	}{
 		{Options{}, nil},
 		{Options{NoDirs: true}, []reader.Filter{noDirsFilter}},
+		{Options{OneFilesystem: true}, []reader.Filter{oneFilesystemFilter}},
+		{Options{OneFilesystem: true, NoDirs: true}, []reader.Filter{oneFilesystemFilter, noDirsFilter}},
 	} {
 		p, err := New(t.TempDir(), tc.opt)
 		if err != nil {

@@ -708,6 +708,9 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 				}
 			}
 		}
+		if row.Data.Kind == KindUnknown && reparseLinks {
+			p.reparsePoint(d, path, &row.Data)
+		}
 		if row.Data.Kind == KindDir {
 			row.Key += "/"
 		}
@@ -764,6 +767,25 @@ func kindOf(m fs.FileMode) Kind {
 		return KindBlockDevice
 	}
 	return KindUnknown
+}
+
+// reparsePoint makes an entry of kind unknown that is a junction or a
+// volume mount point (mountPoint: Windows) a symbolic link, with its
+// target where the run reads targets (a stat tier and LinkTarget), from
+// the one read that tells it apart.
+func (p *Provider) reparsePoint(d fs.DirEntry, path string, r *Entry) {
+	fi, err := d.Info()
+	if err != nil {
+		return
+	}
+	t, ok := mountPoint(fi, path)
+	if !ok {
+		return
+	}
+	r.Kind = KindSymlink
+	if p.opt.LinkTarget && p.opt.Fields != Names {
+		r.LinkTarget, r.Present = filepath.ToSlash(t), r.Present|HasLink
+	}
 }
 
 // fromFileInfo fills a row from os.FileInfo plus the platform Sys() data.

@@ -68,7 +68,7 @@ func localFlags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
 	Define(f, Flag{Name: "no-dirs", Value: Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
 	Define(f, Flag{Name: "no-link-target", Value: Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
 	Define(f, Flag{Name: "one-file-system", Short: "x", Familiar: []string{"one-filesystem"}, Value: Switch(&o.OneFilesystem),
-		Usage: "stay on the root filesystem (macOS: its volume); keep boundary rows"})
+		Usage: "stop at other filesystems (macOS: volumes; Windows: junctions, mounts)"})
 	return o
 }
 

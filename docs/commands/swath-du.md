@@ -248,7 +248,7 @@ sizes) with exit 2.
   do not read symbolic links' targets
 
 - <a id="option-one-file-system"></a>[`-x, --one-file-system`](#option-one-file-system)\
-  stay on the root filesystem (macOS: its volume); keep boundary rows
+  stop at other filesystems (macOS: volumes; Windows: junctions, mounts)
 
 ### Performance
 

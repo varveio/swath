@@ -249,7 +249,7 @@ records `no_dirs` in `coverage.filters`):
 | `key` | binary, required | the path relative to the root, `/`-separated, no leading `/`; a directory's ends in `/`; the name's exact bytes |
 | `size` | int64 | `st_size` (apparent bytes); a directory's row carries its own, so a byte total excludes `kind = 'dir'` (or is `swath du`'s): a plain `sum(size)` exceeds `swath du -A`'s total |
 | `last_modified` | timestamp | `st_mtime` |
-| `kind` | STRING, required | `file`, `dir`, `symlink`, `fifo`, `socket`, `char_device`, `block_device`, `unknown` |
+| `kind` | STRING, required | `file`, `dir`, `symlink`, `fifo`, `socket`, `char_device`, `block_device`, `unknown`; on Windows a junction or a volume mount point is a `symlink` |
 | `mode` | uint32 | `st_mode & 0o7777` (permissions, setuid, setgid, sticky) |
 | `uid`, `gid`, `nlink` | uint32 | `st_uid`, `st_gid`, `st_nlink` |
 | `inode`, `dev` | uint64 | `st_ino`, `st_dev` (statx: `makedev(major, minor)`) |

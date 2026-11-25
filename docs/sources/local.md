@@ -32,7 +32,7 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 | `--metadata names\|stat\|statx` | what is read per entry: names only (no size or time), `stat` (the default), or `statx`, which adds `created_at` (Linux) |
 | `--no-dirs` | omit the directories' rows (they are still walked) |
 | `--no-link-target` | do not read symbolic links' targets |
-| `--one-file-system` | stop at a filesystem boundary; on macOS, also stop at a different volume even when its device number matches; keep the directory row |
+| `--one-file-system` | stop at a filesystem boundary; on macOS, also stop at a different volume even when its device number matches; keep the directory row; on Windows, see below |
 
 `swath du` leads with the space on disk, as `du` does, and also takes `-A`, `--apparent-size` (the files'
 lengths instead), `--allocated` (require the space on disk) and `-l`, `--count-links`
@@ -47,6 +47,13 @@ match System's. Selecting a directory on Data as the root scans that volume norm
 A volume identity lookup failure prevents descent and counts as unreadable, not as a confirmed boundary.
 Ordinary `dev` and `inode` columns keep their original stat values. The dataset records the
 `one_file_system` filter, but does not identify individual stopped directories.
+
+On Windows a junction and a volume mount point are listed as kind `symlink`, with their target in
+`link_target` (a path such as `C:/Data`, or `//?/Volume{GUID}/` for a volume), and never walked, as a
+symbolic link is not, with or without `--one-file-system`. The option is accepted there and records the
+`one_file_system` filter, but no device or volume is compared: the walk stops only at those two kinds of
+entry. A directory the system redirects elsewhere without either (a DFS link, a folder of a network share
+the server maps to another volume) is walked like any other.
 
 `--no-dirs` and `--one-file-system` mark a dataset as not the whole directory (`coverage.filters` holds
 `no_dirs` or `one_file_system`). `--one-file-system` and `--allocated` need each entry's stat: they are refused
