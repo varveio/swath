@@ -59,7 +59,7 @@ _swath_list() {
         '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume); keep boundary rows]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume; Windows: always)]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
@@ -127,7 +127,7 @@ _swath_du() {
         '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume); keep boundary rows]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume; Windows: always)]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
@@ -218,7 +218,7 @@ _swath_diag_list() {
         '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume); keep boundary rows]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume; Windows: always)]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
@@ -304,7 +304,7 @@ _swath_diag_count() {
         '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
-        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume); keep boundary rows]' \
+        '(-x --one-file-system)'{-x,--one-file-system}'[stay on the root filesystem (macOS: its volume; Windows: always)]' \
         '--azure-sas-token=[a shared access signature (a query string); never recorded]:TOKEN: ' \
         '--azure-fetch-metadata[fill the metadata column with each blob'\''s user metadata]' \
         '--azure-fetch-tags[fill the tags column with each blob'\''s index tags]' \
