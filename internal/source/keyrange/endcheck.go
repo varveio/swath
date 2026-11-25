@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 )
 
@@ -32,15 +34,23 @@ import (
 // common prefix (a folder: some key at or after it exists). Synthesized
 // pivots, prior cuts and resume keys are not witnesses.
 //
+// The check is against the scope as it stood when the run started: a key
+// the provider says was modified after that (Description.Modified, less
+// endSkew for the clocks) is no witness, so writes at the scope's end
+// while the run lists neither contradict a claim nor keep a chain going,
+// as before the check. Keys the service omits are older than the run.
+//
 // A witness past L is not yet a lie: keys may be written or deleted while
 // the run lists. checkEnd asks again (endTries times, with the requeue
 // backoff, for a service whose listing lags its writes): the witness, with
 // a listing of its own prefix that sends no start-after, and the claim,
-// with start-after L. New keys after L are a race: the page is not final,
-// and the chain goes on after L through the caller's own page path. A witness gone is a race: the page stands. A witness that stays
-// while start-after L still ends the listing below it is an omission: the
-// run fails, resumable (source.ErrOmitted), with nothing past the range's
-// last fence declared.
+// with start-after L. Keys from before the run after L are a race (or a
+// lagging listing): the page is not final, and the chain goes on after L
+// through the caller's own page path. A witness gone hands the claim to
+// the ladder (below), which finds another or confirms the claim. A witness
+// that stays while start-after L still ends the listing below it is an
+// omission: the run fails, resumable (source.ErrOmitted), with nothing past
+// the range's last fence declared.
 //
 // A claim with no witness past it (the scope's last range; neighbours that
 // all lie with no folder seen between them, as --no-seed or one worker can
@@ -52,13 +62,17 @@ import (
 //
 // The check covers range ends, the sequential chain's resume and the
 // seed's single first page from a resume key; a chain from the scope's
-// start is the service's own. Not covered: versions listings, and a claim
-// whose last key the provider refuses as a start bound
-// (end_check.unverified).
+// start is the service's own. Not covered: versions listings. No request
+// the check sends starts after a bound the provider refuses (listAfter).
 
 // endTries is how many times checkEnd asks again before it calls a
 // contradicted page an omission.
 const endTries = 3
+
+// endSkew is how far the provider's clock may run ahead of the engine's: a
+// key modified less than this before the run started may be the run's own
+// time's write, and is no witness.
+const endSkew = time.Minute
 
 // witnesses are the greatest key and common prefix the run has listed,
 // and the least claim a ladder confirmed (the floor).
@@ -89,10 +103,24 @@ func (p *Engine[P]) endChecks() bool {
 	return p.d.Unbounded && !p.d.Groups
 }
 
-// witness records a page's greatest key and common prefix.
+// old: the row was modified before the run started (or the provider does
+// not say): a key the check may count on.
+func (p *Engine[P]) old(r *schema.Row[P]) bool {
+	if p.d.Modified == nil {
+		return true
+	}
+	m := p.d.Modified(&r.Data)
+	return m == 0 || m < p.snapshot
+}
+
+// witness records a page's greatest key from before the run and its
+// greatest common prefix.
 func (p *Engine[P]) witness(out *Page[P]) {
-	if n := len(out.Rows); n > 0 {
-		raise(&p.seen.key, out.Rows[n-1].Key)
+	for i := len(out.Rows) - 1; i >= 0; i-- {
+		if p.old(&out.Rows[i]) {
+			raise(&p.seen.key, out.Rows[i].Key)
+			break
+		}
 	}
 	if n := len(out.Prefixes); n > 0 {
 		raise(&p.seen.prefix, out.Prefixes[n-1]) // sorted by list
@@ -136,8 +164,9 @@ func (p *Engine[P]) checkEnd(ctx context.Context, in *Query, out *Page[P], c str
 }
 
 // askAgain settles a page that ended the listing after l while w, a key or
-// folder past l, was seen: true when keys follow l now, false when w is
-// gone, or the omission.
+// folder past l, was seen: true when keys follow l now, false when nothing
+// from before the run does (w gone, and no ladder finds another), or the
+// omission.
 func (p *Engine[P]) askAgain(ctx context.Context, in *Query, l, w string, folder bool) (bool, error) {
 	wait := requeueBase
 	for try := 0; ; try++ {
@@ -151,8 +180,15 @@ func (p *Engine[P]) askAgain(ctx context.Context, in *Query, l, w string, folder
 			return false, err
 		}
 		if !there {
+			// Deleted meanwhile (or written since the run started): the
+			// greatest witness is never lowered, so the claim is not taken
+			// on its word: the ladder asks whether anything else follows.
 			p.c.Inc(cEndRacedGone)
-			return false, nil
+			if w, err = p.confirm(ctx, l); err != nil || w == "" {
+				return false, err
+			}
+			folder = false
+			continue
 		}
 		if try == endTries {
 			p.c.Inc(cEndOmitted)
@@ -188,10 +224,27 @@ func (p *Engine[P]) stalled(in *Query, l string) error {
 }
 
 // follows asks the claim again: whether the chain after l, with the
-// claim's page size, lists a key after l (listAfter).
+// claim's page size, lists a key from before the run after l (listAfter),
+// or a page of later keys that more follow (one may be). Keys written since
+// the run started alone, on a final page, are no answer: the witness was
+// not among them, so the service still omits it.
 func (p *Engine[P]) follows(ctx context.Context, in *Query, l string) (bool, error) {
 	out, err := p.listAfter(ctx, in, l)
-	return err == nil && len(out.Rows) > 0, err
+	if err != nil {
+		return false, err
+	}
+	for i := range out.Rows {
+		if p.old(&out.Rows[i]) {
+			return true, nil
+		}
+	}
+	if len(out.Rows) > 0 {
+		if out.Truncated {
+			return true, nil
+		}
+		p.c.Inc(cEndNewWrites)
+	}
+	return false, nil
 }
 
 // listAfter lists the first page of the chain after l in in's scope, with
@@ -201,7 +254,7 @@ func (p *Engine[P]) follows(ctx context.Context, in *Query, l string) (bool, err
 // control characters) the chain starts after l's longest accepted prefix
 // and the keys up to l are dropped, as a resume drops them; those pages
 // must ascend and their tokens make progress (a token cycle, or a key at
-// or below the last, is a broken listing), within EmptyChainLive pages. On
+// or below the last, is a broken listing), however many there are. On
 // the chain that starts after l itself, a key at or below l is a broken
 // listing too: a service that kept answering with l would otherwise be
 // asked forever.
@@ -209,7 +262,7 @@ func (p *Engine[P]) listAfter(ctx context.Context, in *Query, l string) (*Page[P
 	q := &Query{Prefix: in.Prefix, After: p.safeStart(l), Max: in.Max}
 	prev := q.After
 	var tokens *tokenWindow
-	for pages := 1; ; pages++ {
+	for {
 		if ctx.Err() != nil {
 			return nil, context.Cause(ctx)
 		}
@@ -238,33 +291,35 @@ func (p *Engine[P]) listAfter(ctx context.Context, in *Query, l string) (*Page[P
 		if tokens == nil {
 			tokens = newTokenWindow(q.Token)
 		}
-		if !tokens.add(out.Token) || pages == EmptyChainLive {
+		if !tokens.add(out.Token) {
 			return nil, fmt.Errorf("%w: the pages up to %q after %q make no progress", p.d.invalid(), l, q.After)
 		}
 		q.Token = out.Token
 	}
 }
 
-// exists: a key at or under w is listed by a request with prefix w that
-// sends no start-after (the shape the services that omit keys after a
-// start-after answer whole). w lies in the scope: every witness was listed
-// under it.
+// exists: a key from before the run at or under w is listed by a request
+// with prefix w that sends no start-after (the shape the services that
+// omit keys after a start-after answer whole). w lies in the scope: every
+// witness was listed under it.
 func (p *Engine[P]) exists(ctx context.Context, w string) (bool, error) {
 	p.c.Inc(cEndWitnessChecks)
 	out, err := p.list(ctx, &Query{Prefix: w, Max: 1})
 	if err != nil {
 		return false, err
 	}
-	return len(out.Rows) > 0, nil
+	return len(out.Rows) > 0 && p.old(&out.Rows[0]), nil
 }
 
-// confirm asks whether any key follows l in the scope, for a claim no
-// witness contradicts: the key found, or "" when none follows. The ladder
+// confirm asks whether any key from before the run follows l in the scope,
+// for a claim no witness contradicts: the key found, or "" when none
+// follows. The ladder
 // asks, with max-keys 1 and in one round trip, the folder of l after l,
 // then each folder above it up to the scope after its child folder (the
 // child's name and '0', the byte after '/'), and the keys under that name
 // and '0' itself. No request starts after a key below a folder of its
-// prefix, the shape that omits keys.
+// prefix, the shape that omits keys, nor after a bound the provider
+// refuses (listAfter, with a page of keys to drop).
 func (p *Engine[P]) confirm(ctx context.Context, l string) (string, error) {
 	for {
 		if f := p.seen.floor.Load(); f != nil && l >= *f {
@@ -324,12 +379,6 @@ type flight struct {
 // climb runs the ladder for a claim after l (confirm).
 func (p *Engine[P]) climb(ctx context.Context, l string) (string, error) {
 	steps := ladder(l, p.opt.Prefix)
-	for _, q := range steps {
-		if q.After != "" && !p.safe(q.After) || !p.safe(q.Prefix) {
-			p.c.Inc(cEndUnverified)
-			return "", nil
-		}
-	}
 	p.c.Inc(cEndLadders)
 	p.c.Add(cEndLadderRequests, int64(len(steps)))
 	found := make([]string, len(steps))
@@ -337,8 +386,17 @@ func (p *Engine[P]) climb(ctx context.Context, l string) (string, error) {
 	var wg sync.WaitGroup
 	for i := range steps {
 		wg.Go(func() {
-			out, err := p.list(ctx, &steps[i])
-			if err == nil && len(out.Rows) > 0 {
+			q := &steps[i]
+			var out *Page[P]
+			var err error
+			if q.After != "" && !p.safe(q.After) {
+				// A refused bound: after its accepted prefix, a page at a
+				// time, the keys up to it dropped.
+				out, err = p.listAfter(ctx, &Query{Prefix: q.Prefix, Max: p.opt.PageSize}, q.After)
+			} else {
+				out, err = p.list(ctx, q)
+			}
+			if err == nil && len(out.Rows) > 0 && p.old(&out.Rows[0]) {
 				found[i] = strings.Clone(out.Rows[0].Key)
 			}
 			errs[i] = err

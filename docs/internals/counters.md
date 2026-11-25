@@ -396,14 +396,14 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `end_check.witness_checks` | count | requests | end_check | requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests) |
 | `end_check.asked_again` | count | requests | end_check | contradicted pages asked again after their last key (also counted in requests) |
 | `end_check.raced_new_keys` | count | pages | end_check | contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the page was not final and the chain went on after it |
-| `end_check.raced_gone` | count | pages | end_check | contradicted pages whose contradicting key or folder no longer exists (deleted meanwhile): the page stands |
+| `end_check.raced_gone` | count | pages | end_check | contradicting keys or folders that no longer existed when asked (deleted meanwhile, or written since the run started): the claim went to a ladder |
 | `end_check.omitted` | count | pages | end_check | pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys) |
 | `end_check.ladders` | count | claims | end_check | claims nothing the run had seen contradicted, confirmed by asking whether any key follows them (one round trip of max-keys 1 requests, one per folder level and two per level above) |
 | `end_check.ladder_requests` | count | requests | end_check | the ladders' requests (also counted in requests) |
 | `end_check.ladder_found` | count | claims | end_check | claims a ladder found a key after: contradicted, and asked again (also in end_check.contradicted) |
 | `end_check.floor` | count | claims | end_check | claims at or above one a ladder already confirmed: nothing follows them, at no request |
 | `end_check.ladder_waits` | count | claims | end_check | claims that waited for a ladder in flight from at or below them instead of asking their own (then counted in floor, or contradicted by the key it found) |
-| `end_check.unverified` | count | claims | end_check | claims not verified: a ladder step would start after a key the provider refuses as a bound |
+| `end_check.new_writes` | count | pages | end_check | pages asked again that listed after the claim only keys modified since the run started, not the witness: no answer, asked again |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

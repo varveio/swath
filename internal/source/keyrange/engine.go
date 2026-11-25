@@ -119,6 +119,10 @@ type Description[P any] struct {
 	// Counters are the provider's own counters, after the engine's
 	// (Engine.ID maps their index).
 	Counters []counters.Def
+	// Modified, if set, is a row's last-modified time in UTC epoch
+	// microseconds (0: unknown): the end check counts only keys from before
+	// the run started as witnesses (endcheck.go).
+	Modified func(*P) int64
 	// Unbounded: the provider's requests carry no end bound (S3's
 	// ListObjectsV2), so a page that is not truncated says the scope holds
 	// no key after it, and the engine checks a range's end against the keys
@@ -273,6 +277,9 @@ type Engine[P any] struct {
 	tr    *runtrace.Writer
 	lanes []bool
 	seen  witnesses // the greatest key and folder listed (endcheck.go)
+	// snapshot: the run's start less endSkew, in epoch microseconds; a key
+	// modified at or after it is no end-check witness.
+	snapshot int64
 }
 
 // New returns an engine over fetch.
@@ -293,7 +300,8 @@ func New[P any](opt Options, d Description[P], fetch Fetch[P]) (*Engine[P], erro
 		opt.PageSize = PageKeys
 	}
 	now := time.Now()
-	p := &Engine[P]{opt: opt, d: d, fetch: fetch, running: map[uint64]*running{}, tiles: map[int32]*tileAccount{}, start: now, areaAt: now}
+	p := &Engine[P]{opt: opt, d: d, fetch: fetch, running: map[uint64]*running{}, tiles: map[int32]*tileAccount{}, start: now, areaAt: now,
+		snapshot: now.Add(-endSkew).UnixMicro()}
 	p.c = counters.New(append(append([]counters.Def(nil), Counters...), d.Counters...))
 	return p, nil
 }
@@ -544,7 +552,10 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 	// chain started after a key (a resume); from, it goes on after that key,
 	// listed by listAfter; stalls, restarts after the same key that listed
 	// nothing.
-	afterKey, from, stalls := in.After != "", "", 0
+	// listed: the chain's last key listed, the dropped ones included: an
+	// empty final page's claim is after it, not after the request's start
+	// bound (a refused resume key starts the chain below keys it drops).
+	afterKey, from, stalls, listed := in.After != "", "", 0, ""
 	for {
 		var out *Page[P]
 		var err error
@@ -559,8 +570,10 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			return err
 		}
 		restart := "" // keys follow this final page after all: the chain goes on after it
-		if !out.Truncated && afterKey && p.endChecks() {
-			more, l, err := p.checkEnd(ctx, in, out, max(last, in.After))
+		// A page that reaches --max-keys ends the listing whatever follows.
+		capped := p.opt.MaxKeys > 0 && p.objects.Load()+int64(len(out.Rows)) >= p.opt.MaxKeys
+		if !out.Truncated && afterKey && !capped && p.endChecks() {
+			more, l, err := p.checkEnd(ctx, in, out, max(listed, last, in.After))
 			if err != nil {
 				return err
 			}
@@ -579,6 +592,9 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			if more {
 				restart = l
 			}
+		}
+		if n := len(out.Rows); n > 0 {
+			listed = strings.Clone(out.Rows[n-1].Key)
 		}
 		dropped := 0
 		for dropped < len(out.Rows) && skip != "" && out.Rows[dropped].Key <= skip {

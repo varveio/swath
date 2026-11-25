@@ -186,7 +186,7 @@ const (
 	cEndLadderFound
 	cEndFloor
 	cEndLadderWaits
-	cEndUnverified
+	cEndNewWrites
 	numCounters
 )
 
@@ -365,14 +365,14 @@ var Counters = table([numCounters]counters.Def{
 	cEndWitnessChecks:             d("end_check.witness_checks", counters.Count, "requests", "requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests)", "end_check"),
 	cEndAskedAgain:                d("end_check.asked_again", counters.Count, "requests", "contradicted pages asked again after their last key (also counted in requests)", "end_check"),
 	cEndRacedNew:                  d("end_check.raced_new_keys", counters.Count, "pages", "contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the page was not final and the chain went on after it", "end_check"),
-	cEndRacedGone:                 d("end_check.raced_gone", counters.Count, "pages", "contradicted pages whose contradicting key or folder no longer exists (deleted meanwhile): the page stands", "end_check"),
+	cEndRacedGone:                 d("end_check.raced_gone", counters.Count, "pages", "contradicting keys or folders that no longer existed when asked (deleted meanwhile, or written since the run started): the claim went to a ladder", "end_check"),
 	cEndOmitted:                   d("end_check.omitted", counters.Count, "pages", "pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys)", "end_check"),
 	cEndLadders:                   d("end_check.ladders", counters.Count, "claims", "claims nothing the run had seen contradicted, confirmed by asking whether any key follows them (one round trip of max-keys 1 requests, one per folder level and two per level above)", "end_check"),
 	cEndLadderRequests:            d("end_check.ladder_requests", counters.Count, "requests", "the ladders' requests (also counted in requests)", "end_check"),
 	cEndLadderFound:               d("end_check.ladder_found", counters.Count, "claims", "claims a ladder found a key after: contradicted, and asked again (also in end_check.contradicted)", "end_check"),
 	cEndFloor:                     d("end_check.floor", counters.Count, "claims", "claims at or above one a ladder already confirmed: nothing follows them, at no request", "end_check"),
 	cEndLadderWaits:               d("end_check.ladder_waits", counters.Count, "claims", "claims that waited for a ladder in flight from at or below them instead of asking their own (then counted in floor, or contradicted by the key it found)", "end_check"),
-	cEndUnverified:                d("end_check.unverified", counters.Count, "claims", "claims not verified: a ladder step would start after a key the provider refuses as a bound", "end_check"),
+	cEndNewWrites:                 d("end_check.new_writes", counters.Count, "pages", "pages asked again that listed after the claim only keys modified since the run started, not the witness: no answer, asked again", "end_check"),
 })
 
 // pivotBy is the accepted-split counter of each pivot source (density is

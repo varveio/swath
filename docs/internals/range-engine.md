@@ -70,8 +70,15 @@ The end check (`keyrange/endcheck.go`, `Description.Unbounded`, S3's current-obj
 checks every chain that started after a key and ends on a page that is not truncated (a claim,
 `end_check.claims`): a range's, before the range declares its end (its last fence); a resumed sequential
 chain's; and a resumed seed's single first page. A chain from the scope's start follows the service's own
-tokens and is not checked. Every page records its greatest key and common prefix (the witnesses: ranges,
+tokens and is not checked. A page that reaches its range's `hi`, or `--max-keys`, ends the listing whatever
+follows and is not checked. Every page records its greatest key and common prefix (the witnesses: ranges,
 overfetched keys, the seed, structure probes; never a synthesized pivot, a prior's cut or a resume key).
+
+The check is against the scope as it stood when the run started: a key the provider says was modified after
+that, less a minute for the clocks (`Description.Modified`, S3's `LastModified`), is no witness, neither as a
+key the run listed nor as one a request below finds. Writes at the scope's end while the run lists therefore
+neither contradict a claim nor keep a chain going, as before the check; keys a service omits are older than
+the run.
 
 - **A witness past `L`** proves the claim wrong, at no request.
 - **No witness past `L`**: the claim is confirmed by a ladder (`end_check.ladders`). It is one round trip of
@@ -90,10 +97,14 @@ overfetched keys, the seed, structure probes; never a synthesized pivot, a prior
 - **A claim contradicted** (`end_check.contradicted`) may be a write or a delete during the run, or a service
   whose listing lags, so the engine asks again, up to three times with the requeue backoff:
   - the witness, by a listing of its own prefix with no `start-after` (the shape those services answer whole):
-    gone, the claim stands (`end_check.raced_gone`);
+    gone (deleted, or written since the run started), the claim goes to a ladder, which finds another witness
+    or confirms it (`end_check.raced_gone`). The greatest witness is never lowered, so a deleted one never
+    stands for a claim;
   - the claim, by `start-after=L` (after `L`'s longest accepted prefix, keys up to `L` dropped, when the
     provider refuses `L` as a bound; those pages must ascend and their tokens progress): keys after `L` now,
-    the page is not final (`end_check.raced_new_keys`). The chain emits it, fences at `L` and goes on after
+    the page is not final (`end_check.raced_new_keys`). Only keys from before the run, or a page of later keys
+    that more follow, are an answer: a final page of keys written since the run started does not hold the
+    witness, so the service still omits it (`end_check.new_writes`). The chain emits it, fences at `L` and goes on after
     `L` (from `L`'s longest accepted prefix, keys up to `L` dropped, when the provider refuses `L`: no start
     bound the end check sends is one the provider refuses) through its own page path, so each page is emitted
     and checked as it comes and none is buffered. A
@@ -110,8 +121,13 @@ declared its end. A resume lists it again and checks it the same way.
 and exit 0 of `nara-1950-census`'s first 250,000 into exit 1, `omitted_keys`, at 1, 8 and 64 workers, with
 and without the seed. Garage, SeaweedFS and versitygw list the shapes bucket whole.
 
-Not covered: versions listings (`--all-versions`, whose `key-marker` shapes are not measured), and a claim a
-ladder step would start after a key the provider refuses as a bound (`end_check.unverified`).
+No request the check sends starts after a bound the provider refuses: the re-ask, every restart and a ladder
+step whose start is refused go after the bound's longest accepted prefix, the keys up to it dropped, under the
+same ascending and token-progress guards, however many pages that takes.
+
+Not covered: versions listings (`--all-versions`, whose `key-marker` shapes are not measured). A journal
+written before the check reuses its certificates on resume: ranges a build without it fenced after an
+omitting page stay trusted (list such a dataset again rather than resume it).
 
 **Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --no-seed` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points

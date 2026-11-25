@@ -63,6 +63,7 @@ Notable changes per release. The human summary of the current release is in the
   run with exit 1, cause `omitted_keys`, resumable. A page with nothing listed past it is confirmed by one
   round trip of small requests that these stores answer correctly; the check covers every range, a resumed
   `--sequential` chain and a resumed first page, and adds a few requests a run on correct stores (1 to 6 on AWS).
+  Only keys modified before the run started count, so writes at the end of a busy bucket do not keep a run going.
   Versions listings are not checked yet (#265).
 
 - `swath du --allocated`: the view's heading says `on disk`, not `size`, and the closing line gives the space on

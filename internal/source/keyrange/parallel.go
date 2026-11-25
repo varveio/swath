@@ -600,7 +600,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		// follow it after all: the page is not final, and the chain goes on
 		// after its last key.
 		restart := ""
-		if !out.Truncated && afterKey && p.endChecks() {
+		// A page that reaches hi ends the range whatever follows it.
+		atHi := !r.open && len(out.Rows) > 0 && out.Rows[len(out.Rows)-1].Key >= r.hi
+		if !out.Truncated && afterKey && !atHi && p.endChecks() {
 			// The chain started after a key and the service says the scope
 			// ends here: checked before the range declares its end.
 			more, l, err := p.checkEnd(ctx, in, out, c)

@@ -245,11 +245,11 @@ func TestEndCheckDecisions(t *testing.T) {
 			t.Fatalf("err %v more %v raced %d", err, more, st.Get(cEndRacedNew))
 		}
 	})
-	t.Run("a witness deleted since: the page stands", func(t *testing.T) {
+	t.Run("a witness deleted since: the ladder decides, and nothing follows", func(t *testing.T) {
 		s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(int, *keyrangetest.ListInput) bool { return true }}
 		more, _, st, err := checkOne(t, s, "c/1", "b/2", empty(), "b/2")
-		if err != nil || more || st.Get(cEndRacedGone) != 1 || st.Get(cEndAskedAgain) != 0 {
-			t.Fatalf("err %v more %v gone %d asked again %d", err, more, st.Get(cEndRacedGone), st.Get(cEndAskedAgain))
+		if err != nil || more || st.Get(cEndRacedGone) != 1 || st.Get(cEndLadders) != 1 || st.Get(cEndAskedAgain) != 0 {
+			t.Fatalf("err %v more %v gone %d ladders %d asked again %d", err, more, st.Get(cEndRacedGone), st.Get(cEndLadders), st.Get(cEndAskedAgain))
 		}
 	})
 	t.Run("a last key the provider refuses as a bound: asked again after its accepted prefix", func(t *testing.T) {
@@ -581,5 +581,228 @@ func TestEndCheckSequentialRestartAfterRefusedKey(t *testing.T) {
 	}
 	if st := p.Stats(); st.Get(cEndRacedNew) != 1 {
 		t.Fatalf("raced %d, want 1", st.Get(cEndRacedNew))
+	}
+}
+
+// vanishing deletes key once it has been listed: a temporary or rotating
+// object at the scope's end.
+type vanishing struct {
+	*sorted
+	key  string
+	mu   sync.Mutex
+	seen bool
+}
+
+func (v *vanishing) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	out, err := v.sorted.List(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	keep := out.Contents[:0:0]
+	for _, o := range out.Contents {
+		if o.Key == v.key {
+			if v.seen {
+				continue
+			}
+			v.seen = true
+		}
+		keep = append(keep, o)
+	}
+	cp := *out
+	cp.Contents = keep
+	return &cp, nil
+}
+
+// The run's greatest witness deleted after it was listed: the check still
+// catches an omitting store (review of #685: a gone witness accepted every
+// later claim, 3,000 of 4,500 keys and no error).
+func TestEndCheckDeletedGreatestWitness(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	keys := append(naraShape(1500), "zzz-tmp")
+	var want []string
+	for _, k := range slices.Sorted(slices.Values(keys)) {
+		if k != "zzz-tmp" {
+			want = append(want, k)
+		}
+	}
+	for _, w := range []int{4, 16, 64} {
+		for _, pageSize := range []int{100, 1000} {
+			f := newSorted(keys, false, 1)
+			f.Omits = true
+			got, st, err := runEnd(t, &vanishing{sorted: f, key: "zzz-tmp"}, Options{Seed: true, SeedFirstPage: true, PageSize: pageSize}, w, true)
+			got = slices.DeleteFunc(got, func(k string) bool { return k == "zzz-tmp" })
+			if err == nil && !slices.Equal(got, want) {
+				t.Fatalf("workers %d page %d: %d of %d keys and no error (gone %d, ladders %d)", w, pageSize, len(got), len(want),
+					st.Get(cEndRacedGone), st.Get(cEndLadders))
+			}
+			if err != nil && !errors.Is(err, source.ErrOmitted) {
+				t.Fatalf("workers %d page %d: %v", w, pageSize, err)
+			}
+		}
+	}
+}
+
+// emptyTail ends the listing with a truncated page and an empty final one
+// after it, as S3 may.
+type emptyTail struct{ *sorted }
+
+func (e *emptyTail) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	if in.ContinuationToken == "end" {
+		return &keyrangetest.Page{}, nil
+	}
+	out, err := e.sorted.List(ctx, in)
+	if err == nil && !out.IsTruncated && len(out.Contents) > 0 && in.Delimiter == "" {
+		cp := *out
+		cp.IsTruncated, cp.NextContinuationToken = true, "end"
+		out = &cp
+	}
+	return out, err
+}
+
+// A sequential resume after a key the provider refuses as a bound, every
+// key at or below it, the chain ending on an empty page: the claim is after
+// the last key listed, not the request's bound (review of #685: it was
+// after the bound, below keys the chain had dropped, and restarted
+// forever).
+func TestEndCheckSequentialResumeBelowRefusedKey(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	api := &emptyTail{newSorted([]string{"a/\x01k0", "a/\x01k1", "a/\x01k2"}, false, 1)}
+	p, err := New(Options{Workers: 1, PageSize: 50, Sequential: true, Resume: &Resume{After: "a/\x01k2"}},
+		Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(api))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	b := &batches{}
+	if err := p.expandSequential(ctx, b); err != nil {
+		st := p.Stats()
+		t.Fatalf("%v after %d requests", err, st.Get(cRequests))
+	}
+	if st := p.Stats(); len(b.keys) != 0 || st.Get(cEndRacedNew) != 0 || st.Get(cRequests) > 10 {
+		t.Fatalf("keys %q, raced %d, %d requests", b.keys, st.Get(cEndRacedNew), st.Get(cRequests))
+	}
+}
+
+// appender writes a key at the scope's end on every request, modified now;
+// the keys before it were modified long before the run (the test payload's
+// Size stands for the epoch-microsecond mtime).
+type appender struct {
+	mu   sync.Mutex
+	keys []string
+	at   map[string]int64
+}
+
+func (a *appender) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	k := fmt.Sprintf("zz/%06d", len(a.at))
+	a.keys, a.at[k] = append(a.keys, k), time.Now().UnixMicro()
+	out, err := keyrangetest.NewSorted(a.keys, false, 1).List(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out.Contents {
+		out.Contents[i].Size = a.at[out.Contents[i].Key]
+	}
+	return out, nil
+}
+
+// A writer at the scope's end while the run lists: keys written since the
+// run started neither contradict a claim nor keep a chain going (review of
+// #685: each final page was chased after the new keys, with no bound).
+func TestEndCheckWritesAtTheEndDoNotChase(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	api := &appender{at: map[string]int64{}}
+	for i := range 300 {
+		k := fmt.Sprintf("a/%04d", i)
+		api.keys, api.at[k] = append(api.keys, k), 1
+	}
+	want := slices.Clone(api.keys)
+	for _, w := range []int{1, 4, 16} {
+		p, err := New(Options{Workers: w, PageSize: 20, Seed: true, SeedFirstPage: true},
+			Description[Object]{Target: "test", Listing: Listing, Unbounded: true, Modified: func(o *Object) int64 { return o.Size }}, fetchFrom(api))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &collect{}
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		_, err = order.Run[Range, Object](ctx, p, c, &Schema, order.Options{Workers: w, Budget: 500 * 256})
+		cancel()
+		st := p.Stats()
+		if err != nil {
+			t.Fatalf("workers %d: %v (claims %d, raced %d)", w, err, st.Get(cEndClaims), st.Get(cEndRacedNew))
+		}
+		got := slices.DeleteFunc(keysOf(c.rows), func(k string) bool { return strings.HasPrefix(k, "zz/") })
+		if !slices.Equal(got, want) || st.Get(cEndRacedNew) != 0 || st.Get(cEndContradicted) != 0 {
+			t.Fatalf("workers %d: %d of %d keys, raced %d, contradicted %d", w, len(got), len(want), st.Get(cEndRacedNew), st.Get(cEndContradicted))
+		}
+	}
+}
+
+// listAfter from a refused bound drops however many pages of keys lie
+// below it (review of #685: past 1,024 pages it failed the run as a
+// protocol violation).
+func TestListAfterRefusedBoundManyPages(t *testing.T) {
+	var keys []string
+	for i := range 1200 {
+		keys = append(keys, fmt.Sprintf("a/\x01k%04d", i))
+	}
+	keys = append(keys, "a/\x01z")
+	p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(newSorted(keys, false, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := p.listAfter(t.Context(), &Query{Max: 1}, "a/\x01k1199")
+	if err != nil || len(out.Rows) != 1 || out.Rows[0].Key != "a/\x01z" {
+		t.Fatalf("err %v rows %v", err, out)
+	}
+}
+
+// A claim whose last key the provider refuses as a bound is confirmed, not
+// left unverified (review of #685).
+func TestLadderAfterRefusedKey(t *testing.T) {
+	keys := []string{"a/\x01k0", "a/\x01k1", "a/\x01k2", "a/\x01k3"}
+	p, err := New(Options{Workers: 1, PageSize: 2}, Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(newSorted(keys, false, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, err := p.confirm(t.Context(), "a/\x01k1"); err != nil || w != "a/\x01k2" {
+		t.Fatalf("confirm after a refused key: %q, %v", w, err)
+	}
+	if w, err := p.confirm(t.Context(), "a/\x01k3"); err != nil || w != "" {
+		t.Fatalf("confirm after the last key: %q, %v", w, err)
+	}
+}
+
+// A final page that reaches its range's hi, or --max-keys, ends the listing
+// whatever follows: no claim is checked.
+func TestEndCheckSkipsPagesThatEndAnyway(t *testing.T) {
+	keys := []string{"a/1", "a/2", "a/3", "a/4", "z/1"}
+	p, err := New(Options{Workers: 1, PageSize: 50, SplitCoin: func() bool { return false }},
+		Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(newSorted(keys, false, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.witness(&Page[Object]{Prefixes: []string{"zz/"}})
+	if err := p.expandRange(t.Context(), Range{lo: "a/1", hi: "a/3", id: 1, born: fromSeed}, &batches{}); err != nil {
+		t.Fatal(err)
+	}
+	if st := p.Stats(); st.Get(cEndClaims) != 0 {
+		t.Fatalf("%d claims checked on a page past hi", st.Get(cEndClaims))
+	}
+	q, err := New(Options{Workers: 1, PageSize: 50, Sequential: true, MaxKeys: 2, Resume: &Resume{After: "a/1"}},
+		Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(newSorted(keys, false, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.witness(&Page[Object]{Prefixes: []string{"zz/"}})
+	if err := q.expandSequential(t.Context(), &batches{}); err != nil {
+		t.Fatal(err)
+	}
+	if st := q.Stats(); st.Get(cEndClaims) != 0 {
+		t.Fatalf("%d claims checked on a page at --max-keys", st.Get(cEndClaims))
 	}
 }
