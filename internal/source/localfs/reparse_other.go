@@ -11,4 +11,4 @@ import "io/fs"
 // directory.
 const reparseLinks = false
 
-func reparseKind(k Kind, _ fs.FileInfo) Kind { return k }
+func mountPoint(fs.FileInfo, string) (string, bool) { return "", false }

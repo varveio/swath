@@ -21,11 +21,15 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   the one that was listed (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and takes the directory enumeration's
   own size, times and attributes (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or
   `allocated_bytes`). Go reports a directory reparse point whose tag is a name surrogate other than a
-  symbolic link's (`IO_REPARSE_TAG_MOUNT_POINT`: a junction or a volume mount point) without the directory bit
-  and as `ModeIrregular`; the enumeration's attributes (reparse point and directory) make it kind `symlink`
-  (`surrogateKind`, at every tier, no call), and its target is read as a link's (`os.Readlink`). It is never
-  walked, as no symbolic link is. A directory reparse point of another tag (a cloud placeholder) keeps the
-  directory bit and is walked.
+  symbolic link's without the directory bit and as `ModeIrregular`, kind `unknown`; its attributes (reparse
+  point and directory) do not say which tag it has. For such an entry only, at every tier, one `os.Readlink`
+  decides (`mountPoint`): it reads `IO_REPARSE_TAG_MOUNT_POINT` (a junction or a volume mount point), which
+  becomes kind `symlink` with that target in `link_target` (at a stat tier with link targets), and fails for
+  any other surrogate tag (`IO_REPARSE_TAG_WCI_LINK`, say) or a failed read, which stays `unknown` and counts
+  no error. It opens the entry without following it and asks for no access, so a junction whose list
+  permission is denied (`C:\Documents and Settings`) is read too. None of these is walked, as no symbolic link
+  is. A directory reparse point of a tag that is not a name surrogate (a cloud placeholder, a DFS link) keeps
+  the directory bit and is walked.
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:

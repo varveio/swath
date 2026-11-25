@@ -613,7 +613,7 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 	switch fi := fs.FileInfo(nil); {
 	case p.opt.Fields == Names:
 		if fi, err = os.Lstat(p.root); err == nil {
-			row.Data.Kind = reparseKind(kindOf(fi.Mode().Type()), fi)
+			row.Data.Kind = kindOf(fi.Mode().Type())
 		}
 	case p.native:
 		err = statPath(p.root, p.opt.Fields, &row.Data)
@@ -686,7 +686,7 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 		row := Row{Key: r.prefix + name}
 		path := r.path + string(os.PathSeparator) + name
 		if p.opt.Fields == Names {
-			row.Data.Kind = entryKind(d)
+			row.Data.Kind = kindOf(d.Type())
 		} else {
 			if err := statEntry(f, d, &row.Data); err != nil {
 				if p.leftOut(row.Key, d.IsDir(), true) {
@@ -707,6 +707,9 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 					st.note(&st.ReadlinkErrors, path, err)
 				}
 			}
+		}
+		if row.Data.Kind == KindUnknown && reparseLinks {
+			p.reparsePoint(d, path, &row.Data)
 		}
 		if row.Data.Kind == KindDir {
 			row.Key += "/"
@@ -766,18 +769,23 @@ func kindOf(m fs.FileMode) Kind {
 	return KindUnknown
 }
 
-// entryKind is d's kind from its directory entry alone (the names tier).
-// Where a junction or a mount point is a reparse point (reparseLinks:
-// Windows), an entry of no other kind is looked at in the enumeration's own
-// attributes, which d.Info gives with no call there.
-func entryKind(d fs.DirEntry) Kind {
-	k := kindOf(d.Type())
-	if k == KindUnknown && reparseLinks {
-		if fi, err := d.Info(); err == nil {
-			k = reparseKind(k, fi)
-		}
+// reparsePoint makes an entry of kind unknown that is a junction or a
+// volume mount point (mountPoint: Windows) a symbolic link, with its
+// target where the run reads targets (a stat tier and LinkTarget), from
+// the one read that tells it apart.
+func (p *Provider) reparsePoint(d fs.DirEntry, path string, r *Entry) {
+	fi, err := d.Info()
+	if err != nil {
+		return
 	}
-	return k
+	t, ok := mountPoint(fi, path)
+	if !ok {
+		return
+	}
+	r.Kind = KindSymlink
+	if p.opt.LinkTarget && p.opt.Fields != Names {
+		r.LinkTarget, r.Present = filepath.ToSlash(t), r.Present|HasLink
+	}
 }
 
 // fromFileInfo fills a row from os.FileInfo plus the platform Sys() data.
