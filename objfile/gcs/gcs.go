@@ -49,8 +49,11 @@ import (
 
 // New returns an Opener of the objects of bucket through client, which
 // carries the caller's credentials, endpoint, transport and retry settings.
+// Its reads retry what the SDK's policy retries and a connection reset as
+// Windows words it (retryable), as uploads do; the error function replaces
+// one the client set, and its attempt allowance and backoff are kept.
 func New(client *storage.Client, bucket string) objfile.Opener {
-	return opener{bucket: client.Bucket(bucket), observed: ranged.Observing(client)}
+	return opener{bucket: client.Bucket(bucket).Retryer(storage.WithErrorFunc(retryable)), observed: ranged.Observing(client)}
 }
 
 type opener struct {

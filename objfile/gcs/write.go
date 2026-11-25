@@ -127,7 +127,8 @@ func (w writer) object(name string, budget func() bool) *storage.ObjectHandle {
 }
 
 // retryable is the SDK's policy (408, 429, 5xx, connection resets), with
-// a reset worded as Windows words it.
+// a reset worded as Windows words it: uploads' (writer.object) and reads'
+// (New).
 func retryable(err error) bool { return storage.ShouldRetry(err) || connReset(err) }
 
 func (w writer) NewWriter(ctx context.Context, name string, c objfile.Condition) (objfile.Upload, error) {

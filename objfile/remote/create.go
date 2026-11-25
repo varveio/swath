@@ -163,7 +163,8 @@ func OpenDestination(ctx context.Context, location string, o Options) (*Destinat
 		return nil, err
 	}
 	// Reads (metadata, ranges) are bounded as uploads are: the SDK's
-	// default retries them until the context ends.
+	// default retries them until the context ends. gcs.New gives them the
+	// uploads' error function (a reset as Windows words it).
 	client.SetRetry(storage.WithMaxAttempts(gcs.DefaultMaxAttempts))
 	d.o = objfile.Root(gcs.New(client, l.Container), l.Prefix)
 	d.w = objfile.RootWriter(gcs.NewWriter(client, l.Container, o.GCSWrite), l.Prefix)
