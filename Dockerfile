@@ -41,7 +41,7 @@
 # The builder's Go is the `toolchain` line of go.mod (go1.27.4), digest-pinned, so the image
 # and CI compile with the same release: actions/setup-go reads that line from go-version-file.
 # Raise both together. GOTOOLCHAIN=local keeps the builder from downloading another.
-FROM --platform=$BUILDPLATFORM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
 ENV GOTOOLCHAIN=local
 WORKDIR /src
 
