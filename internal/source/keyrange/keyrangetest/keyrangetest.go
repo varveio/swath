@@ -58,9 +58,15 @@ type Sorted struct {
 	// it SlowLatency instead: a slow folder.
 	SlowPrefix  string
 	SlowLatency time.Duration
-	mu          sync.Mutex
-	seed        int64
-	Calls       int
+	// Omits answers a data request that starts after a key the way MinIO
+	// does (measured 2026-11-25, docs/sources/s3.md): with an empty page
+	// marked not truncated when, at a folder level of the start-after
+	// below the request's prefix, more than MaxKeys keys start with that
+	// folder's name followed by a byte below '/' ("a-x/…" before "a/").
+	Omits bool
+	mu    sync.Mutex
+	seed  int64
+	Calls int
 	// Starts are the data (non-delimiter) requests' exclusive start keys:
 	// the start-after, or for a continuation the key before its position
 	// ("" from the scope's start). Read under Lock.
@@ -148,6 +154,9 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 		f.mu.Unlock()
 	}
 	out := &Page{}
+	if f.Omits && delim == "" && in.ContinuationToken == "" && f.omitted(prefix, in.StartAfter, in.MaxKeys) {
+		return out, nil
+	}
 	n := 0
 	for ; i < len(f.Keys) && strings.HasPrefix(f.Keys[i], prefix); i++ {
 		if n == size {
@@ -180,6 +189,21 @@ func (f *Sorted) List(ctx context.Context, in *ListInput) (*Page, error) {
 		n++
 	}
 	return out, nil
+}
+
+// omitted: Omits answers a start-after sa under prefix with an empty
+// page (the rule in Omits).
+func (f *Sorted) omitted(prefix, sa string, maxKeys int) bool {
+	for j := len(prefix); j < len(sa); j++ {
+		if sa[j] != '/' {
+			continue
+		}
+		name := sa[:j]
+		if n := sort.SearchStrings(f.Keys, name+"/") - sort.SearchStrings(f.Keys, name); n > maxKeys {
+			return true
+		}
+	}
+	return false
 }
 
 // Keyspaces after Swath's testkit Keyspaces, plus markers and keys with '%'

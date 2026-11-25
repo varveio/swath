@@ -174,6 +174,13 @@ const (
 	cSplitSkippedGroupOpen
 	cTraceEvents
 	cTraceDropped
+	cEndClaims
+	cEndContradicted
+	cEndWitnessChecks
+	cEndAskedAgain
+	cEndRacedNew
+	cEndRacedGone
+	cEndOmitted
 	numCounters
 )
 
@@ -347,6 +354,13 @@ var Counters = table([numCounters]counters.Def{
 	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split", "groups"),
 	cTraceEvents:                  d("trace.events", counters.Count, "events", "events the engine handed to the run trace (--trace)", "trace"),
 	cTraceDropped:                 d("trace.dropped", counters.Count, "events", "trace events dropped because the trace writer was a full buffer behind: the engine never waits for the file", "trace"),
+	cEndClaims:                    d("end_check.claims", counters.Count, "pages", "range pages, of a chain that started after a key, that the service said end the listing (not truncated): checked against the keys and folders the run had seen", "end_check"),
+	cEndContradicted:              d("end_check.contradicted", counters.Count, "pages", "claims a key or folder seen past the page's last key contradicted: asked again (claims less these were not verified)", "end_check"),
+	cEndWitnessChecks:             d("end_check.witness_checks", counters.Count, "requests", "requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests)", "end_check"),
+	cEndAskedAgain:                d("end_check.asked_again", counters.Count, "requests", "contradicted pages asked again after their last key (also counted in requests)", "end_check"),
+	cEndRacedNew:                  d("end_check.raced_new_keys", counters.Count, "pages", "contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the range went on from them", "end_check"),
+	cEndRacedGone:                 d("end_check.raced_gone", counters.Count, "pages", "contradicted pages whose contradicting key or folder no longer exists (deleted meanwhile): the page stands", "end_check"),
+	cEndOmitted:                   d("end_check.omitted", counters.Count, "pages", "pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys)", "end_check"),
 })
 
 // pivotBy is the accepted-split counter of each pivot source (density is
@@ -429,6 +443,9 @@ func (p *Engine[P]) disabled() []string {
 	}
 	if p.tr == nil {
 		off = append(off, "trace")
+	}
+	if !p.endChecks() {
+		off = append(off, "end_check")
 	}
 	return append(off, p.opt.ClientOff...)
 }

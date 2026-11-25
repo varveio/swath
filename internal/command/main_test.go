@@ -28,6 +28,7 @@ import (
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/inventory"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/source"
 )
 
 func TestRun(t *testing.T) {
@@ -529,6 +530,10 @@ func TestFatalResumableAsTheJournalSays(t *testing.T) {
 		{&classified{errors.New("list: 403"), "access_denied"}, "access_denied", true},
 		{fmt.Errorf("publish: %w", syscall.EIO), "", true},
 		{fmt.Errorf("journal: %w", syscall.EROFS), "", true},
+		// The service omitted keys after a start-after (the range engine's
+		// end check): the range's end was never declared, so a resume lists
+		// it again and checks it again.
+		{fmt.Errorf("list s3://b/: %w", source.Omitted(errors.New("the service omitted keys"))), "omitted_keys", true},
 		{&classified{errors.New("list: 404"), "not_found"}, "not_found", false},
 		{&classified{errors.New("list: 301"), "region_redirect"}, "region_redirect", false},
 		{fmt.Errorf("%w (%s)", journal.ErrLocked, dir), "", false},

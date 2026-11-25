@@ -119,6 +119,11 @@ type Description[P any] struct {
 	// Counters are the provider's own counters, after the engine's
 	// (Engine.ID maps their index).
 	Counters []counters.Def
+	// Unbounded: the provider's requests carry no end bound (S3's
+	// ListObjectsV2), so a page that is not truncated says the scope holds
+	// no key after it, and the engine checks a range's end against the keys
+	// and folders the run has seen (endcheck.go).
+	Unbounded bool
 }
 
 // Listing is the native listing of a provider the engine applies to.
@@ -267,6 +272,7 @@ type Engine[P any] struct {
 	// lanes its events name, held by the ranges in Expand (lane).
 	tr    *runtrace.Writer
 	lanes []bool
+	seen  witnesses // the greatest key and folder listed (endcheck.go)
 }
 
 // New returns an engine over fetch.
@@ -424,6 +430,9 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 				}
 				if !p.d.Groups {
 					p.frontier.Add(1)
+				}
+				if p.endChecks() {
+					p.witness(out)
 				}
 				return out, nil
 			}

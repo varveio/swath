@@ -33,7 +33,8 @@ an off policy are left out (`TestSummaryDistinguishesOffFromZero`):
   and `--structure` are `swath diag list` flags; a library caller's zero `Options` has the seed and
   the probes off), `resume` on a fresh run, `max_keys`
   without `--max-keys`, `trace` without `--trace` ([trace.md](trace.md)), `limiter` with `--no-adaptive-limit`, a library caller's zero `Admission` or a supplied client, `slow_start` without
-  `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`);
+  `--adaptive-limit-slow-start` or without the limiter, `request_rate` without `--request-rate`, `end_check` with
+  `--sequential`, for a versions listing, and always for GCS and Azure, whose requests carry an end bound);
 - present and zero: the policy was on and never fired.
 
 The report's `diagnostics.resources` follow the same rule: `features.spill` is false and the `spill` object absent with
@@ -390,6 +391,13 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `split.skipped.group_open` | count | decisions | groups | a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split |
 | `trace.events` | count | events | trace | events the engine handed to the run trace (--trace) |
 | `trace.dropped` | count | events | trace | trace events dropped because the trace writer was a full buffer behind: the engine never waits for the file |
+| `end_check.claims` | count | pages | end_check | range pages, of a chain that started after a key, that the service said end the listing (not truncated): checked against the keys and folders the run had seen |
+| `end_check.contradicted` | count | pages | end_check | claims a key or folder seen past the page's last key contradicted: asked again (claims less these were not verified) |
+| `end_check.witness_checks` | count | requests | end_check | requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests) |
+| `end_check.asked_again` | count | requests | end_check | contradicted pages asked again after their last key (also counted in requests) |
+| `end_check.raced_new_keys` | count | pages | end_check | contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the range went on from them |
+| `end_check.raced_gone` | count | pages | end_check | contradicted pages whose contradicting key or folder no longer exists (deleted meanwhile): the page stands |
+| `end_check.omitted` | count | pages | end_check | pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys) |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
 | `retries` | count | requests |  | attempts repeated after a retryable failure |
 | `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |

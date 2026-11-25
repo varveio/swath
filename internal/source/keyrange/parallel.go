@@ -582,6 +582,13 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		if err != nil {
 			return err
 		}
+		if !out.Truncated && in.After != "" && p.endChecks() {
+			// The chain started after a key and the service says the scope
+			// ends here: checked before the range declares its end.
+			if out, err = p.checkEnd(ctx, in, out, c); err != nil {
+				return err
+			}
+		}
 		pageNs := float64(time.Since(t0))
 		skipped := 0
 		if r.after != "" { // resume: drop keys already published

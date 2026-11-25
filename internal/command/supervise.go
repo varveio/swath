@@ -189,6 +189,12 @@ func classify(err, cause error, dir string) outcome {
 		// it outranks a stop cause (a resumable 75, 124, 130 or 143), as
 		// Java's; the journal marks the run unresumable.
 		o.Class, o.ExitCode, o.Resumable, o.Cause = inventory.ClassFatal, exitFatal, false, "protocol"
+	case errors.Is(err, source.ErrOmitted):
+		// The service ended a listing before keys the run saw elsewhere,
+		// asked again: a person decides (another listing mode, a fixed
+		// service). Nothing past the range's last fence was declared, so
+		// the journal stays resumable; a resume checks the range again.
+		o.Class, o.ExitCode, o.Cause = inventory.ClassFatal, exitFatal, "omitted_keys"
 	case errors.Is(err, dataset.ErrUnsafeLayout):
 		// The output needs a person: a stop cause selected meanwhile (a
 		// stall, the deadline, a signal) must not make it resumable.

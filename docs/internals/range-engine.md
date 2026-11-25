@@ -56,17 +56,39 @@ ends it. A truncated page without a token or a descending/repeated key is an err
 keys are described below). Empty continuing pages follow their tokens under the bounded cycle and
 progress checks in [contracts.md](contracts.md#execution-and-recovery).
 
-**What is trusted.** swath takes a page that is not truncated as the true end of its range: every key the
-service holds after the page's start, up to the range's end, was on that page. Nothing in one reply can show
-otherwise. An empty page marked not truncated is exactly what an empty range returns, and swath never sees a
-key that the service leaves out. Only a witness outside that reply can expose the omission:
+**What is trusted, and the end check.** swath takes a page that is not truncated as the end of its range.
+On a provider whose requests carry an end bound (GCS's `endOffset`, Azure through its adapter) that is all
+such a page says. S3 sends no end bound, so there a page that is not truncated says more: the scope holds no
+key after the page's last key `L` (after the request's start, for an empty page). In a healthy run only ranges
+above the scope's last key end that way, so any key or folder the run has listed past `L` proves the page
+wrong. Some S3-compatible services answer a `start-after` inside a folder with such a page while keys
+follow: MinIO, when more than about `max-keys` keys start with the folder's name followed by a byte below
+`/` ([s3.md](../sources/s3.md#s3-compatible-stores), [measurements.md](measurements.md#durable-spill),
+`bench/minio_start_after.sh`).
 
-- an independent sequential audit of the same scope (one continuation-token chain from the start);
-- a key known to exist past the page's start, inside the range, that the listing lacks.
+The end check (`keyrange/endcheck.go`, `Description.Unbounded`, S3's current-object listing) uses that. Every
+page records its greatest key and common prefix (the witnesses: ranges, overfetched keys, the seed, structure
+probes; never a synthesized pivot, a prior's cut or a resume key). When a range whose chain started after a
+key ends on a page that is not truncated, before the range declares its end (its last fence), the engine
+compares `L` with the greatest witness. None past `L`: the page stands, at no request (`end_check.claims`). A
+witness past `L` (`end_check.contradicted`) may be a write or a delete during the run, or a service whose
+listing lags, so the engine asks again, up to three times with the requeue backoff:
+- the witness, by a listing of its own prefix with no `start-after` (the shape those services answer whole):
+  gone, the page stands (`end_check.raced_gone`);
+- the claim, by `start-after=L`: keys after `L` now, the range goes on from them, and their page's end is
+  checked in turn (`end_check.raced_new_keys`).
 
-The durable spill campaign found such a service: MinIO answering a `start-after` inside one prefix with an
-empty page ([measurements.md](measurements.md#durable-spill), `bench/minio_start_after.sh`). Its key-file
-oracle is the first kind of witness.
+A witness that stays while `start-after=L` still ends the listing below it is an omission: the run fails
+with cause `omitted_keys` (`source.ErrOmitted`, `end_check.omitted`), resumable, since the range never
+declared its end, and a resume checks it again. On a correct service the check sends no request
+(`TestEndCheckHealthyStoresCostNothing`; the same requests as without it on AWS, Garage, SeaweedFS and
+versitygw, 2026-11-25). On MinIO with the first 250,000 keys of `nara-1950-census` it turns 107,651 listed
+keys and exit 0 into exit 1, `omitted_keys`, at 1, 8 and 64 workers.
+
+Not yet covered: a claim with no witness past it (`end_check.claims` less `end_check.contradicted`), such as
+the scope's last range or neighbours that all lie with no folder seen between them; the seed's single first
+page; the sequential chain and its resume; versions listings. A confirming request for those claims is the
+next step (varveio/swath#265).
 
 **Root and seed.** The root is `(⊥, ⊤]`. With the seed (on by default in the command, `swath diag list --no-seed` turns it
 off; never with `--sequential`) the root is a seed that emits no rows and tiles the scope at cut points

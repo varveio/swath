@@ -24,6 +24,13 @@ import (
 // the same service.
 var ErrProtocol = errors.New("protocol violation")
 
+// ErrOmitted marks a listing the service broke by omission: a page said
+// the listing ends while a key after it, listed elsewhere in the run,
+// still exists. The run fails before declaring the range's end; unlike a
+// protocol violation its journal stays resumable (a resume lists the range
+// again, and checks it again).
+var ErrOmitted = errors.New("the service omitted keys")
+
 // ErrUnsupported marks a source the tool refuses before listing (an S3
 // directory bucket or an Azure namespace that is not positively flat).
 // Admission may make requests to establish whether the source is supported.
@@ -32,6 +39,10 @@ var ErrUnsupported = errors.New("unsupported source")
 // Violation marks err as a protocol violation (errors.Is ErrProtocol),
 // keeping its message and its own chain.
 func Violation(err error) error { return marked{err, ErrProtocol} }
+
+// Omitted marks err as an omission (errors.Is ErrOmitted), keeping its
+// message.
+func Omitted(err error) error { return marked{err, ErrOmitted} }
 
 // Unsupported marks err as an unsupported source (errors.Is
 // ErrUnsupported), keeping its message.
