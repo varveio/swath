@@ -20,9 +20,9 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Changed
 
-- On Windows, `--one-file-system` is accepted: the walk never enters a junction or a volume mount point, with or
-  without it, so it stays on the root's volume, and the dataset records the `one_file_system` filter as on Linux
-  and macOS. A junction or a volume mount point is now listed as kind `symlink` with its target in `link_target`,
+- On Windows, `--one-file-system` is accepted, and the dataset records the `one_file_system` filter as on Linux and
+  macOS. The walk never enters a junction or a volume mount point, with or without it; no device or volume is
+  compared, so a DFS link or a share the server maps to another volume is still walked. A junction or a volume mount point is now listed as kind `symlink` with its target in `link_target`,
   where it was `unknown` (#686).
 
 - On macOS, `--one-file-system` and the live local library also check the containing volume of each

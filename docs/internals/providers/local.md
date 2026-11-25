@@ -179,9 +179,11 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   is not valid UTF-8 is listed with its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on a platform other than Linux, macOS and Windows), and `emit` keeps a `dir` row whose `dev`
-  differs but hands on no child range for it (counter `other_device_dirs`). On Windows no device is read or
-  compared: every mount point is a `symlink` row, never walked, so the walk stays on the root's volume with or
-  without the option, which is accepted (`filesystem_boundary` `reparse_point`) only to record the filter. On macOS the opened-handle volume check also stops same-device
+  differs but hands on no child range for it (counter `other_device_dirs`). On Windows no device or volume is
+  read or compared: a junction or a volume mount point is a `symlink` row, never walked, with or without the
+  option, which is accepted (`filesystem_boundary` `reparse_point`) to record the filter. A directory reparse
+  point of another tag (`IO_REPARSE_TAG_DFS`, a cloud placeholder) keeps the directory bit and is walked, and a
+  path the redirector sends to another server shows no boundary at all: the option does not stop either. On macOS the opened-handle volume check also stops same-device
   foreign volumes. `Report` adds `one_file_system` to the coverage's filters, so a dataset says it
   stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no `dir` row, and
   `Report` adds `no_dirs` to the filters likewise. `Report` names the tier and, where a stat tier reads them
