@@ -20,6 +20,12 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Changed
 
+- On Windows a stat tier fills `allocated_bytes` (the space on disk) and `inode` (the file ID, where the filesystem
+  has one) from the directory listing swath already reads, with no call per file, so `swath du` leads with the
+  space on disk there as on Linux and macOS and takes `--allocated`. The figure can lag under a hard link's other
+  names and for a file still being written ([How sizes are counted](docs/totals.md#how-sizes-are-counted)).
+  Link counts are still not read on Windows, so every name of a hard-linked file counts (#568).
+
 - On Windows, `--one-file-system` is accepted, and the dataset records the `one_file_system` filter as on Linux and
   macOS. The walk never enters a junction or a volume mount point, with or without it; no device or volume is
   compared, so a DFS link or a share the server maps to another volume is still walked. A junction or a volume mount point is now listed as kind `symlink` with its target in `link_target`,

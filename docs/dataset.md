@@ -252,8 +252,8 @@ records `no_dirs` in `coverage.filters`):
 | `kind` | STRING, required | `file`, `dir`, `symlink`, `fifo`, `socket`, `char_device`, `block_device`, `unknown`; on Windows a junction or a volume mount point is a `symlink` |
 | `mode` | uint32 | `st_mode & 0o7777` (permissions, setuid, setgid, sticky) |
 | `uid`, `gid`, `nlink` | uint32 | `st_uid`, `st_gid`, `st_nlink` |
-| `inode`, `dev` | uint64 | `st_ino`, `st_dev` (statx: `makedev(major, minor)`) |
-| `allocated_bytes` | int64 | `st_blocks * 512` (a sparse file has `allocated_bytes < size`) |
+| `inode`, `dev` | uint64 | `st_ino`, `st_dev` (statx: `makedev(major, minor)`); on Windows `inode` is the file ID where the filesystem has one (NTFS, ReFS: its low 64 bits) and `dev` is null |
+| `allocated_bytes` | int64 | `st_blocks * 512` (a sparse file has `allocated_bytes < size`); on Windows the directory listing's allocation size |
 | `metadata_changed_at` | timestamp | `st_ctime` |
 | `accessed_at` | timestamp | `st_atime`, which `noatime` mounts leave stale and `relatime` (the Linux default) updates at most once a day or on a write |
 | `created_at` | timestamp | statx `stx_btime` (`--metadata statx` only, when the filesystem reports it); macOS `st_birthtime` (stat tier); Windows `CreationTime` |

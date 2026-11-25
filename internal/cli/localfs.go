@@ -76,7 +76,8 @@ func localFlags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
 // (registry.Factory.CheckTotals). The allocated bytes are read from each
 // entry's stat: they lead by default, as du's, where the listing reads
 // them (localfs.BlocksRead), and the size leads where it does not (the
-// names tier, Windows); --allocated is refused at the names tier. The hard
+// names tier, a platform whose listing reads none); --allocated is
+// refused at the names tier. The hard
 // links are read from the stat too, so the names tier, and a platform
 // whose stat has no link count (localfs.LinksRead: Windows), count every
 // name.

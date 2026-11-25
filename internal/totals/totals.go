@@ -64,7 +64,7 @@ const (
 	ReasonDefault     = "default"      // a local tree whose listing reads blocks: allocated bytes
 	ReasonObjectStore = "object_store" // objects have no allocation: size
 	ReasonNamesTier   = "names_tier"   // --metadata names reads no stat: size
-	ReasonPlatform    = "platform"     // a platform whose listing reads no blocks (Windows): size
+	ReasonPlatform    = "platform"     // a platform whose listing reads no blocks (not Linux, macOS or Windows): size
 	ReasonDataset     = "dataset"      // a saved dataset without allocated bytes for its files: size
 )
 
@@ -159,7 +159,8 @@ type Row struct {
 	Link       bool
 	Dev, Inode int64
 	// Unidentified marks an object whose links LinksOnce cannot tell
-	// apart (no link count, device or inode: a tree listed on Windows): it
+	// apart (no link count, device or inode: a tree listed on Windows, which
+	// reads a file ID but no link count or device): it
 	// counts under its name, and the tally no longer claims LinksOnce.
 	Unidentified bool
 }

@@ -534,6 +534,7 @@ only the two named.
 | `SWATH_MINIO_ENDPOINT`, `SWATH_CORPUS_ENDPOINT` | the durable spill campaign | `command` | never |
 | `SWATH_GROWTH=1` | the 10,000-part arm of `TestPartCountGrowth` | `internal/inventory` | never |
 | `SWATH_VERIFY_DIR=DIR` | `TestVerifyThroughput` | `internal/inventory` | never |
+| `SWATH_WINDOWS_MEASURE=1` | `TestMeasureAllocationSize`, which logs what a Windows directory listing says of each file's space on disk against a call per file ([measurements](measurements.md#space-on-disk-in-a-windows-directory-listing-2026-11-25)); Windows | `internal/source/localfs` | never |
 | `SWATH_VERIFIER_FIXTURES=DIR` | `TestVerifierFixtures`, run by `test_dataset_readers.py` | `internal/inventory` | never |
 | `UPDATE=1` | rewrites the goldens: the option blocks of `docs/commands/` and `docs/internals/diagnostics.md`, the log events of `docs/reference/log-events.md`, the completion scripts in `internal/command/testdata`, `docs/internals/counters.md`, the report schema | `internal/command`, `internal/source/s3`, `internal/inventory` | never; the comparisons run in the default suite |
 | `-fuzz`, `-bench` | the fuzz targets and benchmarks | [fuzzing](#fuzzing) | never; seed corpora and `testdata/fuzz` run as tests in the default suite |

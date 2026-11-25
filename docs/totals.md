@@ -151,8 +151,10 @@ $ swath du -d 1 media -A
 ```
 
 Here `archive/` holds a sparse 64 MiB disk image that takes no blocks: 64.8 MiB long, 788 KiB on disk. Where the
-listing reads no blocks, the lengths lead: on Windows, at `--metadata names` (which reads no lengths either),
-and for an object store, which has no allocation. `--metadata statx` reads blocks, but a filesystem may answer
+listing reads no blocks, the lengths lead: at `--metadata names` (which reads no lengths either), and for an
+object store, which has no allocation. On Windows the space on disk is what the directory listing gives
+(its allocation size, read with the names, no call per file); it can lag for a file still being written
+and under a hard link's other names (see [How sizes are counted](#how-sizes-are-counted)). `--metadata statx` reads blocks, but a filesystem may answer
 it without them for some entries (some network filesystems): those count as missing, and the figure is a lower
 bound (`>= `). `--allocated` requires the space on disk: an entry without it fails the count, and
 `--metadata names` refuses it. The run report's `totals.primary` says which figure led,
@@ -170,8 +172,13 @@ The space on disk is what the filesystem says, what `du` prints, but not the spa
 - Shared extents (deduplicated files, APFS clones, Btrfs and XFS reflinks) are counted for each file that
   shares them, so a total can exceed the filesystem's capacity.
 - Network filesystems may report a synthetic allocation.
-- An unknown figure is not zero. Windows and `--metadata names` read no blocks: the figure is null (`-` in the
-  table, `on disk unknown` under it), and `--metadata names` reads no lengths either. A figure that only some
+- An unknown figure is not zero. `--metadata names` reads no blocks: the figure is null (`-` in the table,
+  `on disk unknown` under it), and it reads no lengths either.
+- On Windows each entry's space on disk comes from the directory listing, which NTFS keeps per name and
+  refreshes only through the name a file was opened by: under a hard link's other names it can be an older
+  figure, and a file being written shows what was on disk when it was last flushed. A compressed or sparse
+  file's figure is its compressed or allocated size once its data is written back. A small file stored in
+  its MFT record reports its length rounded up to 8 bytes, though it takes no cluster. A figure that only some
   files had is a lower bound, shown as `>= 12.0 KiB`.
 
 An object store has no allocated bytes: its rows carry them as null, and its table has no line under it. Its
@@ -277,9 +284,9 @@ swath: totals of the dataset media-inventory, not a live listing: /home/me/media
 The rows, the view and every format are the ones `swath du` of the dataset's source printed when it was
 listed, with the same depth, order and filters; hard links count once where the dataset records them, and `-l`
 counts every name. The space on disk leads where the dataset holds it; a dataset listed where blocks are not
-read (Windows, `--metadata names`) leads with the lengths, as its live run did. Totals from a dataset listed on
-Windows with no row left after the filters say `allocated_bytes` where the live run says `size`: nothing is
-left to tell them apart, and every figure is 0. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
+read (`--metadata names`, or Windows before 0.4.1) leads with the lengths, as its live run did. Totals from
+such a dataset with no row left after the filters say `allocated_bytes` where the live run says `size`:
+nothing is left to tell them apart, and every figure is 0. A live `swath du` that listed a million entries or more ends on a terminal with `hint:` lines
 giving both commands for its SOURCE. `swath du DIR` without `--from-dataset` totals the files in DIR, and when
 DIR holds a dataset a `hint:` line gives the `--from-dataset` command.
 

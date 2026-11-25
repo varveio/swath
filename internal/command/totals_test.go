@@ -140,13 +140,10 @@ func TestDu(t *testing.T) {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 	// The allocated bytes are every row's too: the files' and the
-	// directories' blocks, known for each entry, but on Windows, which reads
-	// none (an empty directory's own unknown there too; 0 on APFS).
+	// directories' blocks, known for each entry (an empty directory's own 0
+	// on APFS and NTFS; on Windows from the directory enumeration).
 	for _, r := range duTSV(t, out.String()) {
-		switch {
-		case runtime.GOOS == "windows" && r["allocated_bytes"] != `\N`,
-			r["objects"] == "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"),
-			r["objects"] != "0" && runtime.GOOS != "windows" && (r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0"):
+		if r["allocated_bytes"] == `\N` || r["allocated_bytes_missing"] != "0" {
 			t.Errorf("allocated bytes %+v", r)
 		}
 	}
@@ -166,7 +163,7 @@ func TestDu(t *testing.T) {
 	readJSON(t, report, &r)
 	tt := r.Output.Totals
 	if tt == nil || tt.Depth != 2 || tt.Prefixes != 5 || tt.Objects != 4 || tt.Dirs != 4 || tt.Size == nil || *tt.Size != 9 || tt.SizeMissing != 0 || tt.NotObjects != 4 ||
-		tt.Primary != "size" || tt.PrimaryReason != "flag" || tt.MaxLastModified == nil || tt.MaxLastModified.Format("2006-01-02T15:04:05.000000Z") != newest || (tt.AllocatedBytes == nil) != (runtime.GOOS == "windows") ||
+		tt.Primary != "size" || tt.PrimaryReason != "flag" || tt.MaxLastModified == nil || tt.MaxLastModified.Format("2006-01-02T15:04:05.000000Z") != newest || tt.AllocatedBytes == nil ||
 		strconv.FormatBool(tt.LinksOnce) != linksOnce || r.Output.RowsEmitted != 8 || r.Invocation.Argv[0] != "du" {
 		t.Fatalf("report totals %+v, rows %d, argv %q", tt, r.Output.RowsEmitted, r.Invocation.Argv)
 	}
@@ -191,18 +188,14 @@ func TestDu(t *testing.T) {
 		" 0 B      0     0  " + none + "  e/\n" +
 		" 9 B      4     4  " + newestLocal + "  " + root + " (total)\n"
 	onDisk := regexp.MustCompile(`^  9 B in 4 files · [0-9.]+ [KMG]?i?B on disk\n$`)
-	if runtime.GOOS == "windows" { // no blocks read
-		onDisk = regexp.MustCompile(`^  9 B in 4 files · on disk unknown\n$`)
-	}
 	if out.String() != wantTable || !onDisk.MatchString(stderr.String()) {
 		t.Fatalf("table\n%s\nwant\n%s\nstderr %q", out.String(), wantTable, stderr.String())
 	}
 	// --allocated: the one figure is on disk, the line gives the size.
 	stderr.Reset()
 	out.Reset()
-	if err := runDu(context.Background(), []string{root, "-d", "1", "--format=table", "--no-stats", "--allocated"}, &out); runtime.GOOS != "windows" &&
-		(err != nil || !strings.HasPrefix(tableCells(out.String())[0], "on disk") ||
-			!regexp.MustCompile(`^  [0-9.]+ [KMG]?i?B on disk in 4 files · 9 B of data\n$`).MatchString(stderr.String())) {
+	if err := runDu(context.Background(), []string{root, "-d", "1", "--format=table", "--no-stats", "--allocated"}, &out); err != nil || !strings.HasPrefix(tableCells(out.String())[0], "on disk") ||
+		!regexp.MustCompile(`^  [0-9.]+ [KMG]?i?B on disk in 4 files · 9 B of data\n$`).MatchString(stderr.String()) {
 		t.Fatalf("--allocated: %v\n%s\nstderr %q", err, out.String(), stderr.String())
 	}
 	// -q, and TSV, print no such line.
@@ -329,7 +322,7 @@ func TestDuFiltersLeaveOutDirBlocks(t *testing.T) {
 		}
 		out, err := duRun(t, append([]string{root, "--format", "tsv"}, f...)...)
 		r := duTSV(t, out)[0]
-		if err != nil || known && r["allocated_bytes"] != strconv.FormatInt(files, 10) || !known && runtime.GOOS != "windows" {
+		if err != nil || !known || r["allocated_bytes"] != strconv.FormatInt(files, 10) {
 			t.Fatalf("%q: %v, du %v, the kept files' blocks %d\n%s", f, err, r, files, list.String())
 		}
 	}

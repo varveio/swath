@@ -6,8 +6,8 @@
 package localfs
 
 import (
-	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,44 +18,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// The measurement of #568 (step 1): what a directory enumeration says of
-// each file's space on disk, against what a call per file says. It
-// asserts nothing; it logs one row per file.
-
-// idBothDirInfo is FILE_ID_BOTH_DIR_INFO.
-type idBothDirInfo struct {
-	NextEntryOffset uint32
-	FileIndex       uint32
-	CreationTime    int64
-	LastAccessTime  int64
-	LastWriteTime   int64
-	ChangeTime      int64
-	EndOfFile       int64
-	AllocationSize  int64
-	FileAttributes  uint32
-	FileNameLength  uint32
-	EaSize          uint32
-	ShortNameLength int8
-	ShortName       [12]uint16
-	FileID          int64
-	FileName        [1]uint16
-}
-
-// fullDirInfo is FILE_FULL_DIR_INFO.
-type fullDirInfo struct {
-	NextEntryOffset uint32
-	FileIndex       uint32
-	CreationTime    int64
-	LastAccessTime  int64
-	LastWriteTime   int64
-	ChangeTime      int64
-	EndOfFile       int64
-	AllocationSize  int64
-	FileAttributes  uint32
-	FileNameLength  uint32
-	EaSize          uint32
-	FileName        [1]uint16
-}
+// The measurement of #568 (docs/internals/measurements.md, "Space on disk
+// in a Windows directory listing"): what the directory enumeration readDir
+// makes says of each file's space on disk, against what a call per file
+// says. It asserts nothing; it logs one row per case. It runs only with
+// SWATH_WINDOWS_MEASURE=1.
 
 // standardInfo is FILE_STANDARD_INFO.
 type standardInfo struct {
@@ -103,62 +70,31 @@ func clusterSize(root string) (int64, error) {
 	return int64(spc) * int64(bps), nil
 }
 
-func openDir(dir string) (windows.Handle, error) {
-	p, err := windows.UTF16PtrFromString(dir)
-	if err != nil {
-		return 0, err
-	}
-	return windows.CreateFile(p, windows.FILE_LIST_DIRECTORY, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
-		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-}
-
-// enumerate reads dir with class, calling each entry's fill.
-func enumerate(dir string, class uint32, fill func(entry unsafe.Pointer) (next uint32)) error {
-	h, err := openDir(dir)
-	if err != nil {
-		return err
-	}
-	defer windows.CloseHandle(h)
-	buf := make([]byte, 64<<10)
-	for {
-		if err := windows.GetFileInformationByHandleEx(h, class, &buf[0], uint32(len(buf))); err != nil {
-			if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
-				return nil
-			}
-			return err
-		}
-		for off := uint32(0); ; {
-			next := fill(unsafe.Pointer(&buf[off]))
-			if next == 0 {
-				break
-			}
-			off += next
-		}
-	}
-}
-
 func readEnumeration(t *testing.T, dir string) map[string]*enumerated {
 	t.Helper()
-	m := map[string]*enumerated{}
-	err := enumerate(dir, windows.FileIdBothDirectoryInfo, func(p unsafe.Pointer) uint32 {
-		d := (*idBothDirInfo)(p)
-		name := windows.UTF16ToString(unsafe.Slice(&d.FileName[0], d.FileNameLength/2))
-		m[name] = &enumerated{eof: d.EndOfFile, alloc: d.AllocationSize, id: d.FileID, attrs: d.FileAttributes}
-		return d.NextEntryOffset
-	})
-	if err != nil {
-		t.Fatalf("FileIdBothDirectoryInfo %s: %v", dir, err)
-	}
-	err = enumerate(dir, windows.FileFullDirectoryInfo, func(p unsafe.Pointer) uint32 {
-		d := (*fullDirInfo)(p)
-		name := windows.UTF16ToString(unsafe.Slice(&d.FileName[0], d.FileNameLength/2))
-		if e := m[name]; e != nil {
-			e.fullAlloc = d.AllocationSize
+	read := func() []fs.DirEntry {
+		f, err := os.Open(dir)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return d.NextEntryOffset
-	})
-	if err != nil {
-		t.Fatalf("FileFullDirectoryInfo %s: %v", dir, err)
+		defer f.Close()
+		ents, err := readDir(f)
+		if err != nil {
+			t.Fatalf("readDir %s: %v", dir, err)
+		}
+		return ents
+	}
+	m := map[string]*enumerated{}
+	for _, d := range read() {
+		w := d.(*winEntry).info
+		m[d.Name()] = &enumerated{eof: d.(*winEntry).Size(), alloc: w.AllocationSize, id: w.FileID, attrs: w.FileAttributes}
+	}
+	readDirFileIDs = false
+	defer func() { readDirFileIDs = true }()
+	for _, d := range read() {
+		if e := m[d.Name()]; e != nil {
+			e.fullAlloc = d.(*winEntry).info.AllocationSize
+		}
 	}
 	return m
 }
@@ -207,12 +143,15 @@ func writeFile(t *testing.T, path string, data []byte) {
 	}
 }
 
-// TestMeasureAllocationSize logs, for each case, the enumeration's
-// EndOfFile and AllocationSize (FileIdBothDirectoryInfo, and the
-// AllocationSize of FileFullDirectoryInfo), against GetCompressedFileSize
+// TestMeasureAllocationSize logs, for each case, readDir's length and
+// AllocationSize (FileIdBothDirectoryInfo, and the AllocationSize of
+// FileFullDirectoryInfo), against GetCompressedFileSize
 // and FILE_STANDARD_INFO through a handle to the file, and whether the
 // enumeration's FileId is the handle's file index.
 func TestMeasureAllocationSize(t *testing.T) {
+	if os.Getenv("SWATH_WINDOWS_MEASURE") != "1" {
+		t.Skip("a measurement, logged: SWATH_WINDOWS_MEASURE=1")
+	}
 	dir := t.TempDir()
 	vol := filepath.VolumeName(dir) + `\`
 	var fsName [64]uint16

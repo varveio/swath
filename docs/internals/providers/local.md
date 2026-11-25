@@ -18,9 +18,17 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   of the full path, which resolves the path again per entry), and it reads a link's target with `readlinkat`
   relative to it; `ReadDir` itself types an entry the filesystem leaves untyped (`DT_UNKNOWN`) with an
   `fstatat` relative to the directory too. On Windows it opens a directory by its path, re-checking that it is
-  the one that was listed (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and takes the directory enumeration's
-  own size, times and attributes (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or
-  `allocated_bytes`). Go reports a directory reparse point whose tag is a name surrogate other than a
+  the one that was listed (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and reads it itself (`readDir`), with the
+  call and class `os.File.ReadDir` uses (`GetFileInformationByHandleEx`: `FileIdBothDirectoryInfo` where the
+  volume supports object IDs and opening by ID, else `FileFullDirectoryInfo`), so that each entry keeps what
+  Go drops: `allocated_bytes` is its `AllocationSize`, `inode` its file ID (null with `FileFullDirectoryInfo`:
+  FAT, exFAT, some shares), beside the size, times and attributes (no call per entry, nor per directory beyond
+  Go's; no `uid`, `gid`, `nlink` or `dev`). The entries' modes are Go's (`winMode`, checked against
+  `ReadDir` by `TestReadDirIsReadDir`). NTFS keeps a copy of the length and allocation in each directory entry and
+  refreshes only the one a file was opened through, so they can lag under a hard link's other names and for a
+  file being written until it is flushed or closed; a compressed or sparse file's is its compressed or
+  allocated size once written back ([measurements](../measurements.md#space-on-disk-in-a-windows-directory-listing-2026-11-25)).
+  A file root's (`Lstat` has neither) are read through a handle that asks for attributes alone (`fillRoot`). Go reports a directory reparse point whose tag is a name surrogate other than a
   symbolic link's without the directory bit and as `ModeIrregular`, kind `unknown`; its attributes (reparse
   point and directory) do not say which tag it has. For such an entry only, at every tier, one `os.Readlink`
   decides (`mountPoint`): it reads `IO_REPARSE_TAG_MOUNT_POINT` (a junction or a volume mount point), which

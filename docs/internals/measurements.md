@@ -52,6 +52,47 @@ isolated syscall path on a dedicated Mac. The captured test stream is the run's
 package `./internal/source/localfs`, run `TestDarwin|TestVolume`, count `1`, race `false`, and
 OS `macos-latest`.
 
+## Space on disk in a Windows directory listing, 2026-11-25
+
+What the directory listing swath reads on Windows (`readDir`: `GetFileInformationByHandleEx`) says of each
+file's space on disk, against what a call per file says, on a GitHub `windows-latest` runner: NTFS on `C:\`,
+4,096-byte clusters (#568). "Listing" is `AllocationSize` of `FileIdBothDirectoryInfo`; `FileFullDirectoryInfo`
+gave the same in every row. "Handle" is `FILE_STANDARD_INFO` through a handle to the file, which is current;
+"GCFS" is `GetCompressedFileSize`, which Explorer's "Size on disk" uses for compressed and sparse files. The
+listing's file ID equalled the handle's file index in every row.
+
+| Case | Length | Listing | GCFS | Handle |
+|---|---:|---:|---:|---:|
+| ordinary, 10,000 B | 10,000 | 12,288 | 10,000 | 12,288 |
+| ordinary, 1 MiB | 1,048,576 | 1,048,576 | 1,048,576 | 1,048,576 |
+| 100 B, stored in its MFT record | 100 | 104 | 100 | 104 |
+| extended to 8 MiB, not written, not sparse | 8,388,608 | 8,388,608 | 8,388,608 | 8,388,608 |
+| compressed, 4 MiB of text, flushed | 4,194,304 | 524,288 | 524,288 | 524,288 |
+| compressed, not yet flushed | 4,194,304 | 4,194,304 | 4,194,304 | 4,194,304 |
+| sparse, 64 MiB with 64 KiB written, flushed | 67,108,864 | 65,536 | 65,536 | 65,536 |
+| sparse, the same, not yet flushed | 67,108,864 | 0 | 0 | 0 |
+| sparse, 64 MiB, nothing written | 67,108,864 | 0 | 0 | 0 |
+| hard link: the name grown by 1 MiB | 1,058,576 | 1,060,864 | 1,058,576 | 1,060,864 |
+| hard link: its other names, same and other directory | 1,058,576 | 12,288 | 1,058,576 | 1,060,864 |
+| the same names after one was opened | 1,058,576 | 1,060,864 | 1,058,576 | 1,060,864 |
+| being written: 1 MiB, open | 1,048,576 | 0 | 1,048,576 | 1,048,576 |
+| being written: 2 MiB, open | 2,097,152 | 1,048,576 | 2,097,152 | 2,228,224 |
+| being written: 2 MiB, open, flushed | 2,097,152 | 2,228,224 | 2,097,152 | 2,228,224 |
+| being written: 2 MiB, closed | 2,097,152 | 2,097,152 | 2,097,152 | 2,097,152 |
+
+The listing agrees with every other way to ask for compressed and sparse files, flushed or not, so swath takes
+it with no call per file. GCFS gives an uncompressed, unsparse file's length, not its clusters, so it is not
+the space on disk there. Under a hard link's other names, and for a file being written, the listing lags until
+that name is opened or the file is flushed or closed: NTFS refreshes the copy in the entry a file was opened
+through only. Not measured: a OneDrive online-only placeholder (the runner has no OneDrive), ReFS, and FAT or
+exFAT (no file ID; `TestAllocatedBytes` covers the class without IDs). Runs
+[45671911801](https://github.com/varveio/swath/actions/runs/45671911801) and
+[45672580722](https://github.com/varveio/swath/actions/runs/45672580722).
+
+**Reproduce:** on Windows, `SWATH_WINDOWS_MEASURE=1 go test -count=1 -v -run '^TestMeasureAllocationSize$'
+./internal/source/localfs`; the rows are the `MEASURE` lines of its output. (The runs above made it through
+`go-stress.yml` before the test was gated.)
+
 ## Output identity with the Java tool
 
 Every comparison was row-identical on the 13 canonical columns, with identical minimum and maximum keys
