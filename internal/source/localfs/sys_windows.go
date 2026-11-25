@@ -41,7 +41,7 @@ func fillSys(r *Entry, fi fs.FileInfo) {
 	r.Btime = d.CreationTime.Nanoseconds() / 1000
 	r.Atime = d.LastAccessTime.Nanoseconds() / 1000
 	r.Present |= HasBtime | HasAtime
-	if w == nil {
+	if w == nil || true { // DEMO ONLY: the values not filled, to show the tests fail
 		return
 	}
 	r.Blocks, r.Present = w.AllocationSize, r.Present|HasBlocks
