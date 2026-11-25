@@ -94,7 +94,9 @@ overfetched keys, the seed, structure probes; never a synthesized pivot, a prior
   - the claim, by `start-after=L` (after `L`'s longest accepted prefix, keys up to `L` dropped, when the
     provider refuses `L` as a bound; those pages must ascend and their tokens progress): keys after `L` now,
     the page is not final (`end_check.raced_new_keys`). The chain emits it, fences at `L` and goes on after
-    `L` through its own page path, so each page is emitted and checked as it comes and none is buffered. A
+    `L` (from `L`'s longest accepted prefix, keys up to `L` dropped, when the provider refuses `L`: no start
+    bound the end check sends is one the provider refuses) through its own page path, so each page is emitted
+    and checked as it comes and none is buffered. A
     key at or below `L` on that chain is an invalid page; a chain after `L` that keeps listing nothing while
     asking again lists keys after it is an omission.
 

@@ -499,3 +499,83 @@ func TestEndCheckResumedChains(t *testing.T) {
 		}
 	}
 }
+
+// shortOnce answers the first data request that starts after a key with
+// its first keep keys alone, as a final page, though keys follow; every
+// other request truthfully.
+type shortOnce struct {
+	*sorted
+	keep int
+	mu   sync.Mutex
+	done bool
+}
+
+func (s *shortOnce) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	out, err := s.sorted.List(ctx, in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil && !s.done && in.StartAfter != "" && in.ContinuationToken == "" && in.Delimiter == "" && len(out.Contents) > s.keep {
+		s.done = true
+		out = &keyrangetest.Page{Contents: out.Contents[:s.keep]}
+	}
+	return out, err
+}
+
+// A recovered page whose last key the provider refuses as a start bound
+// (control characters, as S3): the chain goes on after it from the key's
+// longest accepted prefix, never sending the key itself (review of #684:
+// the restart sent it as start-after).
+func TestEndCheckRestartAfterRefusedKey(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	var keys []string
+	for i := range 10 {
+		keys = append(keys, fmt.Sprintf("a/\x01k%d", i))
+	}
+	keys = append(keys, "z/1")
+	// The fake refuses control characters in start-after, as S3 does.
+	api := &shortOnce{sorted: newSorted(keys, false, 1), keep: 3}
+	p, err := New(Options{Workers: 1, PageSize: 50, SplitCoin: func() bool { return false }},
+		Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(api))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.witness(&Page[Object]{Prefixes: []string{"z/"}})
+	b := &batches{}
+	if err := p.expandRange(t.Context(), Range{lo: "a/", open: true, id: 1, born: fromSeed}, b); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(b.keys, keys) {
+		t.Fatalf("listed %q, want %q", b.keys, keys)
+	}
+	if st := p.Stats(); st.Get(cEndRacedNew) != 1 {
+		t.Fatalf("raced %d, want 1", st.Get(cEndRacedNew))
+	}
+}
+
+// The resumed sequential chain's restart after a refused key goes through
+// listAfter too (review of #685).
+func TestEndCheckSequentialRestartAfterRefusedKey(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	var keys []string
+	for i := range 10 {
+		keys = append(keys, fmt.Sprintf("a/\x01k%d", i))
+	}
+	keys = append(keys, "z/1")
+	api := &shortOnce{sorted: newSorted(keys, false, 1), keep: 3}
+	p, err := New(Options{Workers: 1, PageSize: 50, Sequential: true, Resume: &Resume{After: "a/"}},
+		Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(api))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.witness(&Page[Object]{Prefixes: []string{"z/"}})
+	b := &batches{}
+	if err := p.expandSequential(t.Context(), b); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(b.keys, keys) {
+		t.Fatalf("listed %q, want %q", b.keys, keys)
+	}
+	if st := p.Stats(); st.Get(cEndRacedNew) != 1 {
+		t.Fatalf("raced %d, want 1", st.Get(cEndRacedNew))
+	}
+}

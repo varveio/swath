@@ -540,22 +540,32 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 	if p.opt.Resume != nil {
 		in.After, skip = p.safeStart(p.opt.Resume.After), p.opt.Resume.After
 	}
-	stalls := 0 // restarts after the same key that listed nothing (endcheck.go)
+	// The end check, as a range's (endcheck.go, expandRange): afterKey, the
+	// chain started after a key (a resume); from, it goes on after that key,
+	// listed by listAfter; stalls, restarts after the same key that listed
+	// nothing.
+	afterKey, from, stalls := in.After != "", "", 0
 	for {
-		out, err := p.list(ctx, in)
+		var out *Page[P]
+		var err error
+		restarted := from
+		if from != "" {
+			out, err = p.listAfter(ctx, in, from)
+			from = ""
+		} else {
+			out, err = p.list(ctx, in)
+		}
 		if err != nil {
 			return err
 		}
 		restart := "" // keys follow this final page after all: the chain goes on after it
-		if !out.Truncated && in.After != "" && p.endChecks() {
-			// A resumed chain started after a key: its end is checked as a
-			// range's (endcheck.go, expandRange).
+		if !out.Truncated && afterKey && p.endChecks() {
 			more, l, err := p.checkEnd(ctx, in, out, max(last, in.After))
 			if err != nil {
 				return err
 			}
 			if more && len(out.Rows) == 0 {
-				if l == in.After && in.Token == "" {
+				if l == restarted {
 					if stalls++; stalls > endTries {
 						return p.stalled(in, l)
 					}
@@ -563,7 +573,7 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 				if ctx.Err() != nil {
 					return context.Cause(ctx)
 				}
-				in.After, in.Token = l, ""
+				from = l
 				continue
 			}
 			if more {
@@ -636,7 +646,7 @@ func (p *Engine[P]) expandSequential(ctx context.Context, e source.Emitter[Range
 			return nil
 		}
 		if restart != "" {
-			in.After, in.Token = restart, ""
+			from = restart
 			continue
 		}
 		if out.Token == "" {

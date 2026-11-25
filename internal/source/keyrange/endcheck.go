@@ -187,48 +187,59 @@ func (p *Engine[P]) stalled(in *Query, l string) error {
 		"the service's own continuation tokens)", p.d.Target, l, in.Prefix, in.Max, endTries+1))
 }
 
-// follows asks the claim again: whether a chain that starts after l in the
-// scope, with the claim's page size, lists a key after l. When the provider
-// refuses l as a start bound (S3 refuses control characters) the chain
-// starts after l's longest accepted prefix and the keys up to l are
-// dropped, as a resume drops them; those pages must ascend and their tokens
-// make progress (a token cycle, or a page at or below the last, is a
-// broken listing), within EmptyChainLive pages. On the chain that starts
-// after l itself, a key at or below l is a broken listing too: a service
-// that kept answering with l would otherwise be asked forever.
+// follows asks the claim again: whether the chain after l, with the
+// claim's page size, lists a key after l (listAfter).
 func (p *Engine[P]) follows(ctx context.Context, in *Query, l string) (bool, error) {
+	out, err := p.listAfter(ctx, in, l)
+	return err == nil && len(out.Rows) > 0, err
+}
+
+// listAfter lists the first page of the chain after l in in's scope, with
+// in's page size: every row on it is above l, and its token continues the
+// chain. It is the only way the end check starts a chain after a key the
+// service listed. When the provider refuses l as a start bound (S3 refuses
+// control characters) the chain starts after l's longest accepted prefix
+// and the keys up to l are dropped, as a resume drops them; those pages
+// must ascend and their tokens make progress (a token cycle, or a key at
+// or below the last, is a broken listing), within EmptyChainLive pages. On
+// the chain that starts after l itself, a key at or below l is a broken
+// listing too: a service that kept answering with l would otherwise be
+// asked forever.
+func (p *Engine[P]) listAfter(ctx context.Context, in *Query, l string) (*Page[P], error) {
 	q := &Query{Prefix: in.Prefix, After: p.safeStart(l), Max: in.Max}
 	prev := q.After
 	var tokens *tokenWindow
 	for pages := 1; ; pages++ {
 		if ctx.Err() != nil {
-			return false, context.Cause(ctx)
+			return nil, context.Cause(ctx)
 		}
 		out, err := p.list(ctx, q)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		for i := range out.Rows {
-			k := out.Rows[i].Key
-			if k > l {
-				return true, nil
-			}
+		n := 0
+		for ; n < len(out.Rows) && out.Rows[n].Key <= l; n++ {
+			k := out.Rows[n].Key
 			if q.After == l || k <= prev {
-				return false, fmt.Errorf("%w: a page asked after %q listed %q after %q", p.d.invalid(), l, k, prev)
+				return nil, fmt.Errorf("%w: a page asked after %q listed %q after %q", p.d.invalid(), l, k, prev)
 			}
 			prev = k
 		}
-		if !out.Truncated {
-			return false, nil
+		if n > 0 {
+			p.c.Add(cOverfetchKeys, int64(n))
+		}
+		if n < len(out.Rows) || !out.Truncated {
+			out.Rows = out.Rows[n:]
+			return out, nil
 		}
 		if out.Token == "" {
-			return false, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
+			return nil, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
 		}
 		if tokens == nil {
 			tokens = newTokenWindow(q.Token)
 		}
 		if !tokens.add(out.Token) || pages == EmptyChainLive {
-			return false, fmt.Errorf("%w: the pages up to %q after %q make no progress", p.d.invalid(), l, q.After)
+			return nil, fmt.Errorf("%w: the pages up to %q after %q make no progress", p.d.invalid(), l, q.After)
 		}
 		q.Token = out.Token
 	}
