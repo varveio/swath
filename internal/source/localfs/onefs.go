@@ -38,9 +38,14 @@ func (p *Provider) checkFilesystem(fd int, dev int64) error {
 // rootDevice is the device of the root fi describes, which
 // Options.OneFilesystem compares each directory's with. It needs each
 // directory's device: a stat tier, and a platform whose stat gives it.
+// On Windows the walk never enters a mount point (reparseLinks): it needs
+// no device, and none is compared.
 func rootDevice(fi fs.FileInfo, f Fields) (int64, error) {
 	if f == Names {
 		return 0, errors.New("staying on one filesystem needs each directory's device: not with the names metadata tier")
+	}
+	if reparseLinks {
+		return 0, nil
 	}
 	var e Entry
 	fromFileInfo(&e, fi)

@@ -20,7 +20,12 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `fstatat` relative to the directory too. On Windows it opens a directory by its path, re-checking that it is
   the one that was listed (`Lstat`, `SameFile`; `unsafe_dirs` otherwise), and takes the directory enumeration's
   own size, times and attributes (no call per entry; no `uid`, `gid`, `nlink`, `inode`, `dev` or
-  `allocated_bytes`).
+  `allocated_bytes`). Go reports a directory reparse point whose tag is a name surrogate other than a
+  symbolic link's (`IO_REPARSE_TAG_MOUNT_POINT`: a junction or a volume mount point) without the directory bit
+  and as `ModeIrregular`; the enumeration's attributes (reparse point and directory) make it kind `symlink`
+  (`surrogateKind`, at every tier, no call), and its target is read as a link's (`os.Readlink`). It is never
+  walked, as no symbolic link is. A directory reparse point of another tag (a cloud placeholder) keeps the
+  directory bit and is walked.
 - **Large directories** (getdents engine). An entry holds its name and key as offsets into the directory's
   buffers, no pointer, so growing, sorting and chunking a huge directory costs no GC write barriers. After the
   first 1,024 entries the buffers are grown once to the count the directory's `st_size` suggests (report:
@@ -97,7 +102,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   on another device is not walked and that is no error, as at a mount point (`other_device_dirs`).
   On macOS, `fstatfs` also compares the containing volume (`f_fsid`) with the opened root's, before reading
   entries; equal stat devices with different volume IDs stop as `other_volume_dirs`.
-  `filesystem_boundary` names the mechanism (`device` or `device_and_fsid`). A failed volume lookup
+  `filesystem_boundary` names the mechanism (`device`, `device_and_fsid`, or `reparse_point` on Windows). A failed volume lookup
   prevents descent, increments `open_errors` and its subset `filesystem_identity_errors`, and reduces
   coverage; it is never recorded as a boundary. The
   report's `dir_opens` counts `opened`, `redescents` (opens from an ancestor), `refused` (directories not
@@ -173,8 +178,10 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
 - Symlinks below the root are never followed (`O_NOFOLLOW`, `AT_SYMLINK_NOFOLLOW`). Names are bytes: one that
   is not valid UTF-8 is listed with its exact bytes, like any other. Mount points are crossed unless `--one-file-system` (`Options.OneFilesystem`):
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
-  portable engine on Windows), and `emit` keeps a `dir` row whose `dev` differs but hands on no child range for it
-  (counter `other_device_dirs`). On macOS the opened-handle volume check also stops same-device
+  portable engine on a platform other than Linux, macOS and Windows), and `emit` keeps a `dir` row whose `dev`
+  differs but hands on no child range for it (counter `other_device_dirs`). On Windows no device is read or
+  compared: every mount point is a `symlink` row, never walked, so the walk stays on the root's volume with or
+  without the option, which is accepted (`filesystem_boundary` `reparse_point`) only to record the filter. On macOS the opened-handle volume check also stops same-device
   foreign volumes. `Report` adds `one_file_system` to the coverage's filters, so a dataset says it
   stops at the root's filesystem. `--no-dirs` (`Options.NoDirs`) walks every directory but writes no `dir` row, and
   `Report` adds `no_dirs` to the filters likewise. `Report` names the tier and, where a stat tier reads them

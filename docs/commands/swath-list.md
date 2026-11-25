@@ -256,7 +256,7 @@ so in its manifest.
   do not read symbolic links' targets
 
 - <a id="option-one-file-system"></a>[`-x, --one-file-system`](#option-one-file-system)\
-  stay on the root filesystem (macOS: its volume); keep boundary rows
+  stay on the root filesystem (macOS: its volume; a Windows walk always does); keep boundary rows
 
 ### Performance
 

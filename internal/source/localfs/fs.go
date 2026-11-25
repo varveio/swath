@@ -613,7 +613,7 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 	switch fi := fs.FileInfo(nil); {
 	case p.opt.Fields == Names:
 		if fi, err = os.Lstat(p.root); err == nil {
-			row.Data.Kind = kindOf(fi.Mode().Type())
+			row.Data.Kind = reparseKind(kindOf(fi.Mode().Type()), fi)
 		}
 	case p.native:
 		err = statPath(p.root, p.opt.Fields, &row.Data)
@@ -686,7 +686,7 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 		row := Row{Key: r.prefix + name}
 		path := r.path + string(os.PathSeparator) + name
 		if p.opt.Fields == Names {
-			row.Data.Kind = kindOf(d.Type())
+			row.Data.Kind = entryKind(d)
 		} else {
 			if err := statEntry(f, d, &row.Data); err != nil {
 				if p.leftOut(row.Key, d.IsDir(), true) {
@@ -764,6 +764,20 @@ func kindOf(m fs.FileMode) Kind {
 		return KindBlockDevice
 	}
 	return KindUnknown
+}
+
+// entryKind is d's kind from its directory entry alone (the names tier).
+// Where a junction or a mount point is a reparse point (reparseLinks:
+// Windows), an entry of no other kind is looked at in the enumeration's own
+// attributes, which d.Info gives with no call there.
+func entryKind(d fs.DirEntry) Kind {
+	k := kindOf(d.Type())
+	if k == KindUnknown && reparseLinks {
+		if fi, err := d.Info(); err == nil {
+			k = reparseKind(k, fi)
+		}
+	}
+	return k
 }
 
 // fromFileInfo fills a row from os.FileInfo plus the platform Sys() data.
