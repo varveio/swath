@@ -157,6 +157,8 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
 		Counters:    clientCounters,
+		Unbounded:   true,
+		Modified:    func(o *Object) int64 { return o.Mtime },
 	}, p.fetch)
 	if err != nil {
 		return nil, err

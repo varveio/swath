@@ -174,6 +174,19 @@ const (
 	cSplitSkippedGroupOpen
 	cTraceEvents
 	cTraceDropped
+	cEndClaims
+	cEndContradicted
+	cEndWitnessChecks
+	cEndAskedAgain
+	cEndRacedNew
+	cEndRacedGone
+	cEndOmitted
+	cEndLadders
+	cEndLadderRequests
+	cEndLadderFound
+	cEndFloor
+	cEndLadderWaits
+	cEndNewWrites
 	numCounters
 )
 
@@ -347,6 +360,19 @@ var Counters = table([numCounters]counters.Def{
 	cSplitSkippedGroupOpen:        d("split.skipped.group_open", counters.Count, "decisions", "a range inside a hot key's group (its rows emitted across pages), or that had emitted no complete key yet, was not split", "groups"),
 	cTraceEvents:                  d("trace.events", counters.Count, "events", "events the engine handed to the run trace (--trace)", "trace"),
 	cTraceDropped:                 d("trace.dropped", counters.Count, "events", "trace events dropped because the trace writer was a full buffer behind: the engine never waits for the file", "trace"),
+	cEndClaims:                    d("end_check.claims", counters.Count, "pages", "final pages (not truncated) of chains that started after a key: a range's, a resumed sequential chain's, a resumed seed's single first page; checked against the keys and folders the run had seen, else by a ladder", "end_check"),
+	cEndContradicted:              d("end_check.contradicted", counters.Count, "pages", "claims a key or folder past the page's last key contradicted (seen by the run, or found by a ladder): asked again", "end_check"),
+	cEndWitnessChecks:             d("end_check.witness_checks", counters.Count, "requests", "requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests)", "end_check"),
+	cEndAskedAgain:                d("end_check.asked_again", counters.Count, "requests", "contradicted pages asked again after their last key (also counted in requests)", "end_check"),
+	cEndRacedNew:                  d("end_check.raced_new_keys", counters.Count, "pages", "contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the page was not final and the chain went on after it", "end_check"),
+	cEndRacedGone:                 d("end_check.raced_gone", counters.Count, "pages", "contradicting keys or folders that no longer existed when asked (deleted meanwhile, or written since the run started): the claim went to a ladder", "end_check"),
+	cEndOmitted:                   d("end_check.omitted", counters.Count, "pages", "pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys)", "end_check"),
+	cEndLadders:                   d("end_check.ladders", counters.Count, "claims", "claims nothing the run had seen contradicted, confirmed by asking whether any key follows them (one round trip of max-keys 1 requests, one per folder level and two per level above)", "end_check"),
+	cEndLadderRequests:            d("end_check.ladder_requests", counters.Count, "requests", "the ladders' requests (also counted in requests)", "end_check"),
+	cEndLadderFound:               d("end_check.ladder_found", counters.Count, "claims", "claims a ladder found a key after: contradicted, and asked again (also in end_check.contradicted)", "end_check"),
+	cEndFloor:                     d("end_check.floor", counters.Count, "claims", "claims at or above one a ladder already confirmed: nothing follows them, at no request", "end_check"),
+	cEndLadderWaits:               d("end_check.ladder_waits", counters.Count, "claims", "claims that waited for a ladder in flight from at or below them instead of asking their own (then counted in floor, or contradicted by the key it found)", "end_check"),
+	cEndNewWrites:                 d("end_check.new_writes", counters.Count, "pages", "pages asked again that listed after the claim only keys modified since the run started, not the witness: no answer, asked again", "end_check"),
 })
 
 // pivotBy is the accepted-split counter of each pivot source (density is
@@ -429,6 +455,9 @@ func (p *Engine[P]) disabled() []string {
 	}
 	if p.tr == nil {
 		off = append(off, "trace")
+	}
+	if !p.endChecks() {
+		off = append(off, "end_check")
 	}
 	return append(off, p.opt.ClientOff...)
 }

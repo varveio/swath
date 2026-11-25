@@ -74,8 +74,12 @@ func TestBothSchemesThroughTheCommand(t *testing.T) {
 		if r.Invocation.Workers != 64 {
 			t.Fatalf("%s: default workers %d, want 64", name, r.Invocation.Workers)
 		}
-		if f := r.Diagnostics.Source.Stats.Counters.Features; !maps.Equal(f, defaults) {
-			t.Fatalf("%s defaults: features %v, want %v", name, f, defaults)
+		// The end check is S3's: GCS bounds its requests (keyrange's
+		// Description.Unbounded).
+		want := maps.Clone(defaults)
+		want["end_check"] = name == "s3"
+		if f := r.Diagnostics.Source.Stats.Counters.Features; !maps.Equal(f, want) {
+			t.Fatalf("%s defaults: features %v, want %v", name, f, want)
 		}
 		seeded := func(r report) bool {
 			_, ok := r.Diagnostics.Source.Stats.Counters.Values["seed.prefixes"]

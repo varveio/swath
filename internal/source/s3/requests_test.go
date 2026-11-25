@@ -58,7 +58,11 @@ func TestRequests(t *testing.T) {
 		after string
 		opt   Options
 		want  []string // nil: the seed's shape, below
-		rows  int
+		// ladder: the end check's confirming requests (max-keys 1), sent
+		// together in any order, for the claim after the scope's last key
+		// (a claim above it may repeat one of its steps).
+		ladder []string
+		rows   int
 		// folder: the seed's shape only: a tile's start-after begins with
 		// it; percent lists keys in folders p%2F0/ .. p%2F4/ instead.
 		folder  string
@@ -72,14 +76,19 @@ func TestRequests(t *testing.T) {
 		{name: "prefix", opt: Options{Policy: seq, Prefix: "d/k1"}, rows: 1000, want: []string{
 			`p="d/k1" a="" d="" m=1000 t=false`,
 		}},
+		// A resumed chain started after a key: its end is confirmed by the
+		// ladder (the folder after the last key, the scope after the
+		// folder, and the folder's name and '0').
 		{name: "resume", opt: Options{Policy: seq}, after: "d/k0999", rows: 1500, want: []string{
 			`p="" a="d/k0999" d="" m=1000 t=false`,
 			`p="" a="" d="" m=1000 t=true`, // a continuation carries no start-after
-		}},
-		{name: "seed", opt: Options{Policy: keyrange.Policy{Seed: true}}, rows: 2500, folder: "d/"},
+		}, ladder: []string{`p="d/" a="d/k2499" d="" m=1 t=false`, `p="" a="d0" d="" m=1 t=false`, `p="d0" a="" d="" m=1 t=false`}},
+		{name: "seed", opt: Options{Policy: keyrange.Policy{Seed: true}}, rows: 2500, folder: "d/",
+			ladder: []string{`p="d/" a="d/k2499" d="" m=1 t=false`, `p="" a="d0" d="" m=1 t=false`, `p="d0" a="" d="" m=1 t=false`}},
 		// A real key's '%' is a usable bound (AcceptBound): the seed's cuts
 		// at folders whose names hold it are sent as start-after.
-		{name: "seed-percent", opt: Options{Policy: keyrange.Policy{Seed: true}}, rows: 2500, folder: "p%2F", percent: true},
+		{name: "seed-percent", opt: Options{Policy: keyrange.Policy{Seed: true}}, rows: 2500, folder: "p%2F", percent: true,
+			ladder: []string{`p="p%2F4/" a="p%2F4/k2499" d="" m=1 t=false`, `p="" a="p%2F40" d="" m=1 t=false`, `p="p%2F40" a="" d="" m=1 t=false`}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ks := keys
@@ -107,6 +116,21 @@ func TestRequests(t *testing.T) {
 			}
 			if len(col.rows) != c.rows {
 				t.Fatalf("%d rows, want %d", len(col.rows), c.rows)
+			}
+			var ladder []string
+			rec.log = slices.DeleteFunc(rec.log, func(r string) bool {
+				if strings.Contains(r, " m=1 ") {
+					ladder = append(ladder, r)
+					return true
+				}
+				return false
+			})
+			// A claim above the last key (the seed's closing tile) that ends
+			// before the last key's ladder sets the floor asks its own, one
+			// step the first also asks: the shapes are pinned, not how many
+			// times the order of the range ends makes a step repeat.
+			if got := slices.Compact(slices.Sorted(slices.Values(ladder))); !slices.Equal(got, slices.Sorted(slices.Values(c.ladder))) {
+				t.Errorf("ladder requests\n%q\nwant (any order, steps may repeat)\n%q", ladder, c.ladder)
 			}
 			if c.want != nil && !slices.Equal(rec.log, c.want) {
 				t.Errorf("requests\n%q\nwant\n%q", rec.log, c.want)
