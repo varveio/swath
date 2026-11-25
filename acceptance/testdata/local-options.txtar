@@ -43,6 +43,32 @@ stdout '\A{"columns":\["link_target"\],"metadata":"stat"}\n\z'
 [symlink] json nolink/manifest.json extensions.swath.collected
 [symlink] stdout '\A{"columns":\[\],"metadata":"stat"}\n\z'
 
+# --one-file-system and a junction (Windows only: a junction is Windows',
+# made by mklink /J without privilege; Linux and macOS read each
+# directory's device and take the option on both sides). jt holds f and a
+# junction j to t.
+[windows] mktree jt symlink.spec
+[windows] exec cmd /c mklink /J jt${/}j $WORK${/}t
+[windows] exec swath list jt --columns key,kind,link_target --no-stats
+# 0.4.0 on Windows: the junction is kind unknown, with no target, and the
+# option is refused (exit 1) before anything is created, for want of a
+# device, which its Windows engine does not read.
+[windows] [expect:v0.4.0] stdout '\Akey\tkind\tlink_target\nf\tfile\t\\N\nj\tunknown\t\\N\n\z'
+[windows] [expect:v0.4.0] exits 1 swath list jt --one-file-system -o onefs
+[windows] [expect:v0.4.0] cmp stderr want-one-fs-windows-v040.txt
+[windows] [expect:v0.4.0] ! stdout .
+[windows] [expect:v0.4.0] ! exists onefs
+# #686, on Windows: the junction is a symbolic link to t (an absolute path,
+# forward slashes) that the walk does not enter, so it never leaves the
+# root's volume; the option is accepted and the dataset records its filter,
+# as on Linux and macOS.
+[windows] [expect:current] stdout '\Akey\tkind\tlink_target\nf\tfile\t\\N\nj\tsymlink\t[A-Za-z]:/[^\t\n\\]*/t\n\z'
+[windows] [expect:current] exec swath list jt --one-file-system -o onefs
+[windows] [expect:current] dataset onefs 'SELECT key, kind, link_target FROM ds'
+[windows] [expect:current] stdout '\Af\tfile\tNULL\nj\tsymlink\t[A-Za-z]:/[^\t\n\\]*/t\n\z'
+[windows] [expect:current] json onefs/manifest.json extensions.swath.coverage.filters
+[windows] [expect:current] stdout '\A\[{"filter":"one_file_system","value":null}\]\n\z'
+
 [expect:v0.4.0] env PRIMARY=size
 # #660: swath du leads with the space on disk for a local tree.
 [expect:current] env PRIMARY=allocated_bytes
@@ -158,6 +184,8 @@ swath: totals: more than 2 distinct prefixes at depth 2 (lower --depth, or raise
 {"row_type":"prefix","depth":1,"prefix":"a/","objects":1,"dirs":1,"size":7,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":3,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":2,"prefix":"a/b/","objects":1,"dirs":0,"size":7,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
 {"row_type":"prefix","depth":1,"prefix":"c/","objects":1,"dirs":0,"size":2,"size_missing":0,"allocated_bytes":null,"allocated_bytes_missing":2,"max_last_modified":"2026-01-01T00:00:00.000000Z","primary":"size","sort":"name","links_once":false}
+-- want-one-fs-windows-v040.txt --
+swath: staying on one filesystem needs each directory's device, which this platform's engine does not read
 -- want-work-dir.txt --
 swath: --work-dir is the work directory of a dataset in a bucket; a dataset directory is its own
 See 'swath list --help'.
