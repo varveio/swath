@@ -80,7 +80,8 @@ listing lags, so the engine asks again, up to three times with the requeue backo
 
 A witness that stays while `start-after=L` still ends the listing below it is an omission: the run fails
 with cause `omitted_keys` (`source.ErrOmitted`, `end_check.omitted`), resumable, since the range never
-declared its end, and a resume checks it again. On a correct service the check sends no request
+declared its end. A resume lists that range again and checks its end the same way, except when the seed's
+first data page from the resume key holds the whole rest of the scope: that page is not checked yet (below). On a correct service the check sends no request
 (`TestEndCheckHealthyStoresCostNothing`; the same requests as without it on AWS, Garage, SeaweedFS and
 versitygw, 2026-11-25). On MinIO with the first 250,000 keys of `nara-1950-census` it turns 107,651 listed
 keys and exit 0 into exit 1, `omitted_keys`, at 1, 8 and 64 workers.

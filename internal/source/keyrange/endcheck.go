@@ -158,7 +158,7 @@ func (p *Engine[P]) askAgain(ctx context.Context, in *Query, l, w string, folder
 				p.d.Target, l, in.Prefix, in.After, in.Max, kind, w, endTries))
 		}
 		p.c.Inc(cEndAskedAgain)
-		again, err := p.list(ctx, &Query{Prefix: in.Prefix, After: l, Max: in.Max})
+		again, err := p.after(ctx, in, l)
 		if err != nil {
 			return nil, err
 		}
@@ -166,6 +166,36 @@ func (p *Engine[P]) askAgain(ctx context.Context, in *Query, l, w string, folder
 			p.c.Inc(cEndRacedNew)
 			return again, nil
 		}
+	}
+}
+
+// after lists the first page of keys after l in the scope: a chain that
+// starts after l, or, when the provider refuses l as a start bound (S3
+// refuses control characters), after its longest accepted prefix, with the
+// keys up to l dropped as a resume drops them. A key at or below l on the
+// chain that starts after l itself is a broken listing, never progress: a
+// service that kept answering with l would otherwise be asked forever.
+func (p *Engine[P]) after(ctx context.Context, in *Query, l string) (*Page[P], error) {
+	q := &Query{Prefix: in.Prefix, After: p.safeStart(l), Max: in.Max}
+	for {
+		out, err := p.list(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		n := 0
+		for n < len(out.Rows) && out.Rows[n].Key <= l {
+			if q.After == l {
+				return nil, fmt.Errorf("%w: a page asked after %q listed %q", p.d.invalid(), l, out.Rows[n].Key)
+			}
+			n++
+		}
+		if out.Rows = out.Rows[n:]; len(out.Rows) > 0 || !out.Truncated {
+			return out, nil
+		}
+		if out.Token == "" {
+			return nil, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
+		}
+		q.Token = out.Token
 	}
 }
 

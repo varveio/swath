@@ -218,6 +218,21 @@ func TestEndCheckDecisions(t *testing.T) {
 			t.Fatalf("err %v rows %d gone %d asked again %d", err, len(got.Rows), st.Get(cEndRacedGone), st.Get(cEndAskedAgain))
 		}
 	})
+	t.Run("a last key the provider refuses as a bound: asked again after its accepted prefix", func(t *testing.T) {
+		// The fake refuses control characters in start-after, as S3 does.
+		f := newSorted([]string{"a/\x01", "a/\x01x", "b/1"}, false, 1)
+		got, st, err := checkOne(t, f, "b/1", "a/", &Page[Object]{Rows: []Row{{Key: "a/\x01"}}}, "a/")
+		if err != nil || st.Get(cEndRacedNew) != 1 || !slices.Equal(keysOf(got.Rows), []string{"a/\x01", "a/\x01x", "b/1"}) {
+			t.Fatalf("err %v raced %d keys %q", err, st.Get(cEndRacedNew), keysOf(got.Rows))
+		}
+	})
+	t.Run("a store that answers the start key again: a broken listing, not a loop", func(t *testing.T) {
+		echo := &echoAfter{sorted: newSorted(keys, false, 1)}
+		_, _, err := checkOne(t, echo, "b/2", "a/1", &Page[Object]{Rows: []Row{{Key: "a/2"}}}, "a/1")
+		if !errors.Is(err, source.ErrProtocol) || echo.n > 2 {
+			t.Fatalf("err %v after %d echoed pages, want a protocol violation at the first", err, echo.n)
+		}
+	})
 	t.Run("a page with keys: the claim is after its last key", func(t *testing.T) {
 		s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(int, *keyrangetest.ListInput) bool { return false }}
 		out := &Page[Object]{Rows: []Row{{Key: "a/2"}}}
@@ -226,4 +241,19 @@ func TestEndCheckDecisions(t *testing.T) {
 			t.Fatalf("err %v raced %d keys %v", err, st.Get(cEndRacedNew), keysOf(got.Rows))
 		}
 	})
+}
+
+// echoAfter answers every start-after request with that key alone, as a
+// final page: a service that makes no progress.
+type echoAfter struct {
+	*sorted
+	n int
+}
+
+func (e *echoAfter) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	if in.StartAfter != "" && in.ContinuationToken == "" && in.Delimiter == "" {
+		e.n++
+		return &keyrangetest.Page{Contents: []keyrangetest.Object{{Key: in.StartAfter}}}, nil
+	}
+	return e.sorted.List(ctx, in)
 }
