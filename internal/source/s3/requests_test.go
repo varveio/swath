@@ -59,7 +59,8 @@ func TestRequests(t *testing.T) {
 		opt   Options
 		want  []string // nil: the seed's shape, below
 		// ladder: the end check's confirming requests (max-keys 1), sent
-		// together in any order, for the claim after the scope's last key.
+		// together in any order, for the claim after the scope's last key
+		// (a claim above it may repeat one of its steps).
 		ladder []string
 		rows   int
 		// folder: the seed's shape only: a tile's start-after begins with
@@ -124,8 +125,12 @@ func TestRequests(t *testing.T) {
 				}
 				return false
 			})
-			if !slices.Equal(slices.Sorted(slices.Values(ladder)), slices.Sorted(slices.Values(c.ladder))) {
-				t.Errorf("ladder requests\n%q\nwant (any order)\n%q", ladder, c.ladder)
+			// A claim above the last key (the seed's closing tile) that ends
+			// before the last key's ladder sets the floor asks its own, one
+			// step the first also asks: the shapes are pinned, not how many
+			// times the order of the range ends makes a step repeat.
+			if got := slices.Compact(slices.Sorted(slices.Values(ladder))); !slices.Equal(got, slices.Sorted(slices.Values(c.ladder))) {
+				t.Errorf("ladder requests\n%q\nwant (any order, steps may repeat)\n%q", ladder, c.ladder)
 			}
 			if c.want != nil && !slices.Equal(rec.log, c.want) {
 				t.Errorf("requests\n%q\nwant\n%q", rec.log, c.want)
