@@ -4,7 +4,7 @@
 // Package view answers the questions of package listing (Page, Lookup,
 // Walk and Summarize) from one opened swath dataset: an inventory. It plans
 // and checks the questions, and SeekParquet executes them (Dataset.Page,
-// Plan, Scan and AggregateRows); it reads a row's columns into the
+// Plan, Scan and FoldRows); it reads a row's columns into the
 // common listing.Entry, with nil for every value the row does not hold.
 // OpenDir opens a dataset directory for it in one call; Open takes a
 // reader.Dataset the caller opened.

@@ -22,14 +22,15 @@ var errRoot = errors.New("view: the root has no entry")
 // unknown. A target outside the inventory's scope is unknown with
 // ErrOutOfScope as its Reason, and counts nothing. To size a page's child
 // folders, summarize its KindDir and KindPrefix entries as subtree
-// targets.
+// targets. Every subtree's totals and groups are counted in one fold of
+// the rows under them.
 func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, opts listing.SummaryOptions) ([]listing.TargetSummary, listing.Evidence, error) {
 	sel, err := inv.checkSummary(targets, opts)
 	if err != nil {
 		return nil, listing.Evidence{}, err
 	}
 
-	s := newSummary(inv, sel, targets)
+	s := newSummary(inv, sel, opts.Split, targets)
 	s.outside()
 	if err := s.locate(ctx); err != nil {
 		return nil, listing.Evidence{}, failed(ctx, err)
@@ -44,8 +45,8 @@ func (inv *Inventory) Summarize(ctx context.Context, targets []listing.Target, o
 	return s.out, inv.evidence(), nil
 }
 
-// checkSummary refuses targets of the wrong form, and returns the kinds
-// the options count.
+// checkSummary refuses targets of the wrong form and a split's bounds out
+// of order, and returns the kinds the options count.
 func (inv *Inventory) checkSummary(targets []listing.Target, opts listing.SummaryOptions) (selection, error) {
 	for _, t := range targets {
 		check := inv.checkKey
@@ -56,7 +57,24 @@ func (inv *Inventory) checkSummary(targets []listing.Target, opts listing.Summar
 			return selection{}, err
 		}
 	}
+	if err := checkBounds(opts.Split.SizeBounds); err != nil {
+		return selection{}, err
+	}
 	return selectionOf(opts.Kinds)
+}
+
+// checkBounds refuses size bounds that are not positive and strictly
+// ascending.
+func checkBounds(bounds []int64) error {
+	for i, b := range bounds {
+		switch {
+		case b <= 0:
+			return invalid("size bound %d is not positive", b)
+		case i > 0 && b <= bounds[i-1]:
+			return invalid("size bound %d does not exceed the bound before it", b)
+		}
+	}
+	return nil
 }
 
 // summary is one Summarize call: its targets, where their rows lie, and
@@ -64,6 +82,7 @@ func (inv *Inventory) checkSummary(targets []listing.Target, opts listing.Summar
 type summary struct {
 	inv     *Inventory
 	sel     selection
+	split   listing.Split
 	targets []listing.Target
 	out     []listing.TargetSummary
 
@@ -78,11 +97,12 @@ type summary struct {
 	done  []bool
 }
 
-func newSummary(inv *Inventory, sel selection, targets []listing.Target) *summary {
+func newSummary(inv *Inventory, sel selection, split listing.Split, targets []listing.Target) *summary {
 	n := len(targets)
 	return &summary{
 		inv:     inv,
 		sel:     sel,
+		split:   split,
 		targets: targets,
 		out:     make([]listing.TargetSummary, n),
 		own:     make([][]seekparquet.RowSpan, n),
@@ -166,7 +186,7 @@ func empty(span seekparquet.RowSpan) bool {
 }
 
 // readOwn reads the entries at the targets' keys, and sets the states of
-// those it reads and an exact target's totals.
+// those it reads and an exact target's totals and groups.
 func (s *summary) readOwn(ctx context.Context) error {
 	var admitted []int
 	var spans []seekparquet.RowSpan
@@ -186,7 +206,7 @@ func (s *summary) readOwn(ctx context.Context) error {
 		s.out[i].State, s.out[i].Self, s.out[i].Reason = s.inv.resolve(t.Key, found)
 		s.known[i] = true
 		if !t.Subtree {
-			s.out[i].Totals, s.done[i] = *entryTotals(s.out[i].Self, s.sel), true
+			s.set(i, s.entryTallies(s.out[i].Self))
 		}
 	}
 	return nil
@@ -204,8 +224,8 @@ func (s *summary) read(ctx context.Context, spans []seekparquet.RowSpan) (map[st
 	return s.inv.read(ctx, plan)
 }
 
-// count sets the totals of the subtrees still open, counted in one
-// aggregation.
+// count sets the totals and groups of the subtrees still open, counted
+// in one fold.
 func (s *summary) count(ctx context.Context) error {
 	var subtrees []int
 	var spans []seekparquet.RowSpan
@@ -222,14 +242,30 @@ func (s *summary) count(ctx context.Context) error {
 		return nil
 	}
 
-	totals, err := s.inv.aggregate(ctx, spans, s.sel)
+	folded, err := s.inv.fold(ctx, spans, s.sel, s.split)
 	if err != nil {
 		return err
 	}
 	for j, i := range subtrees {
-		s.out[i].Totals, s.done[i] = *totals[j], true
+		s.set(i, folded[j])
 	}
 	return nil
+}
+
+// entryTallies are the groups of one entry when it is counted, and none
+// otherwise.
+func (s *summary) entryTallies(e *listing.Entry) tallies {
+	var ts tallies
+	if e != nil && s.sel.counts(e.Kind) {
+		ts.add(itemOf(e, s.split), s.split.SizeBounds)
+	}
+	return ts
+}
+
+// set sets target i's totals and groups from its tallies.
+func (s *summary) set(i int, ts tallies) {
+	s.out[i].Totals, s.out[i].Groups = summarized(ts, s.split)
+	s.done[i] = true
 }
 
 // complete marks the targets whose totals cover everything at or under
