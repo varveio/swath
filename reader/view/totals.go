@@ -87,10 +87,10 @@ const (
 )
 
 const (
-	foldLocalKind = iota
-	foldLocalSize
-	foldLocalAllocated
+	foldLocalSize = iota
 	foldLocalModified
+	foldLocalAllocated
+	foldLocalKind
 )
 
 // objectFold counts an object inventory's rows, checking every row as the
@@ -137,7 +137,7 @@ func objectFold(split listing.Split) seekparquet.Fold[tallies] {
 // storage class.
 func localFold(sel selection, split listing.Split) seekparquet.Fold[tallies] {
 	return seekparquet.Fold[tallies]{
-		Columns: []string{"kind", "size", "allocated_bytes", "last_modified"},
+		Columns: []string{"size", "last_modified", "allocated_bytes", "kind"},
 		Add: func(acc *tallies, b *seekparquet.ValueBatch) error {
 			kind := b.Column(foldLocalKind)
 			size := b.Column(foldLocalSize)

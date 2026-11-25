@@ -120,7 +120,7 @@ func TestSummarizeSplitBands(t *testing.T) {
 			if g.StorageClass != nil {
 				class = *g.StorageClass
 			}
-			if class != w.class || g.SizeBand != w.band || g.Entries != w.entries || show(g.Bytes) != w.bytes || (g.Newest != nil) != w.dated || g.AllocatedBytes != nil {
+			if class != w.class || (g.StorageClass != nil) != (w.class != "") || g.SizeBand != w.band || g.Entries != w.entries || show(g.Bytes) != w.bytes || (g.Newest != nil) != w.dated || g.AllocatedBytes != nil {
 				t.Errorf("%s: group %d: %s, want %+v", name, i, showGroups(got[i:i+1]), w)
 			}
 		}
@@ -153,6 +153,9 @@ func TestSummarizeSplitLocalClass(t *testing.T) {
 	sums, _, err := inv.Summarize(context.Background(), targets, listing.SummaryOptions{Split: listing.Split{StorageClass: true}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(sums) != 2 || sums[0].Entries != 5 || sums[1].Entries != 1 {
+		t.Fatalf("summaries %d, want the root's 5 entries and a.txt's 1: %+v", len(sums), sums)
 	}
 	for i, s := range sums {
 		if len(s.Groups) != 1 || s.Groups[0].StorageClass != nil || s.Groups[0].SizeBand != 0 || !sameTotals(s.Groups[0].Totals, s.Totals) {
