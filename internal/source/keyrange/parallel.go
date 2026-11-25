@@ -572,22 +572,35 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		fence.Span(llo, r.hi, r.open)
 	}
 	p.maybeProbe(pctx, st, r, c)
-	stalls := 0 // restarts after the same key that listed nothing (endcheck.go)
+	// The end check (endcheck.go): afterKey, the chain started after a key;
+	// from, the chain goes on after that key (a final page that keys
+	// followed after all), listed by listAfter, which never sends a bound
+	// the provider refuses; stalls, restarts after the same key that
+	// listed nothing.
+	afterKey, from, stalls := in.After != "", "", 0
 	for {
 		var before string // the cursor before the page, for the trace
 		if p.tr != nil {
 			before = c
 		}
 		t0 := time.Now()
-		out, err := p.list(ctx, in)
+		var out *Page[P]
+		var err error
+		restarted := from
+		if from != "" {
+			out, err = p.listAfter(ctx, in, from)
+			from = ""
+		} else {
+			out, err = p.list(ctx, in)
+		}
 		if err != nil {
 			return err
 		}
 		// restart: the service said the scope ends after this page and keys
-		// follow it after all (endcheck.go): the page is not final, and the
-		// chain goes on after its last key.
+		// follow it after all: the page is not final, and the chain goes on
+		// after its last key.
 		restart := ""
-		if !out.Truncated && in.After != "" && p.endChecks() {
+		if !out.Truncated && afterKey && p.endChecks() {
 			// The chain started after a key and the service says the scope
 			// ends here: checked before the range declares its end.
 			more, l, err := p.checkEnd(ctx, in, out, c)
@@ -599,7 +612,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 					// Nothing to emit: the chain starts after l again. A
 					// service that answers it empty again, while asking
 					// again lists keys after l, makes no progress.
-					if l == in.After && in.Token == "" {
+					if l == restarted {
 						if stalls++; stalls > endTries {
 							return p.stalled(in, l)
 						}
@@ -607,7 +620,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 					if ctx.Err() != nil {
 						return context.Cause(ctx)
 					}
-					in.After, in.Token = l, ""
+					from = l
 					continue
 				}
 				restart = l
@@ -840,7 +853,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			return e.Child(upper)
 		}
 		if restart != "" {
-			in.After, in.Token = restart, ""
+			from = restart
 		} else {
 			in.Token = out.Token
 		}
