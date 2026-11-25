@@ -702,6 +702,9 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 				p.statFailed(key, path, st, err)
 				continue
 			}
+			if dirBlocks && row.Data.Kind == KindDir {
+				fillDirBlocks(path, &row.Data) // Windows: the enumeration gives a directory none
+			}
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
 				if t, err := readlinkIn(f, path, name); err == nil {
 					row.Data.LinkTarget, row.Data.Present = filepath.ToSlash(t), row.Data.Present|HasLink

@@ -153,7 +153,8 @@ $ swath du -d 1 media -A
 Here `archive/` holds a sparse 64 MiB disk image that takes no blocks: 64.8 MiB long, 788 KiB on disk. Where the
 listing reads no blocks, the lengths lead: at `--metadata names` (which reads no lengths either), and for an
 object store, which has no allocation. On Windows the space on disk is what the directory listing gives
-(its allocation size, read with the names, no call per file); it can lag for a file still being written
+(its allocation size, read with the names, no call per file; a directory's own through a handle, one per
+directory, and missing where that read fails); it can lag for a file still being written
 and under a hard link's other names (see [How sizes are counted](#how-sizes-are-counted)). `--metadata statx` reads blocks, but a filesystem may answer
 it without them for some entries (some network filesystems): those count as missing, and the figure is a lower
 bound (`>= `). `--allocated` requires the space on disk: an entry without it fails the count, and
@@ -174,7 +175,8 @@ The space on disk is what the filesystem says, what `du` prints, but not the spa
 - Network filesystems may report a synthetic allocation.
 - An unknown figure is not zero. `--metadata names` reads no blocks: the figure is null (`-` in the table,
   `on disk unknown` under it), and it reads no lengths either.
-- On Windows each entry's space on disk comes from the directory listing, which NTFS keeps per name and
+- On Windows each file's space on disk comes from the directory listing (a directory's own through a handle,
+  as the listing gives directories none), which NTFS keeps per name and
   refreshes only through the name a file was opened by: under a hard link's other names it can be an older
   figure, and a file being written shows what was on disk when it was last flushed. A compressed or sparse
   file's figure is its compressed or allocated size once its data is written back. A small file stored in

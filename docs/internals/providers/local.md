@@ -22,8 +22,10 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   call and class `os.File.ReadDir` uses (`GetFileInformationByHandleEx`: `FileIdBothDirectoryInfo` where the
   volume supports object IDs and opening by ID, else `FileFullDirectoryInfo`), so that each entry keeps what
   Go drops: `allocated_bytes` is its `AllocationSize`, `inode` its file ID (null with `FileFullDirectoryInfo`:
-  FAT, exFAT, some shares), beside the size, times and attributes (no call per entry, nor per directory beyond
-  Go's; no `uid`, `gid`, `nlink` or `dev`). The entries' modes are Go's (`winMode`, checked against
+  FAT, exFAT, some shares), beside the size, times and attributes (no call per file; no `uid`, `gid`, `nlink` or
+  `dev`). The enumeration gives a directory an allocation of 0 whatever its index takes, so a directory's own
+  `allocated_bytes` is read through a handle that asks for attributes alone (`fillDirBlocks`, one per directory);
+  a failed read leaves it null, which `swath du` counts as missing (`BlocksMayLack`, as for `statx`). The entries' modes are Go's (`winMode`, checked against
   `ReadDir` by `TestReadDirIsReadDir`). NTFS keeps a copy of the length and allocation in each directory entry and
   refreshes only the one a file was opened through, so they can lag under a hard link's other names and for a
   file being written until it is flushed or closed; a compressed or sparse file's is its compressed or

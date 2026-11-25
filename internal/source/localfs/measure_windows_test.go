@@ -99,9 +99,9 @@ func readEnumeration(t *testing.T, dir string) map[string]*enumerated {
 	return m
 }
 
-// byHandle opens path for its attributes only and reads its standard
+// handleInfo opens path for its attributes only and reads its standard
 // information and file index.
-func byHandle(path string) (standardInfo, int64, error) {
+func handleInfo(path string) (standardInfo, int64, error) {
 	var s standardInfo
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -181,7 +181,7 @@ func TestMeasureAllocationSize(t *testing.T) {
 		if err != nil {
 			cse = err.Error()
 		}
-		s, idx, err := byHandle(path)
+		s, idx, err := handleInfo(path)
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}

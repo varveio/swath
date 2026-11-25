@@ -130,8 +130,10 @@ func TestReadDirIsReadDir(t *testing.T) {
 }
 
 // TestAllocatedBytes: on Windows a stat tier fills allocated_bytes for
-// every entry, files and directories, and inode with the file ID, each
-// what a handle to the entry says once its data is on disk: a sparse and
+// every entry, files and directories (a directory's through a handle: the
+// enumeration gives one 0, though many/'s index takes 128 KiB), and inode
+// with the file ID, each what a handle to the entry says once its data is
+// on disk: a sparse and
 // a compressed file take less than their length, and two names of one file
 // have one ID. A file root's are read through a handle (fillRoot). On a
 // filesystem without file IDs (FileFullDirectoryInfo) inode is null and
@@ -148,7 +150,7 @@ func TestAllocatedBytes(t *testing.T) {
 		for _, r := range rows {
 			byKey[r.Key] = r.Data
 			path := filepath.Join(root, filepath.FromSlash(r.Key))
-			s, idx, err := byHandle(path)
+			s, idx, err := handleInfo(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -183,7 +185,7 @@ func TestAllocatedBytes(t *testing.T) {
 			readDirFileIDs = ids
 			path := filepath.Join(root, "sparse")
 			rows, _ := list(t, path, Options{}, 1, 1<<12)
-			s, idx, err := byHandle(path)
+			s, idx, err := handleInfo(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,7 +204,7 @@ func TestAllocatedBytes(t *testing.T) {
 			}
 		}
 	})
-	if !BlocksRead(Stat) || BlocksRead(Names) || LinksRead(Stat) {
-		t.Errorf("BlocksRead stat %v names %v, LinksRead %v", BlocksRead(Stat), BlocksRead(Names), LinksRead(Stat))
+	if !BlocksRead(Stat) || BlocksRead(Names) || LinksRead(Stat) || !BlocksMayLack(Stat) {
+		t.Errorf("BlocksRead stat %v names %v, LinksRead %v, BlocksMayLack %v", BlocksRead(Stat), BlocksRead(Names), LinksRead(Stat), BlocksMayLack(Stat))
 	}
 }

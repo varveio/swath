@@ -16,3 +16,8 @@ func readDir(f *os.File) ([]fs.DirEntry, error) { return f.ReadDir(-1) }
 
 // fillRoot: a file root's lstat has every stat column here.
 func fillRoot(string, *Entry) {}
+
+// dirBlocks: a directory's stat has its own blocks here.
+const dirBlocks = false
+
+func fillDirBlocks(string, *Entry) {}

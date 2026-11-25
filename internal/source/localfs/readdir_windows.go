@@ -20,8 +20,9 @@ import (
 // The portable engine reads a directory itself on Windows (readDir), with
 // the call os.File.ReadDir makes (GetFileInformationByHandleEx), so that
 // each entry keeps what that call returns and Go drops: its space on disk
-// (AllocationSize) and its file ID. No call is added per entry or per
-// directory.
+// (AllocationSize) and its file ID. No call is added per file; a
+// directory's own allocation, which the enumeration gives as 0, is read
+// through a handle (fillDirBlocks).
 
 // winInfo is what one directory entry says of a file: Go's
 // Win32FileAttributeData (attributes, times, length), its allocation size,
@@ -216,20 +217,54 @@ func readDir(f *os.File) ([]fs.DirEntry, error) {
 }
 
 // fillRoot fills what a file root's Lstat leaves out (expandFile): its
-// space on disk and file ID, from a handle that asks for its attributes
-// alone, opened without following a link, so that a file another program
-// holds open is read too. They are current, where an enumeration's may lag
-// (fillSys). The file ID is taken where readDir would take one (the
-// volume's flags). A failed read leaves both null.
+// space on disk and file ID, read through a handle (byHandle). They are
+// current, where an enumeration's may lag (fillSys). The file ID is taken
+// where readDir would take one (the volume's flags). A failed read leaves
+// both null.
 func fillRoot(path string, r *Entry) {
-	p, err := windows.UTF16PtrFromString(longPathW(path))
+	alloc, id, err := byHandle(path, true)
 	if err != nil {
 		return
+	}
+	r.Blocks, r.Present = alloc, r.Present|HasBlocks
+	if id != 0 {
+		r.Inode, r.Present = id, r.Present|HasInode
+	}
+}
+
+// dirBlocks: a directory's own space on disk is read through a handle
+// (fillDirBlocks), one per directory, none per file.
+const dirBlocks = true
+
+// fillDirBlocks sets the space on disk of the directory at path, whose
+// row the enumeration filled: the enumeration gives a directory an
+// allocation of 0 whatever its index takes (128 KiB for one of 600
+// entries, TestAllocatedBytes), so it is read through a handle (byHandle)
+// instead. A failed read leaves it null, which swath du counts as missing
+// (checkLocalTotals: BlocksMayLack).
+func fillDirBlocks(path string, r *Entry) {
+	alloc, _, err := byHandle(path, false)
+	if err != nil {
+		r.Blocks, r.Present = 0, r.Present&^HasBlocks
+		return
+	}
+	r.Blocks, r.Present = alloc, r.Present|HasBlocks
+}
+
+// byHandle reads the space on disk of the entry at path, and with id its
+// file ID where the volume has them (0 otherwise), through a handle that
+// asks for attributes alone, opened without following a link, so that one
+// another program holds open, or a directory whose listing is denied, is
+// read too.
+func byHandle(path string, id bool) (alloc, fileID int64, err error) {
+	p, err := windows.UTF16PtrFromString(longPathW(path))
+	if err != nil {
+		return 0, 0, err
 	}
 	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
 		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
-		return
+		return 0, 0, err
 	}
 	defer windows.CloseHandle(h)
 	var s struct { // FILE_STANDARD_INFO
@@ -237,19 +272,17 @@ func fillRoot(path string, r *Entry) {
 		NumberOfLinks             uint32
 		DeletePending, Directory  uint8
 	}
-	if windows.GetFileInformationByHandleEx(h, windows.FileStandardInfo, (*byte)(unsafe.Pointer(&s)), uint32(unsafe.Sizeof(s))) != nil {
-		return
+	if err := windows.GetFileInformationByHandleEx(h, windows.FileStandardInfo, (*byte)(unsafe.Pointer(&s)), uint32(unsafe.Sizeof(s))); err != nil {
+		return 0, 0, err
 	}
-	r.Blocks, r.Present = s.AllocationSize, r.Present|HasBlocks
 	var flags uint32
 	var bh windows.ByHandleFileInformation
-	if readDirFileIDs && windows.GetVolumeInformationByHandle(h, nil, 0, nil, nil, &flags, nil, 0) == nil &&
+	if id && readDirFileIDs && windows.GetVolumeInformationByHandle(h, nil, 0, nil, nil, &flags, nil, 0) == nil &&
 		flags&windows.FILE_SUPPORTS_OBJECT_IDS != 0 && flags&windows.FILE_SUPPORTS_OPEN_BY_FILE_ID != 0 &&
 		windows.GetFileInformationByHandle(h, &bh) == nil {
-		if id := int64(bh.FileIndexHigh)<<32 | int64(bh.FileIndexLow); id != 0 {
-			r.Inode, r.Present = id, r.Present|HasInode
-		}
+		fileID = int64(bh.FileIndexHigh)<<32 | int64(bh.FileIndexLow)
 	}
+	return s.AllocationSize, fileID, nil
 }
 
 // longPathW gives a path of MAX_PATH or more the extended-length form the

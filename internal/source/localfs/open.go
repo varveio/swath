@@ -52,6 +52,13 @@ func LinksRead(f Fields) bool { return f != Names && statLinks }
 // (statBlocks: Linux, macOS and Windows).
 func BlocksRead(f Fields) bool { return f != Names && statBlocks }
 
+// BlocksMayLack says a listing at tier f that reads blocks may still leave
+// some entries without them: statx, which a filesystem may answer without
+// them (some network filesystems), and Windows, where a directory's own
+// are read through a handle that can fail (fillDirBlocks). swath du counts
+// such an entry as missing rather than fail the count.
+func BlocksMayLack(f Fields) bool { return f == Statx || dirBlocks && f == Stat }
+
 // Opened is a local tree opened by Open: the provider bound to its row
 // schema (Bound), and what a run asks of an opened source besides its
 // rows: the rows listed, the run's own output left out (Exclude), the

@@ -93,8 +93,9 @@ func checkLocalTotals(options any, t *totals.Options) error {
 		switch {
 		case localfs.BlocksRead(o.Fields):
 			// statx may leave blocks out of an entry (some network
-			// filesystems): counted missing, not a failed count.
-			t.Primary, t.Reason, t.Lenient = totals.AllocatedBytes, totals.ReasonDefault, o.Fields == localfs.Statx
+			// filesystems), and so may a Windows directory's own
+			// (localfs.BlocksMayLack): counted missing, not a failed count.
+			t.Primary, t.Reason, t.Lenient = totals.AllocatedBytes, totals.ReasonDefault, localfs.BlocksMayLack(o.Fields)
 		case o.Fields == localfs.Names:
 			t.Primary, t.Reason = totals.Size, totals.ReasonNamesTier
 		default:

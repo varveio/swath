@@ -21,7 +21,8 @@ Notable changes per release. The human summary of the current release is in the
 ### Changed
 
 - On Windows a stat tier fills `allocated_bytes` (the space on disk) and `inode` (the file ID, where the filesystem
-  has one) from the directory listing swath already reads, with no call per file, so `swath du` leads with the
+  has one) from the directory listing swath already reads, with no call per file (a directory's own space on disk
+  through a handle, one per directory, as the listing gives directories none), so `swath du` leads with the
   space on disk there as on Linux and macOS and takes `--allocated`. The figure can lag under a hard link's other
   names and for a file still being written ([How sizes are counted](docs/totals.md#how-sizes-are-counted)).
   Link counts are still not read on Windows, so every name of a hard-linked file counts (#568).
