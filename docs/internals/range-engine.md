@@ -75,8 +75,12 @@ witness past `L` (`end_check.contradicted`) may be a write or a delete during th
 listing lags, so the engine asks again, up to three times with the requeue backoff:
 - the witness, by a listing of its own prefix with no `start-after` (the shape those services answer whole):
   gone, the page stands (`end_check.raced_gone`);
-- the claim, by `start-after=L`: keys after `L` now, the range goes on from them, and their page's end is
-  checked in turn (`end_check.raced_new_keys`).
+- the claim, by `start-after=L` (after `L`'s longest accepted prefix, keys up to `L` dropped, when the
+  provider refuses `L` as a bound; those pages must ascend and their tokens progress): keys after `L` now, the
+  page is not final (`end_check.raced_new_keys`). The range emits it, fences at `L` and goes on with a chain
+  that starts after `L`, through its own page path, so each page is emitted and checked as it comes and none
+  is buffered. A key at or below `L` on that chain is an invalid page; a chain after `L` that keeps listing
+  nothing while asking again lists keys after it is an omission.
 
 A witness that stays while `start-after=L` still ends the listing below it is an omission: the run fails
 with cause `omitted_keys` (`source.ErrOmitted`, `end_check.omitted`), resumable, since the range never

@@ -358,7 +358,7 @@ var Counters = table([numCounters]counters.Def{
 	cEndContradicted:              d("end_check.contradicted", counters.Count, "pages", "claims a key or folder seen past the page's last key contradicted: asked again (claims less these were not verified)", "end_check"),
 	cEndWitnessChecks:             d("end_check.witness_checks", counters.Count, "requests", "requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests)", "end_check"),
 	cEndAskedAgain:                d("end_check.asked_again", counters.Count, "requests", "contradicted pages asked again after their last key (also counted in requests)", "end_check"),
-	cEndRacedNew:                  d("end_check.raced_new_keys", counters.Count, "pages", "contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the range went on from them", "end_check"),
+	cEndRacedNew:                  d("end_check.raced_new_keys", counters.Count, "pages", "contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the page was not final and the chain went on after it", "end_check"),
 	cEndRacedGone:                 d("end_check.raced_gone", counters.Count, "pages", "contradicted pages whose contradicting key or folder no longer exists (deleted meanwhile): the page stands", "end_check"),
 	cEndOmitted:                   d("end_check.omitted", counters.Count, "pages", "pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys)", "end_check"),
 })

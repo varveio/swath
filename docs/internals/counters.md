@@ -395,7 +395,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `end_check.contradicted` | count | pages | end_check | claims a key or folder seen past the page's last key contradicted: asked again (claims less these were not verified) |
 | `end_check.witness_checks` | count | requests | end_check | requests that asked whether a contradicting key or folder still exists (prefix, no start-after; also counted in requests) |
 | `end_check.asked_again` | count | requests | end_check | contradicted pages asked again after their last key (also counted in requests) |
-| `end_check.raced_new_keys` | count | pages | end_check | contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the range went on from them |
+| `end_check.raced_new_keys` | count | pages | end_check | contradicted pages asked again that listed keys after them: written meanwhile, or a service whose listing lags; the page was not final and the chain went on after it |
 | `end_check.raced_gone` | count | pages | end_check | contradicted pages whose contradicting key or folder no longer exists (deleted meanwhile): the page stands |
 | `end_check.omitted` | count | pages | end_check | pages still contradicted after being asked again 3 times: the service omitted keys and the run failed (cause omitted_keys) |
 | `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |

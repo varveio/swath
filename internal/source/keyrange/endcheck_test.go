@@ -147,8 +147,9 @@ func (s *omitScript) List(ctx context.Context, in *keyrangetest.ListInput) (*key
 
 // checkOne runs checkEnd on one claim: the page out (final) that a chain
 // started after after returned, with c the cursor before it, the run
-// having seen witness (a key, or a folder when it ends in '/').
-func checkOne(t *testing.T, api lister, witness, after string, out *Page[Object], c string) (*Page[Object], Stats, error) {
+// having seen witness (a key, or a folder when it ends in '/'). more: keys
+// follow l, the claim's last key, and the chain goes on after it.
+func checkOne(t *testing.T, api lister, witness, after string, out *Page[Object], c string) (more bool, l string, _ Stats, _ error) {
 	t.Helper()
 	p, err := New(Options{Workers: 1}, Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(api))
 	if err != nil {
@@ -163,8 +164,10 @@ func checkOne(t *testing.T, api lister, witness, after string, out *Page[Object]
 		}
 		p.witness(seen)
 	}
-	got, err := p.checkEnd(context.Background(), &Query{After: after, Max: 5}, out, c)
-	return got, p.Stats(), err
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // a looping check fails, not hangs
+	defer cancel()
+	more, l, err = p.checkEnd(ctx, &Query{After: after, Max: 5}, out, c)
+	return more, l, p.Stats(), err
 }
 
 func TestEndCheckDecisions(t *testing.T) {
@@ -173,74 +176,186 @@ func TestEndCheckDecisions(t *testing.T) {
 	empty := func() *Page[Object] { return &Page[Object]{} }
 	t.Run("no witness past the page: no request", func(t *testing.T) {
 		f := newSorted(keys, false, 1)
-		got, st, err := checkOne(t, f, "a/1", "a/1", empty(), "a/1")
-		if err != nil || len(got.Rows) != 0 || f.Calls != 0 || st.Get(cEndClaims) != 1 || st.Get(cEndContradicted) != 0 {
-			t.Fatalf("rows %d err %v calls %d claims %d contradicted %d", len(got.Rows), err, f.Calls, st.Get(cEndClaims), st.Get(cEndContradicted))
+		more, _, st, err := checkOne(t, f, "a/1", "a/1", empty(), "a/1")
+		if err != nil || more || f.Calls != 0 || st.Get(cEndClaims) != 1 || st.Get(cEndContradicted) != 0 {
+			t.Fatalf("more %v err %v calls %d claims %d contradicted %d", more, err, f.Calls, st.Get(cEndClaims), st.Get(cEndContradicted))
 		}
 	})
 	t.Run("a folder marker equal to the page's end is no witness", func(t *testing.T) {
 		f := newSorted([]string{"a/"}, false, 1)
-		_, st, err := checkOne(t, f, "a/", "", &Page[Object]{Rows: []Row{{Key: "a/"}}}, "")
+		_, _, st, err := checkOne(t, f, "a/", "", &Page[Object]{Rows: []Row{{Key: "a/"}}}, "")
 		if err != nil || st.Get(cEndContradicted) != 0 || f.Calls != 0 {
 			t.Fatalf("err %v contradicted %d calls %d", err, st.Get(cEndContradicted), f.Calls)
 		}
 	})
 	t.Run("a store that keeps omitting: ErrOmitted", func(t *testing.T) {
 		s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(int, *keyrangetest.ListInput) bool { return true }}
-		_, st, err := checkOne(t, s, "b/", "a/1", empty(), "a/1")
+		_, _, st, err := checkOne(t, s, "b/", "a/1", empty(), "a/1")
 		if !errors.Is(err, source.ErrOmitted) || st.Get(cEndOmitted) != 1 || st.Get(cEndAskedAgain) != endTries {
 			t.Fatalf("err %v omitted %d asked again %d", err, st.Get(cEndOmitted), st.Get(cEndAskedAgain))
 		}
 	})
-	t.Run("keys written after the page: the range goes on", func(t *testing.T) {
+	t.Run("keys written after the page: the chain goes on after it", func(t *testing.T) {
 		// The page was the store's true answer when it was asked; the keys
 		// after a/1 came later, and the run saw b/2 meanwhile.
 		f := newSorted(keys, false, 1)
-		got, st, err := checkOne(t, f, "b/2", "a/1", empty(), "a/1")
-		if err != nil || st.Get(cEndRacedNew) != 1 || st.Get(cEndOmitted) != 0 {
-			t.Fatalf("err %v raced %d omitted %d", err, st.Get(cEndRacedNew), st.Get(cEndOmitted))
-		}
-		if k := keysOf(got.Rows); !slices.Equal(k, []string{"a/2", "a/3", "b/1", "b/2"}) || got.Truncated {
-			t.Fatalf("the range goes on with %v (truncated %v), want a/2..b/2", k, got.Truncated)
+		more, l, st, err := checkOne(t, f, "b/2", "a/1", empty(), "a/1")
+		if err != nil || !more || l != "a/1" || st.Get(cEndRacedNew) != 1 || st.Get(cEndOmitted) != 0 {
+			t.Fatalf("err %v more %v after %q raced %d omitted %d", err, more, l, st.Get(cEndRacedNew), st.Get(cEndOmitted))
 		}
 	})
-	t.Run("a store whose listing lags: the range goes on", func(t *testing.T) {
+	t.Run("a store whose listing lags: the chain goes on", func(t *testing.T) {
 		s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(n int, _ *keyrangetest.ListInput) bool { return n < endTries-1 }}
-		got, st, err := checkOne(t, s, "b/1", "a/3", empty(), "a/3")
-		if err != nil || st.Get(cEndRacedNew) != 1 || len(got.Rows) != 2 {
-			t.Fatalf("err %v raced %d rows %d", err, st.Get(cEndRacedNew), len(got.Rows))
+		more, _, st, err := checkOne(t, s, "b/1", "a/3", empty(), "a/3")
+		if err != nil || !more || st.Get(cEndRacedNew) != 1 {
+			t.Fatalf("err %v more %v raced %d", err, more, st.Get(cEndRacedNew))
 		}
 	})
 	t.Run("a witness deleted since: the page stands", func(t *testing.T) {
 		s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(int, *keyrangetest.ListInput) bool { return true }}
-		got, st, err := checkOne(t, s, "c/1", "b/2", empty(), "b/2")
-		if err != nil || len(got.Rows) != 0 || st.Get(cEndRacedGone) != 1 || st.Get(cEndAskedAgain) != 0 {
-			t.Fatalf("err %v rows %d gone %d asked again %d", err, len(got.Rows), st.Get(cEndRacedGone), st.Get(cEndAskedAgain))
+		more, _, st, err := checkOne(t, s, "c/1", "b/2", empty(), "b/2")
+		if err != nil || more || st.Get(cEndRacedGone) != 1 || st.Get(cEndAskedAgain) != 0 {
+			t.Fatalf("err %v more %v gone %d asked again %d", err, more, st.Get(cEndRacedGone), st.Get(cEndAskedAgain))
 		}
 	})
 	t.Run("a last key the provider refuses as a bound: asked again after its accepted prefix", func(t *testing.T) {
 		// The fake refuses control characters in start-after, as S3 does.
 		f := newSorted([]string{"a/\x01", "a/\x01x", "b/1"}, false, 1)
-		got, st, err := checkOne(t, f, "b/1", "a/", &Page[Object]{Rows: []Row{{Key: "a/\x01"}}}, "a/")
-		if err != nil || st.Get(cEndRacedNew) != 1 || !slices.Equal(keysOf(got.Rows), []string{"a/\x01", "a/\x01x", "b/1"}) {
-			t.Fatalf("err %v raced %d keys %q", err, st.Get(cEndRacedNew), keysOf(got.Rows))
+		more, l, st, err := checkOne(t, f, "b/1", "a/", &Page[Object]{Rows: []Row{{Key: "a/\x01"}}}, "a/")
+		if err != nil || !more || l != "a/\x01" || st.Get(cEndRacedNew) != 1 {
+			t.Fatalf("err %v more %v after %q raced %d", err, more, l, st.Get(cEndRacedNew))
+		}
+	})
+	t.Run("pages below a refused last key that repeat their token: a broken listing, not a loop", func(t *testing.T) {
+		cyc := &belowCycle{sorted: newSorted([]string{"a/\x01", "a/\x02", "b/1"}, false, 1), bound: "a/"}
+		_, _, _, err := checkOne(t, cyc, "b/1", "a/", &Page[Object]{Rows: []Row{{Key: "a/\x05"}}}, "a/")
+		if !errors.Is(err, source.ErrProtocol) {
+			t.Fatalf("err %v after %d cycling pages, want a protocol violation", err, cyc.n)
 		}
 	})
 	t.Run("a store that answers the start key again: a broken listing, not a loop", func(t *testing.T) {
 		echo := &echoAfter{sorted: newSorted(keys, false, 1)}
-		_, _, err := checkOne(t, echo, "b/2", "a/1", &Page[Object]{Rows: []Row{{Key: "a/2"}}}, "a/1")
+		_, _, _, err := checkOne(t, echo, "b/2", "a/1", &Page[Object]{Rows: []Row{{Key: "a/2"}}}, "a/1")
 		if !errors.Is(err, source.ErrProtocol) || echo.n > 2 {
 			t.Fatalf("err %v after %d echoed pages, want a protocol violation at the first", err, echo.n)
 		}
 	})
 	t.Run("a page with keys: the claim is after its last key", func(t *testing.T) {
 		s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(int, *keyrangetest.ListInput) bool { return false }}
-		out := &Page[Object]{Rows: []Row{{Key: "a/2"}}}
-		got, st, err := checkOne(t, s, "b/1", "a/1", out, "a/1")
-		if err != nil || st.Get(cEndRacedNew) != 1 || !slices.Equal(keysOf(got.Rows), []string{"a/2", "a/3", "b/1", "b/2"}) {
-			t.Fatalf("err %v raced %d keys %v", err, st.Get(cEndRacedNew), keysOf(got.Rows))
+		more, l, st, err := checkOne(t, s, "b/1", "a/1", &Page[Object]{Rows: []Row{{Key: "a/2"}}}, "a/1")
+		if err != nil || !more || l != "a/2" || st.Get(cEndRacedNew) != 1 {
+			t.Fatalf("err %v more %v after %q raced %d", err, more, l, st.Get(cEndRacedNew))
 		}
 	})
+}
+
+// belowCycle answers a chain that starts after bound with a truncated page
+// of its first key and the same token forever: pages below the last key
+// asked after that make no progress.
+type belowCycle struct {
+	*sorted
+	bound string
+	n     int
+}
+
+func (c *belowCycle) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	if in.Delimiter == "" && (in.ContinuationToken == "T" || in.ContinuationToken == "" && in.StartAfter == c.bound) {
+		c.n++
+		return &keyrangetest.Page{Contents: []keyrangetest.Object{{Key: c.Keys[0]}}, IsTruncated: true, NextContinuationToken: "T"}, nil
+	}
+	return c.sorted.List(ctx, in)
+}
+
+// shortFinal answers every request that starts after a key with the next
+// key alone, as a final page, though keys follow: a service whose listing
+// ends early on every page and progresses only when asked again.
+type shortFinal struct{ *sorted }
+
+func (s *shortFinal) List(ctx context.Context, in *keyrangetest.ListInput) (*keyrangetest.Page, error) {
+	out, err := s.sorted.List(ctx, in)
+	if err == nil && in.StartAfter != "" && in.ContinuationToken == "" && in.Delimiter == "" && len(out.Contents) > 1 {
+		out = &keyrangetest.Page{Contents: out.Contents[:1]}
+	}
+	return out, err
+}
+
+// batches records the size of each batch of rows a range emits, and its
+// fences.
+type batches struct {
+	sizes  []int
+	keys   []string
+	fences int
+}
+
+func (b *batches) Rows(rows []Row) error {
+	b.sizes = append(b.sizes, len(rows))
+	b.keys = append(b.keys, keysOf(rows)...)
+	return nil
+}
+func (b *batches) Child(Range) error         { return errors.New("no split expected") }
+func (b *batches) Span(string, string, bool) {}
+func (b *batches) Fence(string, bool)        { b.fences++ }
+
+// A service that ends every page early while keys follow, below a witness
+// far ahead: the range emits each recovered page as it comes, never a
+// buffer of all of them, and lists every key (review of #684: checkEnd
+// once concatenated every recovered page before returning).
+func TestEndCheckStreamsRecoveredPages(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	var keys []string
+	for i := range 200 {
+		keys = append(keys, fmt.Sprintf("a/%04d", i))
+	}
+	keys = append(keys, "z/1")
+	api := &shortFinal{newSorted(keys, false, 1)}
+	p, err := New(Options{Workers: 1, PageSize: 50, SplitCoin: func() bool { return false }},
+		Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(api))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.witness(&Page[Object]{Prefixes: []string{"z/"}})
+	b := &batches{}
+	if err := p.expandRange(t.Context(), Range{lo: "a/", open: true, id: 1, born: fromSeed}, b); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(b.keys, keys) {
+		t.Fatalf("%d keys listed, want %d", len(b.keys), len(keys))
+	}
+	if m := slices.Max(b.sizes); m > 1 {
+		t.Fatalf("a batch of %d rows: recovered pages were buffered, not emitted one at a time", m)
+	}
+	if st := p.Stats(); st.Get(cEndRacedNew) < 199 || b.fences < 199 {
+		t.Fatalf("raced %d, fences %d", st.Get(cEndRacedNew), b.fences)
+	}
+}
+
+// A service that answers the range's chain after a key with an empty final
+// page every time, while the same request asked again lists keys after it:
+// no progress, an omission, not a loop.
+func TestEndCheckRestartWithoutProgress(t *testing.T) {
+	defer SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	keys := []string{"a/1", "a/2", "b/1"}
+	n := 0
+	// Every other request after a/1 is empty: the range's, then the one
+	// asked again lists a/2.
+	s := &omitScript{sorted: newSorted(keys, false, 1), omit: func(_ int, in *keyrangetest.ListInput) bool {
+		if in.StartAfter != "a/1" {
+			return false
+		}
+		n++
+		return n%2 == 1
+	}}
+	p, err := New(Options{Workers: 1, PageSize: 5}, Description[Object]{Target: "test", Listing: Listing, Unbounded: true}, fetchFrom(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.witness(&Page[Object]{Rows: []Row{{Key: "b/1"}}})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	err = p.expandRange(ctx, Range{lo: "a/1", open: true, id: 1, born: fromSeed}, &batches{})
+	if !errors.Is(err, source.ErrOmitted) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err %v after %d requests after a/1, want ErrOmitted", err, n)
+	}
 }
 
 // echoAfter answers every start-after request with that key alone, as a
