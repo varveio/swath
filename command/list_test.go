@@ -556,29 +556,46 @@ func TestListQueuedCanceled(t *testing.T) {
 
 // TestListCanceledAfterRun: a context canceled once the run has failed,
 // after inventory.Run returned and before the command finalizes the run,
-// leaves the run failed with its reason.
+// leaves the run failed with its reason: with no cause, and with a cause
+// the run's own error matches (a missing local source, os.ErrNotExist).
 func TestListCanceledAfterRun(t *testing.T) {
 	s3test.NoCredentials(t)
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_DEFAULT_REGION", "")
 	endpoint := s3test.Bucket(t, s3test.Keys(10, 2)) // serves bucket bkt only
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var reached atomic.Bool
-	defer faults.Set(func(p string) error {
-		if p == "run-returned" {
-			reached.Store(true)
-			cancel()
-		}
-		return nil
-	})()
-	r, err := List(ctx, ListOptions{Source: "s3://nobucket/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
-		Output: filepath.Join(t.TempDir(), "ds")})
-	if !reached.Load() {
-		t.Fatal("the run did not return")
-	}
-	if r.Status != ListFailed || !errors.Is(err, ErrSourceNotFound) || errors.Is(err, context.Canceled) {
-		t.Errorf("%+v %v", r, err)
+	for _, c := range []struct {
+		name  string
+		cause error
+		opts  func(t *testing.T) ListOptions
+	}{
+		{"no cause", nil, func(*testing.T) ListOptions {
+			return ListOptions{Source: "s3://nobucket/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1}
+		}},
+		{"the run's error as the cause", os.ErrNotExist, func(t *testing.T) ListOptions {
+			return ListOptions{Source: filepath.Join(t.TempDir(), "missing")}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			var reached atomic.Bool
+			defer faults.Set(func(p string) error {
+				if p == "run-returned" {
+					reached.Store(true)
+					cancel(c.cause)
+				}
+				return nil
+			})()
+			opts := c.opts(t)
+			opts.Output = filepath.Join(t.TempDir(), "ds")
+			r, err := List(ctx, opts)
+			if !reached.Load() {
+				t.Fatal("the run did not return")
+			}
+			if r.Status != ListFailed || !errors.Is(err, ErrSourceNotFound) || errors.Is(err, context.Canceled) {
+				t.Errorf("%+v %v", r, err)
+			}
+		})
 	}
 }
 

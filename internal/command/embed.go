@@ -106,17 +106,22 @@ func (e *embedding) offer(s inventory.ProgressSnapshot) {
 	}
 }
 
-// stopped records, once inventory.Run returned err and supervise
-// stopped, r, whether err is the caller's context's ending, and the run's
-// final snapshot when it started, as the progress file keeps it; it ends
-// the feed without waiting for the callback, which may be waiting for what
-// the command writes after the run (deliver).
-func (e *embedding) stopped(pr *inventory.Progress, r embedRun, err error) {
+// settled records, as soon as inventory.Run has returned err, r and
+// whether err is the caller's context's ending: a context that ends after
+// this does not make the run canceled.
+func (e *embedding) settled(r embedRun, err error) {
 	if e == nil {
 		return
 	}
 	e.run, e.canceled = &r, canceledBy(e.ctx, err)
-	if e.feed == nil {
+}
+
+// stopped records, once supervise stopped, the run's final snapshot when
+// it started, as the progress file keeps it; it ends the feed without
+// waiting for the callback, which may be waiting for what the command
+// writes after the run (deliver).
+func (e *embedding) stopped(pr *inventory.Progress) {
+	if e == nil || e.feed == nil {
 		return
 	}
 	close(e.feed)

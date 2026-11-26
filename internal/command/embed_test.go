@@ -41,7 +41,7 @@ func TestSuperviseOffersNoEnd(t *testing.T) {
 			t.Fatal("no stall warning: the watchdog did not tick")
 		}
 		stop()
-		e.stopped(pr, embedRun{}, nil)
+		e.stopped(pr)
 		<-e.fed
 		mu.Lock()
 		got := states
