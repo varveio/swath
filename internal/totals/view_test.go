@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 // exactNode is a node of the brute-force tree.
@@ -483,15 +485,15 @@ func TestViewSelect(t *testing.T) {
 		feed(tl, [][]Row{rows}, true, rng)
 		v := tl.View()
 		limit := 2 + rng.IntN(30)
-		lines := v.Select(limit)
+		lines := tree.Select(v.Tree(), limit)
 		if len(lines) > limit {
 			t.Fatalf("seed %d: %d lines over %d", seed, len(lines), limit)
 		}
 		// Rebuild each parent's lines and check that they add up, and that
 		// a fold's time is the newest among the children not shown.
-		tree := exactTree("", rows, false)
+		exact := exactTree("", rows, false)
 		type level struct {
-			row                ViewRow
+			row                tree.Row
 			key                string // the line's node (the last of a shared line)
 			shown              map[string]bool
 			bytes, objs, lines int64
@@ -525,15 +527,15 @@ func TestViewSelect(t *testing.T) {
 					t.Fatalf("seed %d: fold %+v", seed, r)
 				}
 				if r.Fold {
-					e := tree[p.key]
+					e := exact[p.key]
 					at, timed := e.selfNewest, e.selfTimed
 					for k := range e.kids {
-						if n := tree[k]; !p.shown[k] && n.timed && (!timed || n.newest > at) {
+						if n := exact[k]; !p.shown[k] && n.timed && (!timed || n.newest > at) {
 							at, timed = n.newest, true
 						}
 					}
-					if r.HasNewest != timed || timed && r.Newest != at {
-						t.Fatalf("seed %d: fold under %q has newest %v %d, want %v %d", seed, p.key, r.HasNewest, r.Newest, timed, at)
+					if (r.Newest != nil) != timed || timed && r.Newest.UnixMicro() != at {
+						t.Fatalf("seed %d: fold under %q has newest %v, want %v %d", seed, p.key, r.Newest, timed, at)
 					}
 				} else {
 					seg := r.Name
@@ -627,12 +629,12 @@ func TestViewPinnedBudget(t *testing.T) {
 // view shorter than the terminal; a wide level of prefixes above the floor
 // fills the lines.
 func TestViewSelectFloor(t *testing.T) {
-	sel := func(rows []Row, n int) []ViewRow {
+	sel := func(rows []Row, n int) []tree.Row {
 		slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
 		tl := New(Options{View: true})
 		feed(tl, [][]Row{rows[:len(rows)/2], rows[len(rows)/2:]}, true, rand.New(rand.NewPCG(1, 2)))
 		checkView(t, tl.View(), "", exactTree("", rows, false))
-		return tl.View().Select(n)
+		return tree.Select(tl.View().Tree(), n)
 	}
 	var rows []Row
 	for i, share := range []int64{154, 104, 80, 60} { // per mille of the total
@@ -811,7 +813,7 @@ func TestViewUnreadable(t *testing.T) {
 	feed(tl, [][]Row{rows}, true, rand.New(rand.NewPCG(1, 1)))
 	v := tl.View()
 	got := map[string]bool{}
-	for _, l := range v.Select(8) {
+	for _, l := range tree.Select(v.Tree(), 8) {
 		got[fmt.Sprintf("%d %s %v %v", l.Level, l.Name, l.Fold, l.Unreadable)] = true
 	}
 	for _, want := range []string{"0  false true", "1 a/ false true", "1 b/big false false", "2 00 false false", "2  true true", "1  true true"} {

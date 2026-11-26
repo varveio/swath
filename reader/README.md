@@ -6,7 +6,8 @@ metadata, checks its schema, and optionally decodes rows into concrete source ty
 Reading, parallel scanning, aggregation and pagination belong to SeekParquet, reached
 through `Dataset.SeekParquet()`.
 
-This is a nested Go module. It depends on SeekParquet and the standard library, with no
+This is a nested Go module. It depends on SeekParquet and the standard library (and
+package `du/tree` on `golang.org/x/text`'s width tables), with no
 cloud SDK or dependency on the swath lister or objfile. The lister binds its producer
 schemas to this module's registry (`internal/schema.Bind`), so writers and decoders
 share the column names, types, nullability and version roles. The
@@ -223,3 +224,21 @@ covered). Where the walk covered a prefix and its allocation evidence is complet
 
 Every equality and bound against du holds on acyclic traversal scopes only, and on a tree that does not change
 during the walk.
+
+## The du view
+
+The package [`github.com/varveio/swath/reader/du/tree`](du/tree/doc.go) draws the view `swath du` shows on a
+terminal ([the view](../docs/totals.md#the-view)): the largest prefixes and objects at any depth, largest first,
+each under its parent, the rest of each parent's children folded into a `(N more)` row. `swath du` draws its view
+with it. Its API is experimental: it may change in any release. It imports only the standard library and
+`golang.org/x/text`'s width tables.
+
+`Select` chooses the rows from a `Tree`: the total and the nodes under it, each a prefix's or an object's
+`Bytes`, `Objects`, `Missing`, `Children` and `Newest`, from whatever the program counted (a `du.Totals` maps onto
+a `Node` field by field; the package documentation says how). `Render` writes them to a writer for a `Layout`: the
+total's label, the width, color on or off, the zone of the dates and the headings of the size and count columns.
+A program adds columns of its own: each `Column` is a heading, an alignment and one formatted cell per row, a fold
+row's included (its aggregate, or empty). As the width shrinks, `Render` drops the bar, then the share, then the
+date, then the program's columns from the last to the first; the size, the count and the path stay, a path cut
+in the middle. `Cells`, `Clip`, `Size`, `Count` and `Grouped` are the view's measures and number forms, for a
+program's own cells to match it.

@@ -70,6 +70,9 @@ the middle, keeping its end, and a line never wraps. Every figure is exact, what
 The line under the view gives the total once, exactly, with the other figure where the source has one
 (`36.5 MiB on disk in 6 files · 100 MiB of data`); `-q` leaves it out. Color follows `--color` and `NO_COLOR`.
 
+A Go program can draw the same view from its own totals, with columns of its own
+([Draw the view as swath du does](library.md#draw-the-view-as-swath-du-does)).
+
 The view is for reading. In a pipe, bare `swath du` prints the total row only, as TSV, and `-d N` (`-d 0`
 included), `--sort` or `--format` prints the table or the rows of [Totals per prefix](#totals-per-prefix)
 instead. `--from-dataset` draws the same view from a saved dataset.

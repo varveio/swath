@@ -67,3 +67,22 @@ func TestDuImportsListingOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestTreeImports: package tree, its tests included, imports nothing but
+// golang.org/x/text's width tables and the standard library, so a program
+// that draws the view links no reader, SeekParquet or Parquet code.
+func TestTreeImports(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "-test", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./du/tree").Output()
+	if err != nil {
+		t.Fatalf("go list: %v", err)
+	}
+	for line := range strings.Lines(string(out)) {
+		path, _, _ := strings.Cut(strings.TrimSpace(line), " ") // "tree [tree.test]" is tree built for its tests
+		switch path {
+		case "", "github.com/varveio/swath/reader/du/tree", "github.com/varveio/swath/reader/du/tree_test", "github.com/varveio/swath/reader/du/tree.test",
+			"golang.org/x/text/width", "golang.org/x/text/transform":
+		default:
+			t.Errorf("tree links %s", path)
+		}
+	}
+}

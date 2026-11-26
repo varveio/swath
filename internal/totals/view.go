@@ -11,15 +11,19 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 // The adaptive view (Options.View, swath du on a terminal): the largest
 // prefixes and objects at whatever depth they are, each exact, in memory
-// that does not grow with the listing. The idea of showing a tree of the
-// largest entries with their share of the total is dust's and pdu's
+// that does not grow with the listing; tree.Select chooses the rows shown
+// from it (View.Tree). The idea of showing a tree of the largest entries
+// with their share of the total is dust's and pdu's
 // (github.com/bootandy/dust, github.com/KSXGitHub/parallel-disk-usage,
 // both Apache-2.0); this is written from their documented behavior, not
-// their code, and differs where noted on Select.
+// their code, and differs where noted on tree.Select.
 //
 // A node is a prefix (a key up to a '/' below the origin) or an object's
 // key; its figure is the bytes under it in the primary figure
@@ -53,10 +57,6 @@ import (
 // fewer levels (MaxDepth): the deepest are forgotten, the levels kept stay
 // exact, and their nodes at the deepest level kept no longer know how many
 // children they have. The view does not fail.
-
-// viewFloor is the share of the total, as a divisor, below which the view
-// spends no line on a node: 0.5 %.
-const viewFloor = 200
 
 // viewKeep is the complete nodes of each depth remembered, the largest: far
 // more than a terminal shows, and each node of 1 % of the total is among
@@ -955,224 +955,27 @@ func (t *Tally) View() *View {
 	return out
 }
 
-// ViewRow is a line of the view (View.Select): a node, or the fold of a
-// parent's children not shown (Fold), which carries their sums.
-type ViewRow struct {
-	// Name is the node's key below its parent's ("logs/", "a.bin"); the
-	// total's is its key, the origin. A prefix whose one child is shown
-	// shares its line: "api/2025/".
-	Name string
-	// Level is the line's level in the view: the total's 0, a line's
-	// children's one more.
-	Level                   int
-	Bytes, Objects, Missing int64
-	// Unreadable: a directory at or below the line's node (a fold: below a
-	// child it holds) could not be read.
-	Unreadable bool
-	// Newest and HasNewest are a node's (ViewNode), or a fold's the newest
-	// of what it holds (unknown, in a rare view, when the thirty-two
-	// newest children of its parent are all shown).
-	Newest    int64
-	HasNewest bool
-	// Fold: the rest of the parent's children, More of them (-1: an
-	// unknown number), Bytes, Objects and Missing their sums.
-	Fold bool
-	More int64
-}
-
-// Select chooses the view's lines, at most rows (the total and every fold
-// line included, at least the total and its fold), from the largest down.
-// The lines show, besides the total, nodes and the folds of the nodes
-// shown with children: a fold holds a parent's children not shown, how
-// many and their sums, so each level adds up to its parent (a fold of no
-// bytes is left out). Line by line, what is not broken down yet (a fold,
-// or a node shown whole) gives its largest child, a node a fold for the
-// rest too: the one whose child is the largest. So the largest nodes come
-// first and the largest prefixes open, down to a floor (0.5 % of the
-// total, more on a short terminal): a long tail of small prefixes stays in
-// its fold, and the view ends when nothing above the floor is left.
-// Unlike dust, which shows the largest nodes of the whole tree whatever
-// their parents, and pdu, which hides what is below 1 % without saying
-// so. A prefix with one child shares its line with it (it holds the same
-// bytes). The lines come in tree order: a parent first, its children by
-// size.
-func (v *View) Select(rows int) []ViewRow {
-	type sel struct {
-		n     *ViewNode
-		kids  []int // its children held, by size, the largest first
-		next  int   // kids[:next] are shown
-		bytes int64 // theirs
+// Tree is v as tree.Select chooses the view's rows from it: its total,
+// nodes and unreadable directories (v's own slice, which Select does not
+// change), each node with its newest children's times.
+func (v *View) Tree() *tree.Tree {
+	node := func(n *ViewNode) tree.Node {
+		t := tree.Node{Key: n.Key, Bytes: n.Bytes, Objects: n.Objects, Missing: n.Missing, Children: n.Children, Unreadable: n.Unreadable}
+		if n.HasNewest {
+			at := time.UnixMicro(n.Newest)
+			t.Newest = &at
+		}
+		if len(n.recent) > 0 {
+			t.Recent = make([]tree.Child, len(n.recent))
+			for i, k := range n.recent {
+				t.Recent[i] = tree.Child{Key: k.name, Newest: time.UnixMicro(k.at)}
+			}
+		}
+		return t
 	}
-	nodes := make([]sel, len(v.Nodes)+1)
-	nodes[0] = sel{n: &v.Total}
-	index := map[string]int{v.Total.Key: 0}
+	t := &tree.Tree{Total: node(&v.Total), Nodes: make([]tree.Node, len(v.Nodes)), Unreadable: v.Unreadable}
 	for i := range v.Nodes {
-		nodes[i+1].n = &v.Nodes[i]
-		index[v.Nodes[i].Key] = i + 1
+		t.Nodes[i] = node(&v.Nodes[i])
 	}
-	bigger := func(a, b int) int {
-		x, y := nodes[a].n, nodes[b].n
-		if c := cmp.Compare(y.Bytes, x.Bytes); c != 0 {
-			return c
-		}
-		return cmp.Compare(x.Key, y.Key)
-	}
-	for i := 1; i < len(nodes); i++ {
-		p := &nodes[index[parentOf(nodes[i].n.Key)]]
-		p.kids = append(p.kids, i)
-	}
-	for i := range nodes {
-		slices.SortFunc(nodes[i].kids, bigger)
-	}
-	shown := func(s *sel) int64 { return int64(s.next) }
-	// hiddenUnreadable reports whether a child of s not shown holds a
-	// directory that could not be read.
-	hiddenUnreadable := func(s *sel) bool {
-		if !s.n.Unreadable {
-			return false
-		}
-		shownKey := map[string]bool{}
-		for _, k := range s.kids[:s.next] {
-			shownKey[nodes[k].n.Key] = true
-		}
-		i, _ := slices.BinarySearch(v.Unreadable, s.n.Key)
-		for ; i < len(v.Unreadable) && strings.HasPrefix(v.Unreadable[i], s.n.Key); i++ {
-			u := v.Unreadable[i]
-			if u == s.n.Key {
-				continue // s itself: its line is marked
-			}
-			j := strings.IndexByte(u[len(s.n.Key):], '/')
-			if !shownKey[u[:len(s.n.Key)+j+1]] {
-				return true
-			}
-		}
-		return false
-	}
-	// folds is the fold lines s needs: one when it lists children (the
-	// total always does) and some not shown hold bytes or a directory that
-	// could not be read.
-	folds := func(s *sel) int {
-		if s.next == 0 && s != &nodes[0] {
-			return 0
-		}
-		if (s.n.Children < 0 || shown(s) < s.n.Children) && (s.bytes < s.n.Bytes || hiddenUnreadable(s)) {
-			return 1
-		}
-		return 0
-	}
-	// joins reports whether s shares its line with its one child: a prefix
-	// (not the total) with exactly one child, shown.
-	joins := func(s *sel) bool { return s != &nodes[0] && s.n.Children == 1 && s.next == 1 }
-	// What is not broken down yet: a shown node not expanded or a fold, by
-	// the node it breaks down; the next is the one whose next child is the
-	// largest, so the largest prefixes shown open first. No line goes to a
-	// node under the floor: a share of the total that one line of the view
-	// would barely show (viewFloor, or a quarter of a line's share of the
-	// lines), and once none is left above it the view ends, shorter.
-	floor := max(v.Total.Bytes/viewFloor, v.Total.Bytes/int64(4*max(rows, 1)))
-	type part struct{ i int }
-	var parts []part
-	if len(nodes[0].kids) > 0 {
-		parts = append(parts, part{0})
-	}
-	used := 1 + folds(&nodes[0])
-	for len(parts) > 0 {
-		best, worth := -1, int64(-1)
-		for j, pt := range parts {
-			s := &nodes[pt.i]
-			if w := nodes[s.kids[s.next]].n.Bytes; w >= floor && w > worth {
-				best, worth = j, w
-			}
-		}
-		if best < 0 {
-			break // nothing left above the floor
-		}
-		pt := parts[best]
-		parts = append(parts[:best], parts[best+1:]...)
-		s := &nodes[pt.i]
-		before := folds(s)
-		c := s.kids[s.next]
-		s.next++
-		s.bytes += nodes[c].n.Bytes
-		cost := 1 + folds(s) - before
-		if joins(s) {
-			cost = 0 // on its parent's line
-		}
-		if used+cost > rows {
-			s.next--
-			s.bytes -= nodes[c].n.Bytes
-			continue // a cheaper part may still fit
-		}
-		used += cost
-		if len(nodes[c].kids) > 0 {
-			parts = append(parts, part{c})
-		}
-		if s.next < len(s.kids) {
-			parts = append(parts, part{pt.i})
-		}
-	}
-	// foldNewest is the newest time among the children of s not shown:
-	// s's own when no child shown has it, else the first of its newest
-	// children (recent) not shown; unknown when those are all shown.
-	foldNewest := func(s *sel, shownNewest int64, shownTimed bool) (int64, bool) {
-		if !s.n.HasNewest {
-			return 0, false
-		}
-		if !shownTimed || s.n.Newest > shownNewest {
-			return s.n.Newest, true
-		}
-		names := map[string]bool{}
-		for _, i := range s.kids[:s.next] {
-			names[nodes[i].n.Key] = true
-		}
-		for _, k := range s.n.recent {
-			if !names[k.name] {
-				return k.at, true
-			}
-		}
-		return 0, false
-	}
-	var out []ViewRow
-	var walk func(i, level int)
-	walk = func(i, level int) {
-		s := &nodes[i]
-		name := s.n.Key
-		if i != 0 {
-			name = name[len(parentOf(name)):]
-		}
-		// A shared line gives the first prefix's sums: they hold its one
-		// child's and its own blocks (a directory's, under the allocated
-		// bytes), so the lines under its parent still add up to it.
-		top := s
-		for joins(s) {
-			s = &nodes[s.kids[0]]
-			name += s.n.Key[len(parentOf(s.n.Key)):]
-		}
-		out = append(out, ViewRow{Name: name, Level: level, Bytes: top.n.Bytes, Objects: top.n.Objects, Missing: top.n.Missing, Newest: s.n.Newest, HasNewest: s.n.HasNewest,
-			Unreadable: top.n.Unreadable || s.n.Unreadable})
-		// The fold is the rest of the line's sums: the shared line's, its
-		// joined prefixes' own blocks too.
-		f := ViewRow{Level: level + 1, Fold: true, Bytes: top.n.Bytes, Objects: top.n.Objects, Missing: top.n.Missing, More: s.n.Children - shown(s)}
-		if s.n.Children < 0 {
-			f.More = -1
-		}
-		var shownNewest int64
-		shownTimed := false
-		for _, k := range s.kids[:s.next] {
-			walk(k, level+1)
-			f.Bytes -= nodes[k].n.Bytes
-			f.Objects -= nodes[k].n.Objects
-			f.Missing -= nodes[k].n.Missing
-			if kn := nodes[k].n; kn.HasNewest && (!shownTimed || kn.Newest > shownNewest) {
-				shownNewest, shownTimed = kn.Newest, true
-			}
-		}
-		if folds(s) > 0 {
-			f.Newest, f.HasNewest = foldNewest(s, shownNewest, shownTimed)
-			f.Unreadable = hiddenUnreadable(s)
-			out = append(out, f)
-		}
-	}
-	walk(0, 0)
-	return out
+	return t
 }

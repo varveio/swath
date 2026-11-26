@@ -12,6 +12,7 @@ import (
 
 	"github.com/varveio/swath/internal/textout"
 	"github.com/varveio/swath/internal/totals"
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 // viewOut is how swath du draws its adaptive view: the total's label
@@ -126,7 +127,7 @@ func (t *totalsOut) writeView(w io.Writer, v *totals.View) error {
 	if height > 0 {
 		lines = max(viewMinLines, height-t.closingRows(v, figures, width))
 	}
-	rows := v.Select(lines - 1) // under the heading
+	rows := tree.Select(v.Tree(), lines-1) // under the heading
 	for i := range rows {
 		rows[i].Name = escapeControl(rows[i].Name) // a name is the listing's: it may hold controls
 	}
