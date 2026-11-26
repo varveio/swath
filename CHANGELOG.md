@@ -7,6 +7,13 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Added
 
+- On Windows, `--metadata links` reads each entry's link count (`nlink`) and gives `dev` the volume's serial
+  number, so `swath du` counts a hard-linked file once, as on Linux and macOS, and says so (`links_once`), and a
+  dataset records the tier (`collected.metadata`: `links`). It opens each entry through a handle for its
+  attributes, never following a link or junction, which also makes every name's length and space on disk
+  current; it costs an open per entry, so the default `stat` tier is unchanged and opens no file. An entry it
+  cannot open is listed with the directory listing's figures and null `nlink` and `dev`. Owner (`uid`) stays
+  null. The run report's `entry_handles` counts the handles opened, by kind and failure (#364).
 - A dataset's manifest records the build that wrote it (`extensions.swath.written_by`: tool, version and
   revision). The member is optional: older readers ignore it and older manifests open without it.
   `swath show -v` prints it.

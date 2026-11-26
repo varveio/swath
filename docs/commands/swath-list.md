@@ -246,8 +246,10 @@ so in its manifest.
 
 ### Local
 
-- <a id="option-metadata"></a>[`--metadata names|stat|statx`](#option-metadata)\
-  what is read per entry (statx adds created_at; Linux) (default `stat`)
+- <a id="option-metadata"></a>[`--metadata names|stat|statx|links`](#option-metadata)\
+  what is read per entry (statx: Linux; links: Windows) (default `stat`)
+
+  statx adds created_at. links opens each entry for its link count, so that swath du counts a hard-linked file once; it costs an open per entry.
 
 - <a id="option-no-dirs"></a>[`--no-dirs`](#option-no-dirs)\
   omit the directories' rows (kind dir)

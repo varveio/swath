@@ -85,7 +85,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 		Long:  "An object store's default, and a local tree's where its listing reads no blocks (the names metadata tier). Not with --allocated."})
 	def(cli.Flag{Name: "count-links", Short: "l", Value: cli.Switch(&o.countLinks), Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "local: count a file with several hard links under each of its names",
-		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and Windows, read no links: every name counts there."})
+		Long:  "By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and the stat tier on Windows, read no links: every name counts there; on Windows the links metadata tier reads them."})
 	o.sortBy = sortName
 	def(cli.Flag{Name: "sort", Value: cli.Text(&o.sortBy), Metavar: "name|size", Default: sortName, Group: cli.GroupTotals, Commands: []string{cmdDu},
 		Usage: "order prefixes by name, or by size, largest first",

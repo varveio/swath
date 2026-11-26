@@ -178,7 +178,8 @@ The space on disk is what the filesystem says, what `du` prints, but not the spa
 - On Windows each file's space on disk comes from the directory listing (a directory's own through a handle,
   as the listing gives directories none), which NTFS keeps per name and
   refreshes only through the name a file was opened by: under a hard link's other names it can be an older
-  figure, and a file being written shows what was on disk when it was last flushed. A compressed or sparse
+  figure, and a file being written shows what was on disk when it was last flushed. `--metadata links` reads
+  each file's length and space on disk through a handle to it, which is current for every name. A compressed or sparse
   file's figure is its compressed or allocated size once its data is written back. A small file stored in
   its MFT record reports its length rounded up to 8 bytes, though it takes no cluster. A figure that only some
   files had is a lower bound, shown as `>= 12.0 KiB`.
@@ -204,8 +205,14 @@ $ swath du -d 1 media -l
   37.2 MiB on disk in 7 files · 101 MiB of data
 ```
 
-`--metadata names`, and Windows, read no link counts, so every name counts there. Each row's `links_once` says
-which way it counted.
+`--metadata names`, and the stat tier on Windows, read no link counts, so every name counts there. On Windows,
+`--metadata links` reads them: it opens each entry, file and directory, through a handle that reads its attributes
+and nothing of its contents, follows no link or junction, and takes the link count, the volume's serial number as
+`dev` and the current length and space on disk. The directory listing that the stat tier reads has no link count,
+so this tier costs an open and a close per entry, which the stat tier does not make. An entry it cannot
+open is still listed, with the listing's figures, but nothing identifies its links: it counts under its name, and
+`links_once` is false. So is a file on a volume without file IDs (FAT, exFAT), whose `inode` is null. Each row's
+`links_once` says which way it counted.
 
 To count a file once, swath remembers each file with more than one link, about 100 bytes each, up to
 `--max-inodes` (1,000,000 by default). Past it the run fails rather than count some names twice: exit 1, no

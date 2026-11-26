@@ -196,7 +196,7 @@ func (k totalsSink[P]) write(segs [][]schema.Row[P], v *totals.ViewRun) error {
 				dev, ok2 := k.dev(p)
 				ino, ok3 := k.inode(p)
 				// A row without a link count, device or inode (a dataset
-				// listed on Windows) counts under its name: nothing tells
+				// listed on Windows but at the links tier) counts under its name: nothing tells
 				// its links apart. nlink is unsigned, its bits carried in
 				// the int64.
 				if ok1 && ok2 && ok3 {

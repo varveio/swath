@@ -44,8 +44,9 @@ func DefaultWorkers() int { return min(maxWorkers, workersPerCPU*runtime.GOMAXPR
 
 // LinksRead says a listing at tier f reads each entry's link count, device
 // and inode: a stat tier, where the platform's stat has them (statLinks:
-// not Windows).
-func LinksRead(f Fields) bool { return f != Names && statLinks }
+// not Windows), and the links tier (Windows), which opens each entry for
+// them (fillLinks).
+func LinksRead(f Fields) bool { return f == Links || f != Names && statLinks }
 
 // BlocksRead says a listing at tier f reads each entry's allocated blocks
 // (allocated_bytes): a stat tier, where the platform's stat has them
@@ -55,9 +56,9 @@ func BlocksRead(f Fields) bool { return f != Names && statBlocks }
 // BlocksMayLack says a listing at tier f that reads blocks may still leave
 // some entries without them: statx, which a filesystem may answer without
 // them (some network filesystems), and Windows, where a directory's own
-// are read through a handle that can fail (fillDirBlocks). swath du counts
-// such an entry as missing rather than fail the count.
-func BlocksMayLack(f Fields) bool { return f == Statx || dirBlocks && f == Stat }
+// are read through a handle that can fail (fillDirBlocks, fillLinks).
+// swath du counts such an entry as missing rather than fail the count.
+func BlocksMayLack(f Fields) bool { return f == Statx || dirBlocks && (f == Stat || f == Links) }
 
 // Opened is a local tree opened by Open: the provider bound to its row
 // schema (Bound), and what a run asks of an opened source besides its

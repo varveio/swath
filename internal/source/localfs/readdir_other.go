@@ -15,9 +15,15 @@ import (
 func readDir(f *os.File) ([]fs.DirEntry, error) { return f.ReadDir(-1) }
 
 // fillRoot: a file root's lstat has every stat column here.
-func fillRoot(string, *Entry) {}
+func fillRoot(string, Fields, *Entry, *Stats) {}
 
 // dirBlocks: a directory's stat has its own blocks here.
 const dirBlocks = false
 
-func fillDirBlocks(string, *Entry) {}
+func fillDirBlocks(string, *Entry, *Stats) {}
+
+// handleLinks: no tier opens each entry here; the stat tier reads its
+// link count (New refuses the links tier).
+const handleLinks = false
+
+func fillLinks(fs.DirEntry, string, *Entry, *Stats) {}

@@ -314,7 +314,7 @@ type Coverage struct {
 }
 
 // Collected is what a listing read beyond its schema's columns that every
-// row carries: its metadata tier ("names", "stat" or "statx"; "" for a
+// row carries: its metadata tier ("names", "stat", "statx" or "links"; "" for a
 // source without tiers, and the member is left out) and the optional
 // columns it asked for, in schema order.
 type Collected struct {
