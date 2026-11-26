@@ -430,10 +430,11 @@ that `errors.Is` matches to a stable reason, so a program branches without readi
 | `command.ErrSourceNotFound` | the bucket, the container or the local root does not exist |
 | `command.ErrSourceDenied` | the source refused the credentials or the access, or there were none, or the local root cannot be opened |
 | `command.ErrUsage` | the options were refused before the run started (class `usage`, exit 2) |
-| `context.Canceled`, `context.DeadlineExceeded` | `ctx` ended: the result's `Status` is `ListCanceled` |
+| `context.Canceled`, `context.DeadlineExceeded` | `ctx` had ended when the run stopped, or while the call waited for its turn: the result's `Status` is `ListCanceled`. A `ctx` that ends later, while the output is finalized or `Progress` runs, leaves a failed run failed |
 
 A failure of the output (a bucket output that is not there, a directory that cannot be made) or of a file the run reads
-besides its source (`--seed-from`, `--ca-bundle`) matches none of the source's reasons. The error's text is the line
+besides its source (`--seed-from`, `--ca-bundle`) matches none of the source's reasons; a source's failure matches its
+reason whether the output is a directory or a bucket. The error's text is the line
 `swath list` prints and may change in any release.
 
 ```go
@@ -457,12 +458,15 @@ The package's [`ExampleList`](../command/example_test.go) is a whole program, wh
 `Progress`, when set, is handed the run's progress (`ListProgress`, the fields of
 [`progress.json`](watch-a-run.md)) at the progress file's cadence, from one goroutine at a time; a slow callback
 misses the snapshots taken meanwhile and gets the latest, and holds up neither the progress file nor the stall
-timeout. A run that started hands it its final progress before `List` returns. The progress file is written as
-before.
+timeout. The callback samples on the tick the progress file is written, from its own snapshot. A run that started
+hands it its final progress once the run has ended and its dataset, report and outcome are written, before `List`
+returns. `List` waits for every call to return, and a call that calls `List` waits for the run that calls it to end, as
+any other call does. The progress file is written as before.
 
 Unlike `Main`, `List` sets no signal handling and no forced exit: the run stops when `ctx` ends, and `List` returns
 once it has stopped and recorded its outcome. Like `Main` it turns the Azure SDK's own log off. Calls in one process
-run one at a time, and a process should not call `Main` and `List` at once. `Stdout` and `Stderr` take what the
+run one at a time: a call waits for the run before it, or for its own `ctx` to end, when it returns canceled and runs
+nothing. A process should not call `Main` and `List` at once. `Stdout` and `Stderr` take what the
 command writes there (nil discards it), and a writer that is not an `*os.File` is not a terminal. For a run isolated
 from the program, call `List` in a child process the program starts. A local source is given by its path:
 `ListOptions` takes no opened directory yet.

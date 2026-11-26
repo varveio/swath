@@ -75,11 +75,11 @@ func TestListArgs(t *testing.T) {
 	zero, off, hour := int64(0), false, time.Hour
 	since := time.Date(2026, 1, 2, 3, 4, 5, 6, time.FixedZone("x", 3600))
 	got := listArgs(&ListOptions{
-		Source: "-dir", Output: "-o.tsv", Include: []string{"a/*", "-b"}, MaxSize: &zero, StallTimeout: &hour,
+		Source: "-dir", Output: "-o.tsv", Include: []string{"a/*", "-b"}, MinSize: &zero, MaxSize: &zero, StallTimeout: &hour,
 		ModifiedSince: since, Verbose: 2, ProgressLine: &off, S3FIPS: &off, S3PathStyle: new(true), RequestRate: 2.5,
 		SortBuffer: 1 << 30, Overwrite: true,
 	})
-	want := []string{"--output=-o.tsv", "--overwrite", "--include=a/*", "--include=-b", "--max-size=0", "--modified-since=2026-01-02T03:04:05.000000006+01:00",
+	want := []string{"--output=-o.tsv", "--overwrite", "--include=a/*", "--include=-b", "--min-size=0", "--max-size=0", "--modified-since=2026-01-02T03:04:05.000000006+01:00",
 		"--sort-buffer=1073741824", "--stall-timeout=" + source.FormatDuration(time.Hour), "--request-rate=2.5", "--verbose", "--verbose", "--no-progress",
 		"--s3-path-style", "--s3-fips=false", "--", "-dir"}
 	if !slices.Equal(got, want) {
@@ -170,6 +170,8 @@ func TestListSourceNotFound(t *testing.T) {
 	s3test.NoCredentials(t)
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "key") // a bucket output's requests are signed
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
 	endpoint := s3test.Bucket(t, s3test.Keys(10, 2)) // serves bucket bkt only
 	for _, c := range []struct {
 		name string
@@ -179,6 +181,11 @@ func TestListSourceNotFound(t *testing.T) {
 		{"local, a dataset", ListOptions{Source: filepath.Join(t.TempDir(), "nothing"), Output: filepath.Join(t.TempDir(), "ds")}},
 		{"s3", ListOptions{Source: "s3://nobucket/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
 			Output: filepath.Join(t.TempDir(), "ds")}},
+		// A bucket output that is there: the source's failure is still the source's.
+		{"s3, a bucket output", ListOptions{Source: "s3://nobucket/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
+			Output: "s3://bkt/ds-s3/", OutputEndpointURL: endpoint, WorkDir: filepath.Join(t.TempDir(), "work")}},
+		{"local, a bucket output", ListOptions{Source: filepath.Join(t.TempDir(), "nothing"),
+			Output: "s3://bkt/ds-local/", OutputEndpointURL: endpoint, WorkDir: filepath.Join(t.TempDir(), "work")}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r, err := List(context.Background(), c.opts)
@@ -187,8 +194,6 @@ func TestListSourceNotFound(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv("AWS_ACCESS_KEY_ID", "key") // a bucket output's requests are signed
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
 	file := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -200,6 +205,8 @@ func TestListSourceNotFound(t *testing.T) {
 		"a --ca-bundle not there": {Source: "s3://bkt/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
 			CABundle: filepath.Join(t.TempDir(), "nothing.pem"), Output: filepath.Join(t.TempDir(), "ds")},
 		"an output bucket not there": {Source: "s3://bkt/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
+			Output: "s3://nobucket/ds/", OutputEndpointURL: endpoint, WorkDir: filepath.Join(t.TempDir(), "work")},
+		"an output bucket not there, a local source": {Source: tree(t, "a"),
 			Output: "s3://nobucket/ds/", OutputEndpointURL: endpoint, WorkDir: filepath.Join(t.TempDir(), "work")},
 	} {
 		r, err := List(context.Background(), opts)
@@ -233,6 +240,50 @@ func TestListSourceDenied(t *testing.T) {
 	r, err = List(context.Background(), ListOptions{Source: tree(t, "a"), Output: filepath.Join(parent, "ds")})
 	if err == nil || errors.Is(err, ErrSourceDenied) {
 		t.Errorf("an output that cannot be made: %+v %v", r, err)
+	}
+}
+
+// deniedBucket serves bucket bkt, and answers every request for bucket
+// denied 403 AccessDenied.
+func deniedBucket(t *testing.T) string {
+	h := s3test.Handler(s3test.Backend(t, s3test.Keys(10, 2)))
+	return s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/denied" || strings.HasPrefix(r.URL.Path, "/denied/") {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`))
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+}
+
+// TestListSourceDeniedBucketOutput: a bucket source that refuses access is
+// ErrSourceDenied whether the output is a directory or a bucket; a bucket
+// output that refuses it is not.
+func TestListSourceDeniedBucketOutput(t *testing.T) {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+	endpoint := deniedBucket(t)
+	src := ListOptions{Source: "s3://denied/p/", EndpointURL: endpoint, S3PathStyle: new(true), Workers: 1}
+	for name, out := range map[string]ListOptions{
+		"a directory output": {Output: filepath.Join(t.TempDir(), "ds")},
+		"a bucket output":    {Output: "s3://bkt/ds/", OutputEndpointURL: endpoint, WorkDir: filepath.Join(t.TempDir(), "work")},
+	} {
+		opts := src
+		opts.Output, opts.OutputEndpointURL, opts.WorkDir = out.Output, out.OutputEndpointURL, out.WorkDir
+		r, err := List(context.Background(), opts)
+		if !errors.Is(err, ErrSourceDenied) || errors.Is(err, ErrSourceNotFound) || r.Status != ListFailed || r.Cause != "access_denied" {
+			t.Errorf("%s: %+v %v", name, r, err)
+		}
+	}
+	r, err := List(context.Background(), ListOptions{Source: "s3://bkt/", EndpointURL: endpoint, S3PathStyle: new(true), Workers: 1,
+		Output: "s3://denied/ds/", OutputEndpointURL: endpoint, WorkDir: filepath.Join(t.TempDir(), "work")})
+	if err == nil || errors.Is(err, ErrSourceDenied) || errors.Is(err, ErrSourceNotFound) {
+		t.Errorf("a bucket output that refuses access: %+v %v", r, err)
 	}
 }
 
@@ -357,5 +408,137 @@ func TestListLogStartsAfresh(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.HasPrefix(got, "{") {
 		t.Errorf("refusal %q, want a JSON event", got)
+	}
+}
+
+// TestListMinSize: a nil MinSize gives no --min-size, and an explicit zero
+// gives --min-size=0, which swath list refuses with --metadata=names (no
+// size to filter on).
+func TestListMinSize(t *testing.T) {
+	src := tree(t, "a")
+	if _, err := List(context.Background(), ListOptions{Source: src, Metadata: "names"}); err != nil {
+		t.Errorf("nil: %v", err)
+	}
+	r, err := List(context.Background(), ListOptions{Source: src, Metadata: "names", MinSize: new(int64(0))})
+	if !errors.Is(err, ErrUsage) || r.ExitCode != 2 {
+		t.Errorf("zero: %+v %v", r, err)
+	}
+}
+
+// writeFunc is a writer whose type cannot be compared.
+type writeFunc func([]byte) (int, error)
+
+func (f writeFunc) Write(b []byte) (int, error) { return f(b) }
+
+// TestListStderrUncomparable: a Stderr whose type cannot be compared takes
+// the command's lines, call after call.
+func TestListStderrUncomparable(t *testing.T) {
+	var mu sync.Mutex
+	var got strings.Builder
+	w := writeFunc(func(b []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return got.Write(b) })
+	for i := range 2 {
+		if _, err := List(context.Background(), ListOptions{Stderr: w}); !errors.Is(err, ErrUsage) {
+			t.Fatalf("call %d: %v", i, err)
+		}
+		mu.Lock()
+		if n := strings.Count(got.String(), "swath: "); n < i+1 {
+			t.Errorf("call %d: stderr %q", i, got.String())
+		}
+		mu.Unlock()
+	}
+}
+
+// TestListCanceledAfterFailure: a context canceled after the run failed,
+// from its final progress, leaves the run failed with its reason.
+func TestListCanceledAfterFailure(t *testing.T) {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	endpoint := s3test.Bucket(t, s3test.Keys(10, 2)) // serves bucket bkt only
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var final string
+	r, err := List(ctx, ListOptions{Source: "s3://nobucket/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
+		Output: filepath.Join(t.TempDir(), "ds"),
+		Progress: func(p ListProgress) {
+			if p.State == "failed" {
+				final = p.State
+				cancel()
+			}
+		}})
+	if final == "" || ctx.Err() == nil {
+		t.Fatal("the final progress did not cancel")
+	}
+	if r.Status != ListFailed || !errors.Is(err, ErrSourceNotFound) || errors.Is(err, context.Canceled) {
+		t.Errorf("%+v %v", r, err)
+	}
+}
+
+// TestListFinalProgressAfterReport: the final progress comes once the
+// command has ended: the report it was asked for is written.
+func TestListFinalProgressAfterReport(t *testing.T) {
+	src := tree(t, "a", "b")
+	report := filepath.Join(t.TempDir(), "report.json")
+	var mu sync.Mutex
+	var reported []bool
+	_, err := List(context.Background(), ListOptions{Source: src, Output: filepath.Join(t.TempDir(), "ds"), Report: report,
+		Progress: func(ListProgress) {
+			_, err := os.Stat(report)
+			mu.Lock()
+			reported = append(reported, err == nil)
+			mu.Unlock()
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reported) == 0 || !reported[len(reported)-1] {
+		t.Errorf("the final progress came before the report was written: %v", reported)
+	}
+}
+
+// TestListQueuedCanceled: a call waiting for another call's run returns
+// canceled when its context ends, and runs nothing; the run it waited for
+// goes on.
+func TestListQueuedCanceled(t *testing.T) {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	reached := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(reached) })
+		<-r.Context().Done() // held until the run lets go of the request
+	}))
+	defer srv.Close()
+	first, stop := context.WithCancel(context.Background())
+	defer stop()
+	done := make(chan ListResult, 1)
+	go func() {
+		r, _ := List(first, ListOptions{Source: "s3://bkt/p/", EndpointURL: srv.URL, S3PathStyle: new(true), Anonymous: true, Workers: 1,
+			Output: filepath.Join(t.TempDir(), "ds")})
+		done <- r
+	}()
+	<-reached // the first call's run holds the turn
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out := filepath.Join(t.TempDir(), "queued")
+	r, err := List(ctx, ListOptions{Source: tree(t, "a"), Output: out})
+	if r.Status != ListCanceled || !errors.Is(err, context.Canceled) || errors.Is(err, ErrUsage) || r.ExitCode == 0 {
+		t.Errorf("queued: %+v %v", r, err)
+	}
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a queued call ran: %v", err)
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("the first run ended while held: %+v", r)
+	default:
+	}
+	stop()
+	if r := <-done; r.Status != ListCanceled {
+		t.Errorf("first: %+v", r)
+	}
+	if _, err := List(context.Background(), ListOptions{Source: tree(t, "a")}); err != nil {
+		t.Errorf("a call after both: %v", err)
 	}
 }

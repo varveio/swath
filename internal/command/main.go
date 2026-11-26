@@ -1086,7 +1086,7 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	sum, err := inventory.Run(ctx, cfg)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
-	cmd.embed.finish(cfg.Progress, embedRun{local: pf.Scheme == "", remote: o.remote != nil, opened: sum.Invocation.SchemaID != ""})
+	cmd.embed.stopped(cfg.Progress, embedRun{local: pf.Scheme == "", opened: sum.Invocation.SchemaID != ""})
 	tt.disp.stop()
 	if prof != nil {
 		prof.stop()

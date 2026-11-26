@@ -23,8 +23,8 @@ import (
 // Every other field but Stdout, Stderr and Progress is the swath list flag
 // its flag tag names, with the meaning and the accepted values swath list
 // --help gives it. A zero field leaves its flag out, so the flag's default
-// applies; a pointer field, for a flag whose zero value differs from its
-// default, is left out when nil. A field whose tag names two flags gives
+// applies; a pointer field, for a flag whose zero is not the same as its
+// absence, is left out when nil. A field whose tag names two flags gives
 // the first when true and the second when false.
 type ListOptions struct {
 	Source string
@@ -32,14 +32,18 @@ type ListOptions struct {
 	// Stdout takes what swath list writes to stdout: the rows without
 	// Output, and the report when Report is "-". Stderr takes its log, its
 	// progress line, its statistics and its outcome. Nil discards it. A
-	// writer that is not an *os.File is not a terminal.
+	// writer that is not an *os.File is not a terminal. Any writer will
+	// do, one whose type cannot be compared (a func type) included.
 	Stdout, Stderr io.Writer
 
 	// Progress, when set, is handed the run's progress at the progress
 	// file's cadence (every 2 seconds, or a quarter of StallTimeout when
 	// that is shorter), from one goroutine at a time; a call that is slow
 	// misses the snapshots taken meanwhile and gets the latest. A run that
-	// started hands it its final progress last, before List returns.
+	// started hands it its final progress last, once the run has ended and
+	// its dataset, report and outcome are written, before List returns.
+	// List waits for every call to return. A call that calls List waits
+	// for the run that calls it to end, as any other call does.
 	Progress func(ListProgress)
 
 	// Output.
@@ -60,7 +64,7 @@ type ListOptions struct {
 	Exclude       []string  `flag:"exclude"`
 	IncludeRegex  []string  `flag:"include-regex"`
 	ExcludeRegex  []string  `flag:"exclude-regex"`
-	MinSize       int64     `flag:"min-size"`
+	MinSize       *int64    `flag:"min-size"`
 	MaxSize       *int64    `flag:"max-size"`
 	ModifiedSince time.Time `flag:"modified-since"`
 	ModifiedUntil time.Time `flag:"modified-until"`
@@ -155,7 +159,10 @@ const (
 	// ListCompleted is a run that ended with exit 0: its output is
 	// written, or there was nothing to do.
 	ListCompleted ListStatus = iota + 1
-	// ListCanceled is a run that ended early because its context ended.
+	// ListCanceled is a run that ended early because its context ended:
+	// the context had ended when the run stopped, or while the call waited
+	// for its turn. A context that ends after that, while the run's output
+	// is finalized or Progress runs, leaves the result as it is.
 	ListCanceled
 	// ListFailed is any other run that did not complete, a partial output
 	// (exit 3) included.
@@ -238,10 +245,10 @@ func (e *ListError) Unwrap() []error {
 // Unlike Main, List sets no signal handling and no forced exit: the run
 // stops when ctx ends, and List returns once it has stopped and recorded
 // its outcome. Like Main it turns the Azure SDK's own log off. Calls to
-// List in one process run one at a time: a call waits for the one before
-// it to return. Stderr is written through a goroutine; a line still
-// waiting for a Stderr that does not take it can be written after List
-// returns.
+// List in one process run one at a time: a call waits for the run before
+// it to end, or for its own ctx to end, when it returns canceled and runs
+// nothing. Stderr is written through a goroutine; a line still waiting
+// for a Stderr that does not take it can be written after List returns.
 func List(ctx context.Context, opts ListOptions) (ListResult, error) {
 	stdout, stderr := opts.Stdout, opts.Stderr
 	if stdout == nil {
@@ -272,8 +279,8 @@ func List(ctx context.Context, opts ListOptions) (ListResult, error) {
 		e.reason = ErrUsage
 	}
 	r.Status = ListFailed
-	if ctx.Err() != nil {
-		r.Status, e.ctx = ListCanceled, ctx.Err()
+	if end.Canceled != nil {
+		r.Status, e.ctx = ListCanceled, end.Canceled
 	}
 	e.Result = r
 	return r, e

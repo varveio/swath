@@ -6,10 +6,10 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
-	"slices"
-	"sync"
+	"reflect"
 
 	azlog "github.com/Azure/azure-sdk-for-go/sdk/azcore/log"
 	"github.com/spf13/pflag"
@@ -39,22 +39,30 @@ type ListEnd struct {
 	Resumable bool
 	Complete  bool   // the output covers its whole scope
 	Reason    string // a Reason*, "" for none of them
+	// Canceled is the caller's context's error when that context had
+	// ended by the time the run's error was settled (inventory.Run
+	// returned, or the command stopped before it), nil otherwise: the run
+	// ended because it was canceled. A context that ends later, while the
+	// run is finalized or a progress callback runs, does not make it so.
+	Canceled error
 }
 
 // embedding is what a list run embedded in another program adds to the
-// command's (command.embed): a progress callback, and what the run tells
-// it back.
+// command's (command.embed): a progress callback, the caller's context,
+// and what the run tells it back.
 type embedding struct {
+	ctx      context.Context // the caller's
 	progress func(inventory.ProgressSnapshot)
 	feed     chan inventory.ProgressSnapshot
 	fed      chan struct{}
 	run      *embedRun // nil: the run stopped before it listed (inventory.Run)
+	final    *inventory.ProgressSnapshot
+	canceled error // ctx's error when the run's error was settled
 }
 
 // embedRun is what a run that listed tells a Reason by.
 type embedRun struct {
 	local  bool // the source is a local path
-	remote bool // the output is in a bucket
 	opened bool // the source opened (the report names its schema)
 }
 
@@ -95,72 +103,126 @@ func (e *embedding) offer(s inventory.ProgressSnapshot) {
 	}
 }
 
-// finish records r, and waits for the callback's goroutine, after
-// supervise stopped, and hands the callback the run's final snapshot when
-// the run started, as the progress file keeps it.
-func (e *embedding) finish(pr *inventory.Progress, r embedRun) {
+// stopped records, once inventory.Run returned and supervise stopped, r,
+// whether the caller's context had ended, and the run's final snapshot
+// when it started, as the progress file keeps it; it ends the feed
+// without waiting for the callback, which may be waiting for what the
+// command writes after the run (deliver).
+func (e *embedding) stopped(pr *inventory.Progress, r embedRun) {
 	if e == nil {
 		return
 	}
-	e.run = &r
+	e.run, e.canceled = &r, e.ctx.Err()
 	if e.feed == nil {
 		return
 	}
 	close(e.feed)
-	<-e.fed
 	if pr.Started() {
-		e.progress(pr.Snapshot())
+		s := pr.Snapshot()
+		e.final = &s
 	}
 }
 
-// listing serializes List: the command keeps its stderr, its terminal
-// detection and its event log in package state.
-var listing sync.Mutex
+// deliver waits for the callback's goroutine and hands the callback the
+// run's final snapshot, once the command has ended: its report, dataset
+// and outcome are written.
+func (e *embedding) deliver() {
+	if e.feed == nil {
+		return
+	}
+	<-e.fed
+	if e.final != nil {
+		e.progress(*e.final)
+	}
+}
+
+// listing admits one List at a time: the command keeps its stderr, its
+// terminal detection and its event log in package state. A call waits for
+// it only as long as its context lets it.
+var listing = make(chan struct{}, 1)
 
 // List runs swath list args (its flags, then -- and SOURCE) in this
 // process for a program that embeds swath, through the code Main runs, and
 // returns how it ended; the lines Main prints at the end go to stderr too.
 // Unlike Main it sets no signal handling and no forced exit: cancelling ctx
 // stops the run. It turns the Azure SDK's own log off, as Main does. Calls
-// run one at a time. progress (nil: none) is handed a snapshot at the
-// progress file's cadence, the latest one when it is slow, and the final
-// one before List returns.
+// run one at a time; a call whose ctx ends while it waits for its turn
+// returns ctx's error, canceled, and runs nothing. progress (nil: none) is
+// handed a snapshot at the progress file's cadence, the latest one when it
+// is slow, and the final one once the command has ended, before List
+// returns; List waits for it to return.
 func List(ctx context.Context, args []string, stdout, stderr io.Writer, progress func(inventory.ProgressSnapshot)) ListEnd {
-	listing.Lock()
-	defer listing.Unlock()
+	select {
+	case listing <- struct{}{}:
+	case <-ctx.Done():
+		err := fmt.Errorf("waiting for another run in this process: %w", ctx.Err())
+		o := classify(err, nil, "")
+		return ListEnd{Err: err, Class: o.Class, ExitCode: o.ExitCode, Canceled: ctx.Err()}
+	}
+	e := &embedding{ctx: ctx, progress: progress}
+	end := list(ctx, e, args, stdout, stderr)
+	<-listing
+	e.deliver()
+	return end
+}
+
+// list is List's turn: the command, run with the package's writers set to
+// stdout and stderr, and its end.
+func list(ctx context.Context, e *embedding, args []string, stdout, stderr io.Writer) ListEnd {
 	azlog.SetListener(nil) // as Main: it quotes request URLs, a SAS included
 	prevErr, prevOut, prevErrFile := errOut, stdoutFile, stderrFile
-	errOut = stderr
+	errOut = keyable(stderr)
 	stdoutFile, stderrFile = streamFile(stdout), streamFile(stderr)
 	defer func() { errOut, stdoutFile, stderrFile = prevErr, prevOut, prevErrFile }()
-	e := &embedding{progress: progress}
 	err := runWith(ctx, command{embed: e}, args, stdout, nil, false, nil)
+	if e.run == nil {
+		e.canceled = ctx.Err() // the command stopped before the run: its error is settled now
+	}
 	o := concluded(err)
 	end := ListEnd{Class: o.Class, Cause: o.Cause, ExitCode: o.ExitCode, Resumable: o.Resumable, Complete: o.Complete}
 	if o.ExitCode != exitOK {
-		end.Err = err
+		end.Err, end.Canceled = err, e.canceled
 		if errors.Is(err, pflag.ErrHelp) {
 			end.Err = usageError{errors.New("help is not a run")}
 		}
 		if e.run != nil {
-			end.Reason = e.run.reason(err, o.Cause)
+			end.Reason = e.run.reason(err)
 		}
 	}
 	return end
 }
 
-// reason is the Reason of a run that listed and failed with err, cause its
-// provider's class. A provider's class is the source's only when the
-// output is not in a bucket, whose errors the same provider classifies; a
-// local error is the source's only when the local source did not open,
-// which is the run's one use of the file system before its output.
-func (r embedRun) reason(err error, cause string) string {
+// writerRef is a writer that can key a map (diagSinks) whatever it holds.
+type writerRef struct{ io.Writer }
+
+// keyable is w, or w behind a pointer when w's value cannot be compared
+// (a func or map type with a Write method), which a map key must be.
+func keyable(w io.Writer) io.Writer {
+	if w != nil && !reflect.ValueOf(w).Comparable() {
+		return &writerRef{w}
+	}
+	return w
+}
+
+// reason is the Reason of a run that listed and failed with err. A
+// provider's class is the source's when the error carries it as objhttp's
+// (a Failure or a CredentialError): the source's clients are the only ones
+// that make them, the destination's (objfile) never do. A local error is
+// the source's only when the local source did not open, which is the run's
+// one use of the file system before its output.
+func (r embedRun) reason(err error) string {
+	var f *objhttp.Failure
+	var ce *objhttp.CredentialError
+	cause := ""
+	if errors.As(err, &f) || errors.As(err, &ce) {
+		cause = string(objhttp.Classify(err))
+	}
 	switch {
 	case errors.Is(err, journal.ErrLocked):
 		return ReasonOutputInUse
-	case !r.remote && cause == source.CauseNotFound, r.local && !r.opened && errors.Is(err, fs.ErrNotExist):
+	case cause == source.CauseNotFound, r.local && !r.opened && errors.Is(err, fs.ErrNotExist):
 		return ReasonSourceNotFound
-	case !r.remote && slices.Contains([]string{string(objhttp.ClassAuth), string(objhttp.ClassAccessDenied)}, cause), r.local && !r.opened && errors.Is(err, fs.ErrPermission):
+	case cause == string(objhttp.ClassAuth), cause == string(objhttp.ClassAccessDenied), r.local && !r.opened && errors.Is(err, fs.ErrPermission):
 		return ReasonSourceDenied
 	}
 	return ""
