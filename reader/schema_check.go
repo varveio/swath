@@ -61,7 +61,7 @@ func (d *Dataset) checkKey() error {
 // checkPart checks part i's columns, from the footer the module checked
 // and reads the part through.
 func (d *Dataset) checkPart(ctx context.Context, i int, path string) error {
-	columns, err := d.sp.Columns(ctx, i)
+	columns, err := d.sp.Columns(ctx, i, nil)
 	if err != nil {
 		return err
 	}
@@ -83,9 +83,9 @@ func checkColumn(col *seekparquet.Column, c ColumnSpec) error {
 	switch {
 	case col == nil:
 		return errors.New("absent from the part")
-	case col.Group || col.Repetition == seekparquet.Repeated:
+	case col.Group || col.Repetition == seekparquet.RepetitionRepeated:
 		return errors.New("not a top-level, non-repeated column")
-	case c.Required && col.Repetition != seekparquet.Required:
+	case c.Required && col.Repetition != seekparquet.RepetitionRequired:
 		return errors.New("optional; the schema requires a value")
 	case !typeIs(col, c.Type):
 		return fmt.Errorf("a %s column (%s), not the schema's type", col.Type, col.Logical)
@@ -119,7 +119,7 @@ func typeIs(col *seekparquet.Column, want ColumnType) bool {
 		return col.Type == seekparquet.KindInt64 && integer(64, false)
 	case TypeTimestampMicros:
 		return col.Type == seekparquet.KindInt64 && lt.Kind == seekparquet.LogicalTimestamp &&
-			lt.AdjustedToUTC && lt.Unit == seekparquet.Micros
+			lt.AdjustedToUTC && lt.Unit == seekparquet.TimeUnitMicros
 	}
 	return false
 }

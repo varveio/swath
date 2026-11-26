@@ -13,10 +13,10 @@
 // part digests. Dataset.Close closes the underlying SeekParquet dataset.
 //
 // Dataset.SeekParquet returns the borrowed dataset for reading: use its Rows,
-// List and Plan methods, Plan.ScanParallel, Dataset.Aggregate/AggregateRows and
-// Dataset.Page. Name SeekParquet's types and errors directly. The caller chooses
-// projections, reductions, filters, budgets, selected-key validation and storage
-// cache policy; SeekParquet owns execution and result exactness.
+// List, Plan and PlanRows methods, Plan.ScanParallel and FoldRows. Name
+// SeekParquet's types and errors directly. The caller chooses projections,
+// folds, budgets, selected-key validation and storage cache policy;
+// SeekParquet owns execution and result exactness.
 //
 // Schema and SchemaIDs expose the producer registry. Project a schema spec's
 // ColumnNames to decode owning SeekParquet rows with DecodeS3Object,

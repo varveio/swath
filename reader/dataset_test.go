@@ -13,9 +13,12 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/deprecated"
+	"github.com/parquet-go/parquet-go/format"
 	seekparquet "github.com/varveio/seekparquet/go"
 	"github.com/varveio/seekparquet/go/local"
 	"github.com/varveio/seekparquet/go/write"
@@ -100,8 +103,14 @@ func writeDataset[T any](t *testing.T, s spec, rows []T) string {
 // rows and row groups of groupRows rows (0: the writer's default).
 func writeGeometry[T any](t testing.TB, s spec, rows []T, pageRows int, groupRows int64) string {
 	t.Helper()
+	return writeSchema(t, s, parquet.SchemaOf(new(T)), rows, pageRows, groupRows)
+}
+
+// writeSchema writes rows as writeGeometry does, with schema, which
+// deconstructs them, as the parts' schema.
+func writeSchema[T any](t testing.TB, s spec, schema *parquet.Schema, rows []T, pageRows int, groupRows int64) string {
+	t.Helper()
 	dir := filepath.Join(t.TempDir(), "ds")
-	schema := parquet.SchemaOf(new(T))
 	var buf []parquet.Row
 	for i := range rows {
 		buf = append(buf, schema.Deconstruct(nil, &rows[i]))
@@ -120,6 +129,33 @@ func writeGeometry[T any](t testing.TB, s spec, rows []T, pageRows int, groupRow
 	}
 	return dir
 }
+
+// unrecognizedType is a type annotated with a converted type no reader
+// knows, and no logical type.
+type unrecognizedType struct{ parquet.Type }
+
+func (unrecognizedType) LogicalType() *format.LogicalType { return nil }
+
+func (unrecognizedType) ConvertedType() *deprecated.ConvertedType {
+	unknown := deprecated.ConvertedType(99)
+	return &unknown
+}
+
+// retypedField is a field stored as another type.
+type retypedField struct {
+	parquet.Field
+	typ parquet.Type
+}
+
+func (f retypedField) Type() parquet.Type { return f.typ }
+
+// retypedGroup is a group of other fields.
+type retypedGroup struct {
+	parquet.Node
+	fields []parquet.Field
+}
+
+func (g retypedGroup) Fields() []parquet.Field { return g.fields }
 
 type rowReader struct{ rows []parquet.Row }
 
@@ -242,6 +278,25 @@ func TestCheckSchema(t *testing.T) {
 	})
 	t.Run("column type", func(t *testing.T) {
 		semanticAt(t, openDir(t, writeDataset(t, s3Spec(), []s3RowUntimed{{Key: "a"}})).CheckSchema(ctx), KindSchema, "last_modified")
+	})
+	t.Run("column of an unrecognized annotation", func(t *testing.T) {
+		// size, an INT64 the schema accepts unannotated, annotated with a
+		// converted type no reader knows and no logical type.
+		schema := parquet.SchemaOf(new(s3Row))
+		fields := slices.Clone(schema.Fields())
+		size := slices.IndexFunc(fields, func(f parquet.Field) bool { return f.Name() == "size" })
+		fields[size] = retypedField{fields[size], unrecognizedType{fields[size].Type()}}
+		dir := writeSchema(t, s3Spec(), parquet.NewSchema(schema.Name(), retypedGroup{schema, fields}), s3Rows(3), 100, 0)
+		d := openDir(t, dir)
+		columns, err := d.SeekParquet().Columns(ctx, 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := columns[slices.IndexFunc(columns, func(c seekparquet.Column) bool { return c.Name == "size" })]; c.Type != seekparquet.KindInt64 ||
+			c.Logical.Kind != seekparquet.LogicalUnrecognized {
+			t.Fatalf("size is %s, want an INT64 of an unrecognized annotation", c)
+		}
+		semanticAt(t, d.CheckSchema(ctx), KindSchema, "size")
 	})
 	t.Run("a later part lacks a column", func(t *testing.T) {
 		dir := writeDataset(t, s3Spec(), s3Rows(5))

@@ -41,19 +41,24 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 		// One more, which is Self when the prefix has an entry.
 		limit++
 	}
-	listed, err := inv.sp.Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{
+	// And one beyond the page, which when listed shows that another follows.
+	entries, err := inv.sp.List(ctx, seekparquet.ListQuery{
 		Prefix:    req.Prefix,
 		Delimiter: '/',
 		Cursor:    cursor,
-		Limit:     limit,
+		Limit:     limit + 1,
 		Columns:   inv.rows.columns,
-	}}, nil)
+	}, nil)
 	if err != nil {
 		return listing.Page{}, failed(ctx, err)
 	}
+	var next *seekparquet.Cursor
+	if len(entries) > limit {
+		entries = entries[:limit]
+		next = entries[limit-1].Cursor()
+	}
 
 	page := listing.Page{Evidence: inv.evidence()}
-	entries, next := listed.Entries, listed.Next
 	if limit > req.Limit {
 		if page.Self, entries, next, err = inv.self(req.Prefix, req.Limit, entries, next); err != nil {
 			return listing.Page{}, failed(ctx, err)
@@ -61,7 +66,7 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 	}
 	page.Entries = make([]listing.Entry, len(entries))
 	for i := range entries {
-		e, err := inv.listedEntry(entries[i].ListEntry)
+		e, err := inv.listedEntry(entries[i])
 		if err != nil {
 			return listing.Page{}, failed(ctx, err)
 		}
@@ -85,9 +90,9 @@ func (inv *Inventory) Page(ctx context.Context, req listing.PageRequest) (listin
 // level, listed with one entry more than limit for it: Self when the
 // first entry is it, else the page cut to limit, continuing after its
 // last entry.
-func (inv *Inventory) self(prefix []byte, limit int, entries []seekparquet.PageEntry, next *seekparquet.Cursor) (*listing.Entry, []seekparquet.PageEntry, *seekparquet.Cursor, error) {
+func (inv *Inventory) self(prefix []byte, limit int, entries []seekparquet.ListEntry, next *seekparquet.Cursor) (*listing.Entry, []seekparquet.ListEntry, *seekparquet.Cursor, error) {
 	if len(entries) > 0 && entries[0].Row != nil && bytes.Equal(entries[0].Row.Key, prefix) {
-		self, err := inv.listedEntry(entries[0].ListEntry)
+		self, err := inv.listedEntry(entries[0])
 		return self, entries[1:], next, err
 	}
 	if len(entries) > limit {

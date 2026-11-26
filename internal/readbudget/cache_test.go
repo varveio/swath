@@ -97,6 +97,30 @@ func localCacheFixture(t *testing.T) string {
 	return dir
 }
 
+// countSumMax counts the rows it folds, sums their sizes and keeps their
+// latest modification time.
+var countSumMax = seekparquet.Fold[[3]int64]{
+	Columns: []string{"size", "last_modified"},
+	Add: func(acc *[3]int64, rows *seekparquet.ValueBatch) error {
+		size, modified := rows.Column(0), rows.Column(1)
+		for i := range rows.Len() {
+			acc[0]++
+			if size.Present() && !size.IsNull(i) {
+				acc[1] += size.Int64(i)
+			}
+			if modified.Present() && !modified.IsNull(i) {
+				acc[2] = max(acc[2], modified.Int64(i))
+			}
+		}
+		return nil
+	},
+	Merge: func(into, from *[3]int64) {
+		into[0] += from[0]
+		into[1] += from[1]
+		into[2] = max(into[2], from[2])
+	},
+}
+
 // TestCallerBulkCacheBypass runs through a real Pin/Cache/spsource stack.
 // The caller marks bulk reads as bypass. Reopening discards SeekParquet's
 // metadata and memo: a point read after a bulk scan must still be cold,
@@ -112,22 +136,25 @@ func TestCallerBulkCacheBypass(t *testing.T) {
 		spec, _ := reader.Schema(d.Metadata().SchemaID)
 		return d.SeekParquet().Scan(ctx, seekparquet.Query{Columns: spec.ColumnNames()}, nil, func(*seekparquet.Batch) error { return nil })
 	}
-	reductions := []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}, {Op: seekparquet.Max, Column: "last_modified"}}
+	fold := func(ctx context.Context, d *reader.Dataset, selections ...seekparquet.Selection) error {
+		p, err := d.SeekParquet().Plan(ctx, selections, nil, nil)
+		if err != nil {
+			return err
+		}
+		_, err = seekparquet.FoldRows(ctx, d.SeekParquet(), p.InputRowSpans(), countSumMax, seekparquet.FoldOptions{CheckKeys: true}, nil)
+		return err
+	}
 	cases := []scanCase{
 		{"ScanLocal", localCacheFixture(t), scan},
 		{"Scan", dir, scan},
-		{"Aggregate", dir, func(ctx context.Context, d *reader.Dataset) error {
-			_, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{}}, reductions,
-				seekparquet.AggregateOptions{ValueBudgetBytes: -1, CheckKeys: true}, nil)
-			return err
+		{"Fold", dir, func(ctx context.Context, d *reader.Dataset) error {
+			return fold(ctx, d, seekparquet.Selection{})
 		}},
-		{"AggregateExact", dir, func(ctx context.Context, d *reader.Dataset) error {
-			_, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{}, {Span: seekparquet.KeySpan([]byte("t-000/d-00/f-0000"))}}, reductions,
-				seekparquet.AggregateOptions{ValueBudgetBytes: -1, CheckKeys: true}, nil)
-			if err != nil {
+		{"FoldKey", dir, func(ctx context.Context, d *reader.Dataset) error {
+			if err := fold(ctx, d, seekparquet.Selection{}, seekparquet.Selection{Span: seekparquet.KeySpan([]byte("t-000/d-00/f-0000"))}); err != nil {
 				return err
 			}
-			_, err = d.SeekParquet().Get(ctx, []byte("t-000/d-00/f-0000"), nil, "size", "last_modified")
+			_, err := d.SeekParquet().Get(ctx, []byte("t-000/d-00/f-0000"), nil, "size", "last_modified")
 			return err
 		}},
 	}
@@ -219,22 +246,27 @@ func TestBrowseCacheRevisit(t *testing.T) {
 		t.Cleanup(func() { _ = d.Close() })
 		src.reads.Store(0)
 		obs.hits.Store(0)
-		page, err := d.SeekParquet().Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{Prefix: []byte("t-000/"), Delimiter: '/', Limit: 30,
-			Columns: []string{"size", "last_modified", "etag", "storage_class"}},
-			Reductions: []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}},
-			Aggregates: seekparquet.AggregateOptions{ValueBudgetBytes: -1}}, nil)
+		entries, err := d.SeekParquet().List(ctx, seekparquet.ListQuery{Prefix: []byte("t-000/"), Delimiter: '/', Limit: 30 + 1,
+			Columns: []string{"size", "last_modified", "etag", "storage_class"}}, nil)
 		mustDo(t, err)
-		if len(page.Entries) != 20 {
-			t.Fatalf("browse returned %d prefixes, want 20", len(page.Entries))
+		if len(entries) != 20 {
+			t.Fatalf("browse returned %d prefixes, want 20", len(entries))
 		}
-		for _, e := range page.Entries {
-			if e.CommonPrefix == nil || len(e.Aggregates) != 2 {
-				t.Fatalf("expected a common prefix with count and sum reductions, got %+v", e)
+		spans := make([]seekparquet.RowSpan, len(entries))
+		for i, e := range entries {
+			if e.CommonPrefix == nil || !established(e.Rows) {
+				t.Fatalf("expected a common prefix of established rows, got %+v", e)
 			}
-			for i, result := range e.Aggregates {
-				if result.Status != seekparquet.AggregateExact {
-					t.Fatalf("prefix %q reduction %d: status %v, want AggregateExact", e.CommonPrefix, i, result.Status)
-				}
+			if _, exact := countRows(ctx, t, d, e.Rows); !exact {
+				t.Fatalf("prefix %q: count not exact", e.CommonPrefix)
+			}
+			spans[i] = e.Rows
+		}
+		sums, err := seekparquet.FoldRows(ctx, d.SeekParquet(), spans, sumSize, seekparquet.FoldOptions{}, nil)
+		mustDo(t, err)
+		for i, r := range sums {
+			if r.Status != seekparquet.FoldExact {
+				t.Fatalf("prefix %q: sum status %v, want FoldExact", entries[i].CommonPrefix, r.Status)
 			}
 		}
 		reads := src.reads.Swap(0)

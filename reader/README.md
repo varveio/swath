@@ -78,33 +78,33 @@ semantic errors and SeekParquet refusals; other errors retain their original ide
 
 Use `Dataset.SeekParquet()` for `Rows`, `List`, `Plan` and `Plan.Scan`,
 [`Plan.ScanParallel`](https://pkg.go.dev/github.com/varveio/seekparquet/go#Plan.ScanParallel),
-[`Dataset.Aggregate`](https://pkg.go.dev/github.com/varveio/seekparquet/go#Dataset.Aggregate),
-`AggregateRows` and
-[`Dataset.Page`](https://pkg.go.dev/github.com/varveio/seekparquet/go#Dataset.Page).
+`PlanRows` and [`FoldRows`](https://pkg.go.dev/github.com/varveio/seekparquet/go#FoldRows).
 Project named columns explicitly. Borrowed batches avoid row materialization;
 concrete decoders are optional helpers when owning Go values are useful.
 [example_test.go](example_test.go) opens and checks a local dataset, scans it with
 `DecodeLocalEntry`, and lists it by delimiter; `go test ./...` runs both examples.
 
-Aggregations use named reductions such as `CountRows`, `Sum(size)` and
-`Max(last_modified)`. Counts include every selected row, including directories and
-versions. `Sum` skips null/absent values; request `CountNulls` and `CountAbsent` if
-missing values must make an application total unknown. `AggregateOptions.CheckKeys`
-requests selected-key validation. `ValueBudgetBytes` is explicit: zero allows no
-value I/O, -1 is unlimited, and a positive budget bounds unique compressed measure
-and filter extents, including dictionaries. For browsing, request `Page` with count and size reductions and
-a caller-selected budget such as 4 MiB. Inspect each result's status before its value.
-The SeekParquet API owns execution, borrowed lifetimes, cancellation and exactness.
+A page of a delimited listing is a `List` with a `Limit` one above the page size: keep the page, and
+continue from the `Cursor` of its last entry kept; an entry beyond the page means another follows, and
+it also ends the row span (`ListEntry.Rows`) of the page's last common prefix. A common prefix's span
+holds the rows the listing selected under it, the whole prefix unless a cursor inside it or an `End`
+clips it; once both its ends are known, it can be counted or reduced without listing it again. Counts include every
+selected row, including directories and versions. `PlanRows` on one span with no columns, then
+`Plan.Count`, counts it with no value reads; the count is exact only when every part it covers has been
+checked. `FoldRows` reduces spans with the caller's `Fold`, which filters and sums in its `Add`, so the
+caller decides how null and absent values count. `FoldOptions.CheckKeys` requests selected-key
+validation. `ValueBudgetBytes` zero is unlimited, and a positive budget bounds the unique compressed
+value extents, dictionaries included, admitting each span whole; for browsing, a caller-selected budget
+such as 4 MiB. Inspect each result's status before its value. Key selections become spans through
+`Plan` and `Plan.InputRowSpans`. The SeekParquet API owns execution, borrowed lifetimes, cancellation
+and exactness.
 
-`Page` reuses the row positions a listing has already established for complete-prefix
-reductions: an unfiltered count adds no value reads, while an unknown boundary, a clipped
-prefix or an unchecked contributing row count leaves the result unknown. Value-only reads do
-not certify the keys they did not read; request `CheckKeys` when that matters. For a local
-dataset, every count includes a directory's own row (a prefix `d/` includes its row `d/` once;
-the root has no row), and `Sum(size)` without a kind filter gives entry bytes, directories'
-own `st_size` included; select `kind` through SeekParquet's `BatchFilter` for files-only totals.
-Under `--metadata names` sizes are null, so check the null and absent counters before calling
-a sum complete.
+A span that is not established, or a count over a part no read has checked, leaves the result unknown.
+Value-only reads do not certify the keys they did not read; request `CheckKeys` when that matters. For
+a local dataset, every count includes a directory's own row (a prefix `d/` includes its row `d/` once;
+the root has no row), and a sum of `size` that does not test `kind` gives entry bytes, directories' own
+`st_size` included; test `kind` in the fold for files-only totals. Under `--metadata names` sizes are
+null, so count the null and absent values before calling a sum complete.
 
 A row's offset is its zero-based position among the rows of its key. A row cursor
 `(key, offset)` continues after that row: at offset + 1 of the same key, then at the next key
@@ -159,7 +159,7 @@ The package [`github.com/varveio/swath/reader/view`](view/doc.go) answers those 
 dataset. `view.OpenDir(ctx, dir)` opens a local dataset directory, checks its parts' schemas and returns the
 inventory, which `Close` closes; `view.Open(d)` takes a `Dataset` the caller opened and owns, and reads nothing. Both
 refuse a dataset of versions, whose keys repeat, and one whose manifest records no scope, with
-`listing.ErrUnsupported`. `Page` is SeekParquet's delimited `Dataset.Page`, with opaque tokens bound to the manifest
+`listing.ErrUnsupported`. `Page` is SeekParquet's delimited `List`, with opaque tokens bound to the manifest
 digest and the prefix; `Lookup` reads the key's row; `Walk` is a range scan, in parallel shards unless `Workers` is 1;
 `Summarize` reads the entries at its targets' keys, then counts its subtree targets' rows in one
 `FoldRows` call, checking their key order: to size a page's child folders, summarize its `KindDir` and
