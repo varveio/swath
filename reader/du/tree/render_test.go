@@ -215,6 +215,27 @@ func TestRenderZoneBytes(t *testing.T) {
 	}
 }
 
+// TestRenderZoneColumn: with the caller's columns the date column is
+// padded by columns, so a zone named outside ASCII leaves the caller's
+// column, on the total's row as on the others, where the heading puts it.
+func TestRenderZoneColumn(t *testing.T) {
+	owner := Column{Heading: "owner", Cells: []string{"all", "ops", "data-eng", "", ""}}
+	want := "" +
+		"    size  objects  share                        newest          owner     path\n" +
+		"2.00 TiB    37.1M   100%  ████████████████████  2025-11-15 界   all       s3://bucket\n" +
+		"1.50 TiB    12.0k  75.0%  ███████████████       2025-11-13      ops         logs/\n" +
+		"1.00 TiB        1  50.0%  ██████████            2025-11-13      data-eng      2025/app-e…archive.tar\n" +
+		" 512 GiB    12.0k  25.0%  █████                 2025-10-16                    (1,234 more)\n" +
+		" 512 GiB    37.1M  25.0%  █████                                             (9 more)\n"
+	var b bytes.Buffer
+	if err := Render(&b, Layout{Width: 100, Loc: time.FixedZone("界", 0)}, viewRows(), owner); err != nil {
+		t.Fatal(err)
+	}
+	if b.String() != want {
+		t.Errorf("width 100:\n%s\nwant\n%s", b.String(), want)
+	}
+}
+
 // TestRenderTotalColumn: a view of the total alone keeps the heading's
 // "path" and the total's ellipsis in the width when the caller adds a
 // column: the column goes first.

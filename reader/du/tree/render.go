@@ -23,9 +23,10 @@ type Layout struct {
 	// Color styles the heading, the bar and the fold rows with ANSI escapes.
 	Color bool
 	// Loc is the dates' zone (nil: time.Local), named once, on the total's
-	// row. The date column is padded by bytes, as swath du pads it, so a
-	// zone named outside ASCII moves the total's later cells left by its
-	// bytes beyond its columns.
+	// row. Without the caller's columns the date column is padded by
+	// bytes, as swath du pads it, so a zone named outside ASCII moves the
+	// total's path left by its bytes beyond its columns; with them it is
+	// padded by columns, and the caller's columns line up.
 	Loc *time.Location
 	// SizeHeading and CountHeading head the size and count columns ("":
 	// "size" and "objects"; swath du writes "on disk" for the space on
@@ -269,7 +270,10 @@ func Render(w io.Writer, l Layout, rows []Row, extra ...Column) error {
 				b = append(b, dim...) // the bar's color ends with a reset
 			}
 		}
-		if shown.date { // in bytes, as dateW and swath du's view
+		switch {
+		case shown.date && shown.extra > 0: // in cells, so the caller's columns line up
+			b = append(pad(b, date, dateW, Left), gutter...)
+		case shown.date: // in bytes, as dateW and swath du's view
 			b = append(b, date...)
 			for range dateW - len(date) {
 				b = append(b, ' ')
