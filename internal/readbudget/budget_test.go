@@ -42,6 +42,8 @@ import (
 	"github.com/varveio/swath/objfile/s3/s3fake"
 	"github.com/varveio/swath/objfile/spsource"
 	"github.com/varveio/swath/reader"
+	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/reader/view"
 )
 
 // geometry is one fixture: tenants of 20 folders of 50 objects, except
@@ -81,6 +83,12 @@ var smallGeo = &geometry{name: "small", tenants: 169, browse: 50, folderObjs: 30
 		"count of a prefix":       {{3, 1}, {2, 0}},
 		"count of every key":      {{0, 0}, {0, 0}},
 		"sum of a prefix":         {{4, 1}, {3, 0}},
+		// Through reader/view's Inventory (inventoryOperations).
+		"Page, first of a prefix":    {{10, 1}, {6, 0}},
+		"Page, a later one":          {{7, 1}, {6, 0}},
+		"Summarize a prefix":         {{6, 1}, {3, 0}},
+		"Summarize a page's folders": {{35, 1}, {32, 0}},
+		"Summarize every key":        {{12, 4}, {8, 0}},
 	}}
 
 // largeGeo: 1,599,500 objects in 4 parts of up to 400,000 (about 11 MB, two
@@ -100,6 +108,12 @@ var largeGeo = &geometry{name: "large", tenants: 1399, browse: 300, folderObjs: 
 		"count of every key":        {{0, 0}, {0, 0}},
 		"sum of a prefix":           {{13, 2}, {11, 0}},
 		"browse page, small budget": {{16, 2}, {12, 0}},
+		// Through reader/view's Inventory (inventoryOperations).
+		"Page, first of a prefix":    {{17, 2}, {12, 0}},
+		"Page, a later one":          {{12, 1}, {8, 0}},
+		"Summarize a prefix":         {{17, 2}, {15, 0}},
+		"Summarize a page's folders": {{115, 2}, {113, 0}},
+		"Summarize every key":        {{20, 4}, {16, 0}},
 	}}
 
 func (g *geometry) browseRows() int { return 1600 - 100 + 100*g.folderObjs }
@@ -413,6 +427,46 @@ func mustDo(t *testing.T, err error) {
 	}
 }
 
+// sumSize sums the sizes of the rows it folds.
+var sumSize = seekparquet.Fold[int64]{
+	Columns: []string{"size"},
+	Add: func(acc *int64, rows *seekparquet.ValueBatch) error {
+		size := rows.Column(0)
+		for i := range rows.Len() {
+			if size.Present() && !size.IsNull(i) {
+				*acc += size.Int64(i)
+			}
+		}
+		return nil
+	},
+	Merge: func(into, from *int64) { *into += *from },
+}
+
+// established reports whether both of span's boundaries are known.
+func established(span seekparquet.RowSpan) bool {
+	_, start := span.Start.Ordinal()
+	_, end := span.End.Ordinal()
+	return start && end
+}
+
+// countRows counts the rows of an established span from the parts'
+// row counts, reading nothing; exact is false when a part it covers is
+// unchecked.
+func countRows(ctx context.Context, t *testing.T, d *reader.Dataset, span seekparquet.RowSpan) (n int64, exact bool) {
+	t.Helper()
+	p, err := d.SeekParquet().PlanRows(ctx, []seekparquet.RowSpan{span}, nil, nil)
+	mustDo(t, err)
+	return p.Count()
+}
+
+// selected resolves a key selection to its row span.
+func selected(ctx context.Context, t *testing.T, d *reader.Dataset, sel seekparquet.Selection) seekparquet.RowSpan {
+	t.Helper()
+	p, err := d.SeekParquet().Plan(ctx, []seekparquet.Selection{sel}, nil, nil)
+	mustDo(t, err)
+	return p.InputRowSpans()[0]
+}
+
 func operations(t *testing.T, dir string, g *geometry) []operation {
 	ctx := context.Background()
 	local, err := reader.OpenDir(ctx, dir, seekparquet.OpenOptions{})
@@ -428,36 +482,43 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 		t.Fatalf("%q is not inside part 1 [%q, %q]", mid, part.MinKey, part.MaxKey)
 	}
 	browse := []byte(g.tenant(g.browse))
-	// browsePage lists the first 1,000 entries of the browsed tenant and
-	// returns how many of its prefixes were counted and summed. Every
-	// prefix is counted exactly when counts are on.
+	// browsePage lists the first 1,000 entries of the browsed tenant, as a
+	// page is listed: one entry more, which ends the last prefix's rows and
+	// shows that another page follows. It returns how many of its prefixes
+	// were counted and summed. Every prefix is counted exactly when counts
+	// are on.
 	browsePage := func(ctx context.Context, t *testing.T, d *reader.Dataset, counts bool, budget int64) (prefixes, counted, summed int) {
-		reductions := []seekparquet.Reduction{{Op: seekparquet.Sum, Column: "size"}}
-		if counts {
-			reductions = append(reductions, seekparquet.Reduction{Op: seekparquet.CountRows})
-		}
-		page, err := d.SeekParquet().Page(ctx, seekparquet.PageQuery{ListQuery: seekparquet.ListQuery{
-			Prefix: browse, Delimiter: '/', Limit: 1000, Columns: []string{"size", "last_modified"}},
-			Reductions: reductions, Aggregates: seekparquet.AggregateOptions{ValueBudgetBytes: budget}}, nil)
+		entries, err := d.SeekParquet().List(ctx, seekparquet.ListQuery{
+			Prefix: browse, Delimiter: '/', Limit: 1000 + 1, Columns: []string{"size", "last_modified"}}, nil)
 		mustDo(t, err)
-		if len(page.Entries) != 1000 || page.Next == nil {
-			t.Fatalf("%d entries, next %v", len(page.Entries), page.Next)
+		if len(entries) != 1000+1 {
+			t.Fatalf("%d entries, want a page of 1000 and one beyond it", len(entries))
 		}
-		for _, e := range page.Entries {
+		var spans []seekparquet.RowSpan
+		var names [][]byte
+		for _, e := range entries[:1000] {
 			if e.CommonPrefix == nil {
 				continue
 			}
 			prefixes++
-			if len(e.Aggregates) != len(reductions) {
-				t.Fatalf("prefix %q has no aggregates", e.CommonPrefix)
+			if established(e.Rows) {
+				spans, names = append(spans, e.Rows), append(names, e.CommonPrefix)
 			}
-			if counts && e.Aggregates[1].Status == seekparquet.AggregateExact {
-				counted++
-				if n := e.Aggregates[1].Value.Int64(); n != int64(g.folderObjs) {
-					t.Fatalf("prefix %q counted %d, want %d", e.CommonPrefix, n, g.folderObjs)
+		}
+		if counts {
+			for i, span := range spans {
+				if n, exact := countRows(ctx, t, d, span); exact {
+					counted++
+					if n != int64(g.folderObjs) {
+						t.Fatalf("prefix %q counted %d, want %d", names[i], n, g.folderObjs)
+					}
 				}
 			}
-			if e.Aggregates[0].Status == seekparquet.AggregateExact {
+		}
+		sums, err := seekparquet.FoldRows(ctx, d.SeekParquet(), spans, sumSize, seekparquet.FoldOptions{ValueBudgetBytes: budget}, nil)
+		mustDo(t, err)
+		for _, r := range sums {
+			if r.Status == seekparquet.FoldExact {
 				summed++
 			}
 		}
@@ -500,23 +561,22 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 		{name: "browse page, counts on", run: browseOp(true)},
 		{name: "browse page, counts off", run: browseOp(false)},
 		{name: "count of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			got, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{Span: seekparquet.PrefixSpan(browse)}}, []seekparquet.Reduction{{Op: seekparquet.CountRows}}, seekparquet.AggregateOptions{}, nil)
-			mustDo(t, err)
-			if got[0][0].Status != seekparquet.AggregateExact || got[0][0].Value.Int64() != int64(g.browseRows()) {
-				t.Fatalf("count %+v", got[0][0])
+			n, exact := countRows(ctx, t, d, selected(ctx, t, d, seekparquet.Selection{Span: seekparquet.PrefixSpan(browse)}))
+			if !exact || n != int64(g.browseRows()) {
+				t.Fatalf("count %d, exact %t", n, exact)
 			}
 		}},
 		{name: "count of every key", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			got, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{}}, []seekparquet.Reduction{{Op: seekparquet.CountRows}}, seekparquet.AggregateOptions{}, nil)
-			mustDo(t, err)
-			if got[0][0].Status != seekparquet.AggregateExact || got[0][0].Value.Int64() != int64(len(g.keys())) {
-				t.Fatalf("count %+v", got[0][0])
+			n, exact := countRows(ctx, t, d, selected(ctx, t, d, seekparquet.Selection{}))
+			if !exact || n != int64(len(g.keys())) {
+				t.Fatalf("count %d, exact %t", n, exact)
 			}
 		}},
 		{name: "sum of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
-			got, err := d.SeekParquet().Aggregate(ctx, []seekparquet.Selection{{Span: seekparquet.PrefixSpan(browse)}}, []seekparquet.Reduction{{Op: seekparquet.CountRows}, {Op: seekparquet.Sum, Column: "size"}}, seekparquet.AggregateOptions{ValueBudgetBytes: -1}, nil)
+			span := selected(ctx, t, d, seekparquet.Selection{Span: seekparquet.PrefixSpan(browse)})
+			got, err := seekparquet.FoldRows(ctx, d.SeekParquet(), []seekparquet.RowSpan{span}, sumSize, seekparquet.FoldOptions{}, nil)
 			mustDo(t, err)
-			if got[0][1].Status != seekparquet.AggregateExact {
+			if got[0].Status != seekparquet.FoldExact {
 				t.Fatal("no sum")
 			}
 		}},
@@ -529,7 +589,80 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 			}
 		}})
 	}
-	return ops
+	return append(ops, inventoryOperations(t, dir, g)...)
+}
+
+// inventoryOperations are the browsed tenant's pages and summaries as
+// reader/view's Inventory answers them, with the settings it lists and
+// folds with: a first page of a prefix lists one entry for Self and one
+// beyond the page, and Summarize locates its targets, reads their own
+// entries and folds the rows under them with CheckKeys and GOMAXPROCS
+// workers.
+func inventoryOperations(t *testing.T, dir string, g *geometry) []operation {
+	ctx := context.Background()
+	browse := []byte(g.tenant(g.browse))
+	first := listing.PageRequest{Prefix: browse, Limit: 1000}
+	local, err := view.OpenDir(ctx, dir)
+	mustDo(t, err)
+	page, err := local.Page(ctx, first)
+	mustDo(t, err)
+	mustDo(t, local.Close())
+	if len(page.Entries) != 1000 || page.Next == "" {
+		t.Fatalf("the first page has %d entries, next %q", len(page.Entries), page.Next)
+	}
+	later := first
+	later.Token = page.Next // a token binds the manifest, which the stores serve unchanged
+	var folders []listing.Target
+	for _, e := range page.Entries {
+		if e.Kind == listing.KindPrefix {
+			folders = append(folders, listing.Target{Key: e.Key, Subtree: true})
+		}
+	}
+
+	inventory := func(t *testing.T, d *reader.Dataset) *view.Inventory {
+		t.Helper()
+		inv, err := view.Open(d)
+		mustDo(t, err)
+		return inv
+	}
+	summarize := func(ctx context.Context, t *testing.T, d *reader.Dataset, targets []listing.Target, entries int64) {
+		t.Helper()
+		got, _, err := inventory(t, d).Summarize(ctx, targets, listing.SummaryOptions{})
+		mustDo(t, err)
+		if len(got) != len(targets) {
+			t.Fatalf("%d summaries for %d targets", len(got), len(targets))
+		}
+		for i, s := range got {
+			if s.Entries != entries || s.Bytes == nil {
+				t.Fatalf("target %q: %d entries, bytes %v; want %d entries and their bytes", targets[i].Key, s.Entries, s.Bytes, entries)
+			}
+		}
+	}
+	return []operation{
+		{name: "Page, first of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			p, err := inventory(t, d).Page(ctx, first)
+			mustDo(t, err)
+			if len(p.Entries) != 1000 || p.Next != page.Next {
+				t.Fatalf("%d entries, next %q; want 1000 and %q", len(p.Entries), p.Next, page.Next)
+			}
+		}},
+		{name: "Page, a later one", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			p, err := inventory(t, d).Page(ctx, later)
+			mustDo(t, err)
+			if len(p.Entries) != 1600-1000 || p.Next != "" {
+				t.Fatalf("%d entries, next %q; want the level's last %d", len(p.Entries), p.Next, 1600-1000)
+			}
+		}},
+		{name: "Summarize a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			summarize(ctx, t, d, []listing.Target{{Key: browse, Subtree: true}}, int64(g.browseRows()))
+		}},
+		{name: "Summarize a page's folders", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			summarize(ctx, t, d, folders, int64(g.folderObjs))
+		}},
+		{name: "Summarize every key", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			summarize(ctx, t, d, []listing.Target{{Subtree: true}}, int64(len(g.keys())))
+		}},
+	}
 }
 
 // TestRequestBudgets measures each operation cold, on each store, with the

@@ -63,7 +63,7 @@ func (inv *Inventory) fold(ctx context.Context, spans []seekparquet.RowSpan, sel
 	if inv.rows.local {
 		f = localFold(sel, split)
 	}
-	opt := seekparquet.FoldOptions{ValueBudgetBytes: -1, Workers: runtime.GOMAXPROCS(0), CheckKeys: true}
+	opt := seekparquet.FoldOptions{Workers: runtime.GOMAXPROCS(0), CheckKeys: true}
 	results, err := seekparquet.FoldRows(ctx, inv.sp, spans, f, opt, nil)
 	if err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func (inv *Inventory) fold(ctx context.Context, spans []seekparquet.RowSpan, sel
 
 	out := make([]tallies, len(results))
 	for i, r := range results {
-		if r.Status != seekparquet.AggregateExact {
+		if r.Status != seekparquet.FoldExact {
 			return nil, errUnknownTotal
 		}
 		out[i] = r.Value

@@ -1155,26 +1155,32 @@ response bytes. `TestAdmissionRounds` separately checks concurrent admission:
 channel barriers hold all four footer reads, then all eight first/last key-page
 reads, until the entire phase has arrived. The stack without the adapter also
 has a four-request metadata phase. Neither counts nor concurrency assertions use
-elapsed time or timestamp overlap; a deadline fails a stalled barrier. Browse uses the size/time
-projection and identical budgets with counts on and off, using SeekParquet `Page`
-with a 4 MiB value budget (and the large fixture's 64 KiB case).
-Point lookup uses `Rows`; the one-part scan uses `Dataset.Scan`; prefix and whole
-counts and prefix sums use `Aggregate`. `CheckSchema` remains in the thin reader.
-SeekParquet owns the generic scan, aggregation and page behavior tests.
+elapsed time or timestamp overlap; a deadline fails a stalled barrier. Browse lists a page as
+`reader/view` does, a SeekParquet `List` of one entry more than the page with the size/time
+projection, then counts its prefixes with `PlanRows` and `Plan.Count` (counts on) and sums them
+with `FoldRows` under a 4 MiB value budget (and the large fixture's 64 KiB case), with counts on
+and off. Point lookup uses `Rows`; the one-part scan uses `Dataset.Scan`; prefix and whole counts
+resolve the selection with `Plan`, then count its span with `PlanRows` and `Plan.Count`; prefix
+sums fold that span with `FoldRows`. The same tables pin `reader/view`'s `Inventory` through its
+own entry points and settings: the browsed tenant's first page (one entry for Self and one beyond
+the page), the page after it from that page's token, and `Summarize` of the tenant, of the first
+page's folders and of every key (locating the targets, reading their own entries, then one fold
+with `CheckKeys` and `GOMAXPROCS` workers; the counts were the same with one, two and six).
+`CheckSchema` remains in the thin reader.
+SeekParquet owns the generic scan, listing and fold behavior tests.
 `TestCallerBulkCacheBypass` in `internal/readbudget` marks bulk reader calls with
 objfile's bypass context and checks that they neither use nor fill the byte
 cache, while a point lookup through the same stack fills it and a second lookup
 reuses it. `TestBrowseCacheRevisit` checks cache reuse for browse counts and sums
-with an unlimited value budget and requires every prefix reduction to be exact.
+with an unlimited value budget and requires every prefix's count and sum to be exact.
 The reader chooses no cache policy; the caller marks bulk reads.
 
 The thin reader's tests cover metadata parsing, schema checks, concrete decoders,
 examples and the absence of cloud SDK dependencies (`TestNoCloudSDK`). Main-module
 `inventory` tests check rows from production writers against the registered schemas
 and concrete decoders. Generic execution tests and benchmarks live in
-[SeekParquet](https://github.com/varveio/seekparquet/tree/7264a9f88420/go), including
-parallel scan scheduling, aggregation and page composition. Its allocation guard
-is `TestAggregateHotLoopAllocations`, which covers the aggregation hot loop.
+[SeekParquet](https://github.com/varveio/seekparquet/tree/go/v0.3.0/go), including
+parallel scan scheduling and folds.
 The former reader wrapper benchmarks were removed with those unreleased APIs;
 their dated results remain in
 [measurements.md](measurements.md#reader-scan-and-stream-baseline-2026-11-10).

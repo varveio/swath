@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -100,6 +101,58 @@ func TestPageMatchesTheRecordsPageByPage(t *testing.T) {
 						}
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestPageAtItsBounds: a level that ends exactly at the page's limit is one
+// page with no next token, Self included; one entry fewer leaves the last
+// child for a second page that ends the level; the greatest limit a page
+// takes lists the whole level, and the next is refused.
+func TestPageAtItsBounds(t *testing.T) {
+	ctx := context.Background()
+	for _, id := range []reader.SchemaID{reader.S3ObjectsV1, reader.LocalV1} {
+		t.Run(string(id), func(t *testing.T) {
+			isLocal := id == reader.LocalV1
+			rs := objects()
+			if isLocal {
+				rs = tree()
+			}
+			inv := open(t, write(t, fixture{id: id, rows: rs}))
+			page := func(prefix string, token string, limit int) listing.Page {
+				t.Helper()
+				p, err := inv.Page(ctx, listing.PageRequest{Prefix: []byte(prefix), Token: token, Limit: limit})
+				if err != nil {
+					t.Fatalf("%q by %d: %v", prefix, limit, err)
+				}
+				return p
+			}
+			for _, prefix := range scopes(rs, isLocal) {
+				wantSelf, want := children(rs, prefix, isLocal)
+				if len(want) == 0 {
+					continue
+				}
+				for _, limit := range []int{len(want), math.MaxInt - 2} {
+					p := page(prefix, "", limit)
+					if len(p.Entries) != len(want) || p.Next != "" || (p.Self == nil) != (wantSelf == nil) {
+						t.Fatalf("%q by %d: %d entries, next %q, Self %v; want %d, no next, Self %t", prefix, limit,
+							len(p.Entries), p.Next, p.Self, len(want), wantSelf != nil)
+					}
+				}
+				if len(want) > 1 {
+					first := page(prefix, "", len(want)-1)
+					if len(first.Entries) != len(want)-1 || first.Next == "" || (first.Self == nil) != (wantSelf == nil) {
+						t.Fatalf("%q by %d: %d entries, next %q, Self %v", prefix, len(want)-1, len(first.Entries), first.Next, first.Self)
+					}
+					last := page(prefix, first.Next, len(want)-1)
+					if len(last.Entries) != 1 || string(last.Entries[0].Key) != want[len(want)-1].key || last.Next != "" || last.Self != nil {
+						t.Fatalf("%q, the second page by %d: %+v", prefix, len(want)-1, last)
+					}
+				}
+			}
+			if _, err := inv.Page(ctx, listing.PageRequest{Limit: math.MaxInt - 1}); !errors.Is(err, listing.ErrInvalidRequest) {
+				t.Fatalf("a limit of MaxInt-1: %v, want ErrInvalidRequest", err)
 			}
 		})
 	}
