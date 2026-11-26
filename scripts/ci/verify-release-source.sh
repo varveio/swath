@@ -3,6 +3,13 @@
 # root module at that commit is what an outside project gets: it carries no replace, and each nested
 # module's tag that its go.mod requires holds that module's code at the commit. The nested modules
 # keep their own versions: a release tags one only when its code changed since its last tag.
+#
+# The nested modules it covers are the root module's own: each go.mod below the root whose module
+# path is under the root's (github.com/varveio/swath/reader and .../objfile). The root's go.mod must
+# require every one of them, so that a new product module cannot ship untagged. A nested module
+# outside that path (the acceptance suite's varve.io/swath-acceptance, a test-only module the
+# product does not import and go.work does not join) is not part of what an outside project
+# resolves, and is skipped.
 set -euo pipefail
 
 usage() {
@@ -13,21 +20,37 @@ usage() {
   exit 2
 }
 
-# The nested modules' directories: each go.mod below the root.
-module_dirs() {
-  local gomod
-  for gomod in $(git ls-files -- '*/go.mod'); do
-    echo "${gomod%/go.mod}"
+# The module path that the go.mod $2 at commit $1 declares.
+module_path() {
+  git show "$1:$2" | awk '$1 == "module" { print $2; exit }'
+}
+
+# The root module's nested modules at commit $1, one per line as DIR PATH: each go.mod below the
+# root whose module path is under the root module's path.
+nested_modules() {
+  local commit=$1 root gomod path
+  for gomod in go.mod $(git ls-files -- '*/go.mod'); do
+    path=$(module_path "$commit" "$gomod") || return 1
+    [[ -n $path ]] || {
+      echo "$gomod at $commit declares no module" >&2
+      return 1
+    }
+    if [[ $gomod == go.mod ]]; then
+      root=$path
+    elif [[ $path == "$root"/* ]]; then
+      echo "${gomod%/go.mod} $path"
+    fi
   done
 }
 
 # The nested modules' tags that the go.mod at commit $1 requires, one per line: DIR/vX.Y.Z, the
 # directory prefix Go requires of a nested module's version.
 required_tags() {
-  local commit=$1 gomod dir path version
+  local commit=$1 gomod modules dir path version
   gomod=$(git show "$commit:go.mod") || return 1
-  for dir in $(module_dirs); do
-    path=$(git show "$commit:$dir/go.mod" | awk '$1 == "module" { print $2; exit }')
+  modules=$(nested_modules "$commit") || return 1
+  while read -r dir path; do
+    [[ -n $dir ]] || continue
     version=$(awk -v path="$path" '
       $1 == "require" && $2 == "(" { block = 1; next }
       block && $1 == ")" { block = 0; next }
@@ -38,7 +61,7 @@ required_tags() {
       return 1
     }
     echo "$dir/$version"
-  done
+  done <<<"$modules"
 }
 
 # Every tag of the release $1 checked out at HEAD: $1 for the root module, then the nested modules'
@@ -159,10 +182,13 @@ self_test() {
   git -C "$scratch" init -q -b main
   git -C "$scratch" config user.name test
   git -C "$scratch" config user.email test@example.invalid
-  mkdir -p "$scratch/lib"
+  mkdir -p "$scratch/lib" "$scratch/suite"
   echo 'module example.com/m/lib' > "$scratch/lib/go.mod"
-  touch "$scratch/go.mod"
-  git -C "$scratch" add go.mod lib/go.mod
+  # A nested module outside the root's path (its path shares the root's as a string prefix only),
+  # which the root does not require: skipped throughout.
+  echo 'module example.com/m-suite' > "$scratch/suite/go.mod"
+  echo 'module example.com/m' > "$scratch/go.mod"
+  git -C "$scratch" add go.mod lib/go.mod suite/go.mod
   git -C "$scratch" commit -q -m base
 
   # A release with a nested change: the nested tag, the commit that points the root at it, the
@@ -197,6 +223,22 @@ self_test() {
   git -C "$scratch" commit -q -am "lib not required"
   git -C "$scratch" tag -a v1.2.7 -m v1.2.7
   refuses "$scratch" "does not require example.com/m/lib" HEAD refs/heads/unrequired refs/tags/ v1.2.7
+
+  git -C "$scratch" checkout -q -b unrequired-new "$release"
+  mkdir -p "$scratch/tool"
+  echo 'module example.com/m/tool' > "$scratch/tool/go.mod"
+  git -C "$scratch" add tool/go.mod
+  git -C "$scratch" commit -q -m "a new nested module under the root's path, not required"
+  git -C "$scratch" tag -a v1.2.8 -m v1.2.8
+  refuses "$scratch" "does not require example.com/m/tool" HEAD refs/heads/unrequired-new refs/tags/ v1.2.8
+
+  # A change to the module outside the root's path is not one a release tags.
+  git -C "$scratch" checkout -q -b suite-changed "$release"
+  echo '// changed' >> "$scratch/suite/go.mod"
+  git -C "$scratch" commit -q -am "suite changed"
+  git -C "$scratch" tag -a v1.2.9 -m v1.2.9
+  prints "$scratch" "changed HEAD refs/tags/" ""
+  (cd "$scratch" && verify HEAD refs/heads/suite-changed refs/tags/ v1.2.9) >/dev/null
 
   git -C "$scratch" checkout -q -b replaced "$release"
   commit_root "$scratch" v1.2.3 $'\nreplace example.com/m/lib => ./lib\n'

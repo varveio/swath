@@ -31,7 +31,12 @@ implementation's last release was v0.3.2; it is no longer on `main` and is prese
   change is one tag, `v0.5.0`, and its `go.mod` keeps requiring the nested versions it already
   names. A release where one changed tags that module first, at this release's version, and points
   `go.mod` at it through a pull request ([Cutting a release](#cutting-a-release)). Each module is at
-  version 0: no API promise yet.
+  version 0: no API promise yet. The rule covers each nested module whose module path is under the
+  root's, `github.com/varveio/swath/...`: the release refuses a root `go.mod` that does not require
+  one, so a new product module cannot ship untagged. The acceptance suite's module (`acceptance/`,
+  `varve.io/swath-acceptance`) is outside that path: a test-only module that the product does not
+  import and `go.work` does not join, so the root neither requires nor tags it
+  (`scripts/ci/verify-release-source.sh`).
 - **Local builds use the local copies.** `go.work` at the repository root joins the three
   modules, so a build, test or CI job in a checkout compiles `reader/` and `objfile/` as they are,
   whatever version `go.mod` requires. The release builds without it (`GOWORK=off`), as an outside
