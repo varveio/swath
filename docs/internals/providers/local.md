@@ -93,13 +93,15 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `FILE_FLAG_OPEN_REPARSE_POINT`, so a symbolic link, a junction or a cloud placeholder is read as itself, never
   followed or recalled) and read with one `GetFileInformationByHandleEx(FileStandardInfo)`: `nlink`, and the
   current length (but for a directory) and `allocated_bytes`, which replace the enumeration's, stale under a hard
-  link's other names. `dev` is the volume's serial number, which `readDir` reads with the volume's flags, once per
+  link's other names. Where the enumeration gave a file ID, `GetFileInformationByHandle` reads it from the same
+  handle, so that a name replaced by another file since the directory was read is not given that file's link
+  count beside the first file's ID, which would make two files one. `dev` is the volume's serial number, which `readDir` reads with the volume's flags, once per
   directory, and every entry there shares, since none is followed; with the file ID as `inode` it identifies a
   hard-linked file (`LinksRead`), so `swath du` counts it once. The serial is 32 bits and not unique across volumes (a
   cloned disk keeps its own): a listing enters no junction or mount point, but two volumes it reaches through
   a directory the redirector serves elsewhere (a DFS link) could share one, and then a file ID on both would be
   taken for one file. A read that fails, or that finds a directory where the
-  listing had a file or the reverse, keeps the enumeration's values, leaves `nlink` and `dev` null (a directory's
+  listing had a file or the reverse, or another file ID, keeps the enumeration's values, leaves `nlink` and `dev` null (a directory's
   `allocated_bytes` too, as `fillDirBlocks`), lists the entry and counts no error; the totals then count it under
   its name and claim no `links_once`. Owner (`uid`) is not read: it needs `READ_CONTROL` access, which a handle
   for attributes does not ask, and another call per entry, and a SID does not fit the column. The report's

@@ -166,7 +166,7 @@ type Handles struct {
 	Dirs  int64 `json:"dirs"`
 	// Failed counts the reads that failed, by reason: not_found,
 	// permission, changed (a directory where the listing had a file, or
-	// the reverse) or other. The entry keeps what the directory listing
+	// the reverse, or another file ID) or other. The entry keeps what the directory listing
 	// said of it, and what only the handle gives stays null.
 	Failed map[string]int64 `json:"failed,omitempty"`
 	// links: the listing reads at the links tier (Provider.Stats), the
@@ -180,8 +180,9 @@ type Handles struct {
 func (h Handles) IsZero() bool { return !h.links }
 
 // errHandleChanged: a handle opened at the links tier found a directory
-// where the directory listing had a file, or the reverse (fillLinks).
-var errHandleChanged = errors.New("type changed during listing")
+// where the directory listing had a file, or the reverse, or another file
+// ID (fillLinks).
+var errHandleChanged = errors.New("replaced during listing")
 
 func (h *Handles) fail(err error) {
 	reason := "other"

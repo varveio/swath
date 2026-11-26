@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -164,14 +165,14 @@ func TestLinksTierHandleFails(t *testing.T) {
 		filepath.Join(root, "c"): windows.ERROR_ACCESS_DENIED,
 		filepath.Join(root, "a"): windows.ERROR_FILE_NOT_FOUND,
 	}
-	openHandle = func(path string, id bool) (handleRead, error) {
+	openHandle = func(path string, ask handleAsk) (handleRead, error) {
 		if err, ok := fail[path]; ok {
 			return handleRead{}, err
 		}
 		if path == filepath.Join(root, "x") {
 			return handleRead{dir: true, links: 1}, nil
 		}
-		return readHandle(path, id)
+		return readHandle(path, ask)
 	}
 	defer func() { openHandle = readHandle }()
 	rows, st := list(t, root, Options{Fields: Links, LinkTarget: true}, 2, 1<<12)
@@ -199,6 +200,74 @@ func TestLinksTierHandleFails(t *testing.T) {
 	for _, k := range []string{"a/f", "y"} {
 		if d := by[k]; d.Nlink != 1 || !d.Has(HasNlink|HasDev) {
 			t.Errorf("%s: %+v, want nlink 1 and dev", k, d)
+		}
+	}
+}
+
+// TestLinksTierReplacedName: a name the enumeration gave one file's ID,
+// replaced by a hard link to another file before its handle is opened,
+// has no link count beside the first file's ID, which would make it a
+// name of that file: it keeps what the enumeration said, nlink and dev
+// null, and is counted as changed. The first file keeps a second name
+// outside the tree, so that its link count is 2 either way. The other
+// names are read as they are.
+func TestLinksTierReplacedName(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	f, g, h := filepath.Join(root, "f"), filepath.Join(root, "g"), filepath.Join(root, "h")
+	writeFile(t, f, compressible(10000))
+	writeFile(t, h, compressible(7))
+	for _, name := range []string{g, filepath.Join(outside, "f")} {
+		if err := os.Link(f, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, a, err := handleInfo(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, b, err := handleInfo(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first handle is opened after the directory is read whole: g
+	// then names h's file.
+	var once sync.Once
+	replaced := false
+	openHandle = func(path string, ask handleAsk) (handleRead, error) {
+		once.Do(func() {
+			if err := os.Remove(g); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := os.Link(h, g); err != nil {
+				t.Error(err)
+				return
+			}
+			replaced = true
+		})
+		return readHandle(path, ask)
+	}
+	defer func() { openHandle = readHandle }()
+	rows, st := list(t, root, Options{Fields: Links}, 1, 1<<12)
+	if !replaced {
+		t.Fatal("g was not replaced")
+	}
+	if st.Errors() != 0 || !maps.Equal(st.Handles.Failed, map[string]int64{"changed": 1}) {
+		t.Fatalf("errors %d %q, failed %v, want one changed", st.Errors(), st.Samples, st.Handles.Failed)
+	}
+	by := map[string]Entry{}
+	for _, r := range rows {
+		by[r.Key] = r.Data
+	}
+	if len(rows) != 3 {
+		t.Fatalf("%d rows: %v", len(rows), rows)
+	}
+	if d := by["g"]; d.Kind != KindFile || d.Inode != a || d.Size != 10000 || d.Has(HasNlink) || d.Has(HasDev) {
+		t.Errorf("g: inode %d size %d nlink %d (present %b), want the listing's inode %d and size 10000, nlink and dev null", d.Inode, d.Size, d.Nlink, d.Present, a)
+	}
+	for k, want := range map[string]int64{"f": a, "h": b} {
+		if d := by[k]; d.Inode != want || d.Nlink != 2 || !d.Has(HasNlink|HasDev|HasInode) {
+			t.Errorf("%s: inode %d nlink %d (present %b), want inode %d and nlink 2", k, d.Inode, d.Nlink, d.Present, want)
 		}
 	}
 }
