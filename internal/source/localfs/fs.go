@@ -769,6 +769,8 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 				fillLinks(d, path, &row.Data, st) // Windows: a handle per entry
 			case dirBlocks && row.Data.Kind == KindDir:
 				fillDirBlocks(path, &row.Data, st) // Windows: the enumeration gives a directory none
+			case dirBlocks && row.Data.Kind != KindDir:
+				fillLinks(d, path, &Entry{Kind: row.Data.Kind}, st) // THROWAWAY: the stat tier opens every file
 			}
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
 				if t, err := readlinkIn(f, path, name); err == nil {
