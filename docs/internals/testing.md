@@ -1161,7 +1161,12 @@ projection, then counts its prefixes with `PlanRows` and `Plan.Count` (counts on
 with `FoldRows` under a 4 MiB value budget (and the large fixture's 64 KiB case), with counts on
 and off. Point lookup uses `Rows`; the one-part scan uses `Dataset.Scan`; prefix and whole counts
 resolve the selection with `Plan`, then count its span with `PlanRows` and `Plan.Count`; prefix
-sums fold that span with `FoldRows`. `CheckSchema` remains in the thin reader.
+sums fold that span with `FoldRows`. The same tables pin `reader/view`'s `Inventory` through its
+own entry points and settings: the browsed tenant's first page (one entry for Self and one beyond
+the page), the page after it from that page's token, and `Summarize` of the tenant, of the first
+page's folders and of every key (locating the targets, reading their own entries, then one fold
+with `CheckKeys` and `GOMAXPROCS` workers; the counts were the same with one, two and six).
+`CheckSchema` remains in the thin reader.
 SeekParquet owns the generic scan, listing and fold behavior tests.
 `TestCallerBulkCacheBypass` in `internal/readbudget` marks bulk reader calls with
 objfile's bypass context and checks that they neither use nor fill the byte
@@ -1174,7 +1179,7 @@ The thin reader's tests cover metadata parsing, schema checks, concrete decoders
 examples and the absence of cloud SDK dependencies (`TestNoCloudSDK`). Main-module
 `inventory` tests check rows from production writers against the registered schemas
 and concrete decoders. Generic execution tests and benchmarks live in
-[SeekParquet](https://github.com/varveio/seekparquet/tree/39287f9aa3b3/go), including
+[SeekParquet](https://github.com/varveio/seekparquet/tree/da520db1b1b5/go), including
 parallel scan scheduling and folds.
 The former reader wrapper benchmarks were removed with those unreleased APIs;
 their dated results remain in

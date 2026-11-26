@@ -99,7 +99,11 @@ such as 4 MiB. Inspect each result's status before its value. Key selections bec
 `Plan` and `Plan.InputRowSpans`. The SeekParquet API owns execution, borrowed lifetimes, cancellation
 and exactness.
 
-A span that is not established, or a count over a part no read has checked, leaves the result unknown.
+A span with an unknown boundary is not an input: `PlanRows` and `FoldRows` refuse it with
+`ErrInvalidRequest` before any read, and `CheckKeys` does not resolve it. Resolve the boundary with
+`Plan` over the corresponding key selection, which may read storage, or report the result unknown
+without folding. A span with known boundaries over a part no read has checked is another case: its
+`Plan.Count` is inexact, and its fold is `FoldUnknown` unless `CheckKeys` checks its keys.
 Value-only reads do not certify the keys they did not read; request `CheckKeys` when that matters. For
 a local dataset, every count includes a directory's own row (a prefix `d/` includes its row `d/` once;
 the root has no row), and a sum of `size` that does not test `kind` gives entry bytes, directories' own

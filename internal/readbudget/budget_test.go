@@ -42,6 +42,8 @@ import (
 	"github.com/varveio/swath/objfile/s3/s3fake"
 	"github.com/varveio/swath/objfile/spsource"
 	"github.com/varveio/swath/reader"
+	"github.com/varveio/swath/reader/listing"
+	"github.com/varveio/swath/reader/view"
 )
 
 // geometry is one fixture: tenants of 20 folders of 50 objects, except
@@ -81,6 +83,12 @@ var smallGeo = &geometry{name: "small", tenants: 169, browse: 50, folderObjs: 30
 		"count of a prefix":       {{3, 1}, {2, 0}},
 		"count of every key":      {{0, 0}, {0, 0}},
 		"sum of a prefix":         {{4, 1}, {3, 0}},
+		// Through reader/view's Inventory (inventoryOperations).
+		"Page, first of a prefix":    {{10, 1}, {6, 0}},
+		"Page, a later one":          {{7, 1}, {6, 0}},
+		"Summarize a prefix":         {{6, 1}, {3, 0}},
+		"Summarize a page's folders": {{35, 1}, {32, 0}},
+		"Summarize every key":        {{12, 4}, {8, 0}},
 	}}
 
 // largeGeo: 1,599,500 objects in 4 parts of up to 400,000 (about 11 MB, two
@@ -100,6 +108,12 @@ var largeGeo = &geometry{name: "large", tenants: 1399, browse: 300, folderObjs: 
 		"count of every key":        {{0, 0}, {0, 0}},
 		"sum of a prefix":           {{13, 2}, {11, 0}},
 		"browse page, small budget": {{16, 2}, {12, 0}},
+		// Through reader/view's Inventory (inventoryOperations).
+		"Page, first of a prefix":    {{17, 2}, {12, 0}},
+		"Page, a later one":          {{12, 1}, {8, 0}},
+		"Summarize a prefix":         {{17, 2}, {15, 0}},
+		"Summarize a page's folders": {{115, 2}, {113, 0}},
+		"Summarize every key":        {{20, 4}, {16, 0}},
 	}}
 
 func (g *geometry) browseRows() int { return 1600 - 100 + 100*g.folderObjs }
@@ -575,7 +589,80 @@ func operations(t *testing.T, dir string, g *geometry) []operation {
 			}
 		}})
 	}
-	return ops
+	return append(ops, inventoryOperations(t, dir, g)...)
+}
+
+// inventoryOperations are the browsed tenant's pages and summaries as
+// reader/view's Inventory answers them, with the settings it lists and
+// folds with: a first page of a prefix lists one entry for Self and one
+// beyond the page, and Summarize locates its targets, reads their own
+// entries and folds the rows under them with CheckKeys and GOMAXPROCS
+// workers.
+func inventoryOperations(t *testing.T, dir string, g *geometry) []operation {
+	ctx := context.Background()
+	browse := []byte(g.tenant(g.browse))
+	first := listing.PageRequest{Prefix: browse, Limit: 1000}
+	local, err := view.OpenDir(ctx, dir)
+	mustDo(t, err)
+	page, err := local.Page(ctx, first)
+	mustDo(t, err)
+	mustDo(t, local.Close())
+	if len(page.Entries) != 1000 || page.Next == "" {
+		t.Fatalf("the first page has %d entries, next %q", len(page.Entries), page.Next)
+	}
+	later := first
+	later.Token = page.Next // a token binds the manifest, which the stores serve unchanged
+	var folders []listing.Target
+	for _, e := range page.Entries {
+		if e.Kind == listing.KindPrefix {
+			folders = append(folders, listing.Target{Key: e.Key, Subtree: true})
+		}
+	}
+
+	inventory := func(t *testing.T, d *reader.Dataset) *view.Inventory {
+		t.Helper()
+		inv, err := view.Open(d)
+		mustDo(t, err)
+		return inv
+	}
+	summarize := func(ctx context.Context, t *testing.T, d *reader.Dataset, targets []listing.Target, entries int64) {
+		t.Helper()
+		got, _, err := inventory(t, d).Summarize(ctx, targets, listing.SummaryOptions{})
+		mustDo(t, err)
+		if len(got) != len(targets) {
+			t.Fatalf("%d summaries for %d targets", len(got), len(targets))
+		}
+		for i, s := range got {
+			if s.Entries != entries || s.Bytes == nil {
+				t.Fatalf("target %q: %d entries, bytes %v; want %d entries and their bytes", targets[i].Key, s.Entries, s.Bytes, entries)
+			}
+		}
+	}
+	return []operation{
+		{name: "Page, first of a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			p, err := inventory(t, d).Page(ctx, first)
+			mustDo(t, err)
+			if len(p.Entries) != 1000 || p.Next != page.Next {
+				t.Fatalf("%d entries, next %q; want 1000 and %q", len(p.Entries), p.Next, page.Next)
+			}
+		}},
+		{name: "Page, a later one", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			p, err := inventory(t, d).Page(ctx, later)
+			mustDo(t, err)
+			if len(p.Entries) != 1600-1000 || p.Next != "" {
+				t.Fatalf("%d entries, next %q; want the level's last %d", len(p.Entries), p.Next, 1600-1000)
+			}
+		}},
+		{name: "Summarize a prefix", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			summarize(ctx, t, d, []listing.Target{{Key: browse, Subtree: true}}, int64(g.browseRows()))
+		}},
+		{name: "Summarize a page's folders", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			summarize(ctx, t, d, folders, int64(g.folderObjs))
+		}},
+		{name: "Summarize every key", run: func(ctx context.Context, t *testing.T, d *reader.Dataset) {
+			summarize(ctx, t, d, []listing.Target{{Subtree: true}}, int64(len(g.keys())))
+		}},
+	}
 }
 
 // TestRequestBudgets measures each operation cold, on each store, with the

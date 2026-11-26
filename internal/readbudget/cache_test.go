@@ -264,6 +264,9 @@ func TestBrowseCacheRevisit(t *testing.T) {
 		}
 		sums, err := seekparquet.FoldRows(ctx, d.SeekParquet(), spans, sumSize, seekparquet.FoldOptions{}, nil)
 		mustDo(t, err)
+		if len(sums) != len(spans) {
+			t.Fatalf("%d sums for %d prefixes", len(sums), len(spans))
+		}
 		for i, r := range sums {
 			if r.Status != seekparquet.FoldExact {
 				t.Fatalf("prefix %q: sum status %v, want FoldExact", entries[i].CommonPrefix, r.Status)

@@ -316,8 +316,9 @@ validators, run by hand on a local copy.
 
 **SeekParquet's validator** ([the "Validating" section of its `go/README.md`](https://github.com/varveio/seekparquet)).
 From the root of a SeekParquet checkout that includes `cmd/seekparquet` and supports this dataset's format
-(format version 0, draft revision 1): swath pins `github.com/varveio/seekparquet/go v0.2.0` in `go.mod`, the
-release that fixed draft revision 1; use that release (tag `go/v0.2.0`) or a later one with a matching format.
+(format version 0, draft revision 1): use the release that fixed draft revision 1 (tag `go/v0.2.0`) or a later
+one with a matching format. The SeekParquet Go module swath builds with is a separate pin, which follows its
+API rather than the format ([Dependencies](dependencies.md)).
 
 ```bash
 go -C go run ./cmd/seekparquet validate --level digest /path/to/dataset && \

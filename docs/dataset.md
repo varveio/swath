@@ -406,9 +406,11 @@ run, are in [Contracts (internals)](internals/contracts.md#version-identifiers).
 The sections above are written for someone reading a dataset. This one states the profile an independent reader
 implements: what makes a SeekParquet dataset a swath dataset, and what a reader checks. The SeekParquet
 specification ([`spec/format-1.md`](https://github.com/varveio/seekparquet/blob/go/v0.2.0/spec/format-1.md), at
-`go/v0.2.0`, the release swath pins) owns the format itself: the manifest's own members, part bounds, footer
-stamps, key order and commit. The Go API over this profile is [`reader`](../reader/README.md); the guarantees
-swath's writer keeps, with their tests, are in [Contracts (internals)](internals/contracts.md#dataset-guarantees-readers-rely-on-these).
+`go/v0.2.0`, the release that fixed draft revision 1, the revision swath writes) owns the format itself: the
+manifest's own members, part bounds, footer stamps, key order and commit. The SeekParquet Go module swath builds
+with is a separate pin, which follows its API rather than the format ([Dependencies](internals/dependencies.md)).
+The Go API over this profile is [`reader`](../reader/README.md); the guarantees swath's writer keeps, with their
+tests, are in [Contracts (internals)](internals/contracts.md#dataset-guarantees-readers-rely-on-these).
 
 A directory (or object-store prefix) is a swath dataset when all of the following are true:
 
