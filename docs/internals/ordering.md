@@ -447,23 +447,26 @@ host's process. The command's counts let a panic end the process, as they always
 
 ### Drawing the view
 
-What `swath du`'s view shows is chosen from the nodes kept above (`totals` `View.Select`, `command`
-`duview.go`, `textout.WriteView`); the user's account is [the view](../totals.md#the-view). The view takes the
+What `swath du`'s view shows is chosen from the nodes kept above by the public package `reader/du/tree`
+(`Select` over `totals` `View.Tree`; `command` `duview.go`; `textout.WriteView`, which names the columns, over
+`tree.Render`); the user's account is [the view](../totals.md#the-view). The view takes the
 terminal's height less the lines printed after it (the line of totals, the unreadable and lowered-depth lines,
 the closing line, the `hint:` lines and the prompt, each counted as it wraps at the terminal's width:
 `closingRows`), so its heading and total stay on screen. Line by line, what is not broken down yet (a fold, or
 a node shown whole) gives its largest child, a node a fold for the rest too: the one whose child is the
 largest, so the largest nodes come first and the largest prefixes open. No line goes to a node under a floor,
-the larger of 0.5 % of the total and a quarter of one line's share (`viewFloor`): a long tail of small prefixes
+the larger of 0.5 % of the total and a quarter of one line's share (`floor`): a long tail of small prefixes
 stays in its fold, and the view ends when nothing above the floor is left. A fold of no bytes is left out
 unless it holds an unreadable directory. A prefix with one child shares its line with it.
 
-The columns fit the terminal's width and a line never wraps: from 100 columns the bar has 20 cells (the rest
-goes to the paths), around 80 up to 10 while the paths keep room, around 60 none; narrower, the share goes,
-then the date. The size, the count and the path always stay; a path is written as the other terminal lines
-write it (a control character as an escape) and cut in the middle, its end kept, where the line would pass the
-width. Past `--max-prefixes` (the local directories being listed and the prefixes kept for a hard link) the
-view keeps fewer levels rather than fail (`View.MaxDepth`) and says so on stderr; the run report's
+The columns fit the terminal's width: from 100 columns the bar has 20 cells (the rest goes to the paths), around
+80 up to 10 while the paths keep room, around 60 none; narrower, the share goes, then the date, then an embedding
+program's own columns, the last first (`tree.Render` takes them; `swath du` has none). The size, the count and
+the path always stay; a path is written as the other terminal lines write it (a control character as an escape)
+and cut in the middle, its end kept, where the line would pass the width. A line passes it only where the room
+left for the paths is less than its row's indentation and an ellipsis or, in the heading, than `path`
+(`tree.Render` states the rule). Past `--max-prefixes` (the local directories being listed and the prefixes kept
+for a hard link) the view keeps fewer levels rather than fail (`View.MaxDepth`) and says so on stderr; the run report's
 `diagnostics.totals_view` counts what was kept, dropped and merged ([run report](../reference/run-report.md)).
 
 The tree with shares is the idea of [dust](https://github.com/bootandy/dust) and

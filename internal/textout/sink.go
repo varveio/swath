@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/schema"
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 // KeyColumn is the key's column name, the first of every schema's.
@@ -298,7 +299,7 @@ type table[P any] struct {
 const (
 	headingLatest       = "latest"
 	headingDeleteMarker = "delete_marker"
-	// sizeWidth is the widest appendIEC value ("0.98 MiB").
+	// sizeWidth is the widest tree.Size value ("0.98 MiB").
 	sizeWidth = 8
 	// missingCell is a missing value in the table.
 	missingCell = "-"
@@ -355,7 +356,7 @@ func (t *table[P]) row(b []byte, r *schema.Row[P]) []byte {
 	var num [24]byte
 	n := append(num[:0], missingCell...)
 	if v, ok := get(t.size, p); ok {
-		n = appendIEC(num[:0], v)
+		n = tree.AppendSize(num[:0], v)
 	}
 	b = appendPadded(b, n, sizeWidth)
 	b = append(b, "  "...)

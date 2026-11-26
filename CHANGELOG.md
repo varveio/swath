@@ -7,6 +7,14 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Added
 
+- Package `github.com/varveio/swath/reader/du/tree` (experimental) draws the view `swath du` shows on a terminal,
+  for a program that embeds swath: `Select` chooses the rows from the totals the program holds (a `Tree` of
+  prefixes and objects, live or from an inventory) by the command's own rules, and `Render` writes them for a
+  width, with color or without, and with columns of the program's own (a heading, an alignment and one formatted
+  cell per row, a `(N more)` row's included or blank), dropping columns in a stated order on a narrow terminal.
+  `Cells`, `Clip`, `Size`, `Count` and `Grouped` are the view's measures and number forms. `swath du` now draws its
+  view with the package; what it prints is unchanged. The reader module now requires `golang.org/x/text` for the
+  package's width tables (#693).
 - `command.List` (package `github.com/varveio/swath/command`, experimental) runs one `swath list` in the calling
   process from a typed `ListOptions` instead of arguments, through the code `Main` runs, and returns a `ListResult`
   (completed, canceled or failed). The error of a run that did not complete matches `ErrOutputInUse`,
