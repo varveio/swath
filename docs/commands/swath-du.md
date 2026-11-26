@@ -59,7 +59,7 @@ sizes) with exit 2.
 - <a id="option-count-links"></a>[`-l, --count-links`](#option-count-links)\
   local: count a file with several hard links under each of its names
 
-  By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and Windows, read no links: every name counts there.
+  By default such a file counts once, as du counts it, under the first of its names in byte order. The names metadata tier, and the stat tier on Windows, read no links: every name counts there; on Windows the links metadata tier reads them.
 
 - <a id="option-sort"></a>[`--sort name|size`](#option-sort)\
   order prefixes by name, or by size, largest first (default `name`)
@@ -238,8 +238,10 @@ sizes) with exit 2.
 
 ### Local
 
-- <a id="option-metadata"></a>[`--metadata names|stat|statx`](#option-metadata)\
-  what is read per entry (statx adds created_at; Linux) (default `stat`)
+- <a id="option-metadata"></a>[`--metadata names|stat|statx|links`](#option-metadata)\
+  what is read per entry (statx: Linux; links: Windows) (default `stat`)
+
+  statx adds created_at. links opens each entry for its link count, so that swath du counts a hard-linked file once; it costs an open per entry.
 
 - <a id="option-no-dirs"></a>[`--no-dirs`](#option-no-dirs)\
   omit the directories' rows (kind dir)

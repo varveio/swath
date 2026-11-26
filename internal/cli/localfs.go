@@ -63,8 +63,9 @@ func (f *fieldsValue) Type() string { return "string" }
 
 func localFlags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
 	o := &localfs.Options{LinkTarget: true}
-	Define(f, Flag{Name: "metadata", Value: (*fieldsValue)(&o.Fields), Metavar: "names|stat|statx", Default: o.Fields.String(),
-		Usage: "what is read per entry (statx adds created_at; Linux)"})
+	Define(f, Flag{Name: "metadata", Value: (*fieldsValue)(&o.Fields), Metavar: "names|stat|statx|links", Default: o.Fields.String(),
+		Usage: "what is read per entry (statx: Linux; links: Windows)",
+		Long:  "statx adds created_at. links opens each entry for its link count, so that swath du counts a hard-linked file once; it costs an open per entry."})
 	Define(f, Flag{Name: "no-dirs", Value: Switch(&o.NoDirs), Usage: "omit the directories' rows (kind dir)"})
 	Define(f, Flag{Name: "no-link-target", Value: Off(&o.LinkTarget), Usage: "do not read symbolic links' targets"})
 	Define(f, Flag{Name: "one-file-system", Short: "x", Familiar: []string{"one-filesystem"}, Value: Switch(&o.OneFilesystem),
@@ -79,8 +80,8 @@ func localFlags(f *pflag.FlagSet, _ bool, _ registry.SharedValues) any {
 // names tier, a platform whose listing reads none); --allocated is
 // refused at the names tier. The hard
 // links are read from the stat too, so the names tier, and a platform
-// whose stat has no link count (localfs.LinksRead: Windows), count every
-// name.
+// whose stat has no link count (localfs.LinksRead: Windows but at the
+// links tier), count every name.
 func checkLocalTotals(options any, t *totals.Options) error {
 	o, ok := options.(*localfs.Options)
 	if !ok {

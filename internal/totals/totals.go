@@ -159,8 +159,8 @@ type Row struct {
 	Link       bool
 	Dev, Inode int64
 	// Unidentified marks an object whose links LinksOnce cannot tell
-	// apart (no link count, device or inode: a tree listed on Windows, which
-	// reads a file ID but no link count or device): it
+	// apart (no link count, device or inode: a tree listed on Windows at the
+	// stat tier, which reads a file ID but no link count or device): it
 	// counts under its name, and the tally no longer claims LinksOnce.
 	Unidentified bool
 }

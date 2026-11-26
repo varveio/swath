@@ -56,7 +56,7 @@ _swath_list() {
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
-        '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
+        '--metadata=[what is read per entry (statx: Linux; links: Windows)]:value:(names stat statx links)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '(-x --one-file-system)'{-x,--one-file-system}'[stop at other filesystems (macOS: volumes; Windows: junctions, mounts)]' \
@@ -124,7 +124,7 @@ _swath_du() {
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
         '--no-adaptive-limit[do not lower concurrency when the service throttles requests]' \
-        '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
+        '--metadata=[what is read per entry (statx: Linux; links: Windows)]:value:(names stat statx links)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '(-x --one-file-system)'{-x,--one-file-system}'[stop at other filesystems (macOS: volumes; Windows: junctions, mounts)]' \
@@ -215,7 +215,7 @@ _swath_diag_list() {
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
         '--seed-from-tile-pages=[a counted --seed-from'\''s tiles hold N pages (default 32)]:N: ' \
         '--seed-from-window-rows=[a counted --seed-from'\''s window holds N rows (0: 8,000,000)]:N: ' \
-        '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
+        '--metadata=[what is read per entry (statx: Linux; links: Windows)]:value:(names stat statx links)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '(-x --one-file-system)'{-x,--one-file-system}'[stop at other filesystems (macOS: volumes; Windows: junctions, mounts)]' \
@@ -301,7 +301,7 @@ _swath_diag_count() {
         '--page-size=[ask for pages of N entries (1 to 1000; default the provider'\''s)]:N: ' \
         '--seed-from-tile-pages=[a counted --seed-from'\''s tiles hold N pages (default 32)]:N: ' \
         '--seed-from-window-rows=[a counted --seed-from'\''s window holds N rows (0: 8,000,000)]:N: ' \
-        '--metadata=[what is read per entry (statx adds created_at; Linux)]:value:(names stat statx)' \
+        '--metadata=[what is read per entry (statx: Linux; links: Windows)]:value:(names stat statx links)' \
         '--no-dirs[omit the directories'\'' rows (kind dir)]' \
         '--no-link-target[do not read symbolic links'\'' targets]' \
         '(-x --one-file-system)'{-x,--one-file-system}'[stop at other filesystems (macOS: volumes; Windows: junctions, mounts)]' \

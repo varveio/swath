@@ -29,7 +29,7 @@ dataset's `coverage.unreadable` hold the count ([Troubleshooting](../troubleshoo
 
 | Option | Effect |
 |---|---|
-| `--metadata names\|stat\|statx` | what is read per entry: names only (no size or time), `stat` (the default), or `statx`, which adds `created_at` (Linux) |
+| `--metadata names\|stat\|statx\|links` | what is read per entry: names only (no size or time), `stat` (the default), `statx`, which adds `created_at` (Linux), or `links`, which opens each entry for its link count so that `swath du` counts a hard-linked file once (Windows) |
 | `--no-dirs` | omit the directories' rows (they are still walked) |
 | `--no-link-target` | do not read symbolic links' targets |
 | `--one-file-system` | stop at a filesystem boundary; on macOS, also stop at a different volume even when its device number matches; keep the directory row; on Windows, see below |

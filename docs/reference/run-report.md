@@ -158,7 +158,7 @@ own; null when unknown: no entry had one, or a source without allocated bytes) w
 counted without a size) and `allocated_bytes_missing` (the entries, directories too, without allocated bytes), its
 `max_last_modified` (null when no object had a time), `not_objects` (rows counted as no object: directories,
 delete markers), `links_once` (a local tree's hard-linked files counted once: without `--count-links`, on rows
-that identify their links, which `--metadata names` and Windows do not read), `linked_rows` (rows with more
+that identify their links, which `--metadata names` and the stat tier on Windows do not read), `linked_rows` (rows with more
 than one hard link), `inodes` (the distinct inodes among them, each counted once) and `max_inodes` (their
 cap). The byte totals are JSON numbers that can exceed 2^53: read them as 64-bit integers.
 

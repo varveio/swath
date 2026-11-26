@@ -137,7 +137,7 @@ func (f Filter) String() string {
 }
 
 // Collected is what a listing read beyond the columns every row of its
-// schema carries: its metadata tier (names, stat or statx; nil for a
+// schema carries: its metadata tier (names, stat, statx or links; nil for a
 // source without tiers) and the optional columns it asked for (an S3
 // listing's owner_id, a local tree's link_target). A nullable column not
 // named here and outside the tier is null because the source did not

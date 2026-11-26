@@ -123,6 +123,15 @@ func rowKeys(rows []Row) []string {
 	return keys
 }
 
+// TestHeldRootRefusesLinksTier: a held root takes no links tier, which
+// is Windows'; the stat tier reads link counts here.
+func TestHeldRootRefusesLinksTier(t *testing.T) {
+	f := holdDir(t, t.TempDir())
+	if _, err := OpenDir(f, "", Options{Fields: Links}); !errors.Is(err, errLinksTier) {
+		t.Fatalf("OpenDir at the links tier: %v", err)
+	}
+}
+
 // TestHeldRootNotResolvedByPath: a root held open lists the directory the
 // caller opened after its path was moved aside and replaced by a symbolic
 // link to a directory outside, with either engine, as a count and as a

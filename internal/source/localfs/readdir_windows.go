@@ -20,19 +20,23 @@ import (
 // The portable engine reads a directory itself on Windows (readDir), with
 // the call os.File.ReadDir makes (GetFileInformationByHandleEx), so that
 // each entry keeps what that call returns and Go drops: its space on disk
-// (AllocationSize) and its file ID. No call is added per file; a
-// directory's own allocation, which the enumeration gives as 0, is read
-// through a handle (fillDirBlocks).
+// (AllocationSize) and its file ID. No call is added per file but at the
+// links tier (fillLinks); a directory's own allocation, which the
+// enumeration gives as 0, is read through a handle (fillDirBlocks).
 
 // winInfo is what one directory entry says of a file: Go's
 // Win32FileAttributeData (attributes, times, length), its allocation size,
 // its file ID (0: none, as FileFullDirectoryInfo gives, or a filesystem
-// without IDs) and, for a reparse point, its tag.
+// without IDs), for a reparse point its tag, and the serial number of the
+// volume its directory is on (HasVolume: read), which is the entry's: an
+// entry is opened as itself, never followed (byHandle).
 type winInfo struct {
 	syscall.Win32FileAttributeData
 	AllocationSize int64
 	FileID         int64
 	ReparseTag     uint32
+	Volume         uint32
+	HasVolume      bool
 }
 
 // winEntry is one entry of readDir: an fs.DirEntry that is its own
@@ -144,14 +148,15 @@ var dirBufs = sync.Pool{New: func() any { b := make([]byte, 64<<10); return &b }
 // IDs and opening by file ID (NTFS, ReFS), else FileFullDirectoryInfo
 // (FAT, exFAT, some network shares), whose entries have no file ID. A
 // filesystem that takes neither flag's class (an older network server)
-// falls back to the other once. A read that fails after some entries
+// falls back to the other once. The same call gives the volume's serial
+// number, which every entry carries. A read that fails after some entries
 // returns them with the error, as ReadDir does.
 func readDir(f *os.File) ([]fs.DirEntry, error) {
 	h := windows.Handle(f.Fd())
 	class := uint32(windows.FileFullDirectoryRestartInfo)
-	var flags uint32
-	if readDirFileIDs && windows.GetVolumeInformationByHandle(h, nil, 0, nil, nil, &flags, nil, 0) == nil &&
-		flags&windows.FILE_SUPPORTS_OBJECT_IDS != 0 && flags&windows.FILE_SUPPORTS_OPEN_BY_FILE_ID != 0 {
+	var flags, serial uint32
+	volume := windows.GetVolumeInformationByHandle(h, nil, 0, &serial, nil, &flags, nil, 0) == nil
+	if readDirFileIDs && volume && flags&windows.FILE_SUPPORTS_OBJECT_IDS != 0 && flags&windows.FILE_SUPPORTS_OPEN_BY_FILE_ID != 0 {
 		class = windows.FileIdBothDirectoryRestartInfo
 	}
 	bp := dirBufs.Get().(*[]byte)
@@ -204,6 +209,7 @@ func readDir(f *os.File) ([]fs.DirEntry, error) {
 				if e.info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
 					e.info.ReparseTag = 0 // EaSize is the extended attributes' size then
 				}
+				e.info.Volume, e.info.HasVolume = serial, volume
 				e.name = syscall.UTF16ToString(name)
 				e.mode = winMode(e.info.FileAttributes, e.info.ReparseTag)
 				ents = append(ents, &e)
@@ -216,19 +222,28 @@ func readDir(f *os.File) ([]fs.DirEntry, error) {
 	}
 }
 
+// handleLinks: the links tier reads each entry through a handle of its
+// own (fillLinks).
+const handleLinks = true
+
 // fillRoot fills what a file root's Lstat leaves out (expandFile): its
-// space on disk and file ID, read through a handle (byHandle). They are
-// current, where an enumeration's may lag (fillSys). The file ID is taken
-// where readDir would take one (the volume's flags). A failed read leaves
-// both null.
-func fillRoot(path string, r *Entry) {
-	alloc, id, err := byHandle(path, true)
+// space on disk and file ID, read through a handle (byHandle), and at the
+// links tier (f) its link count, its volume's serial number as dev, and
+// its current length. They are current, where an enumeration's may lag
+// (fillSys). The file ID is taken where readDir would take one (the
+// volume's flags). A failed read leaves them null.
+func fillRoot(path string, f Fields, r *Entry, st *Stats) {
+	h, err := byHandle(path, askVolume, false, st)
 	if err != nil {
 		return
 	}
-	r.Blocks, r.Present = alloc, r.Present|HasBlocks
-	if id != 0 {
-		r.Inode, r.Present = id, r.Present|HasInode
+	r.Blocks, r.Present = h.alloc, r.Present|HasBlocks
+	if h.fileID != 0 {
+		r.Inode, r.Present = h.fileID, r.Present|HasInode
+	}
+	if f == Links && h.hasVolume {
+		r.Size, r.Nlink, r.Dev = h.size, h.links, int64(h.volume)
+		r.Present |= HasNlink | HasDev
 	}
 }
 
@@ -242,29 +257,116 @@ const dirBlocks = true
 // entries, TestAllocatedBytes), so it is read through a handle (byHandle)
 // instead. A failed read leaves it null, which swath du counts as missing
 // (checkLocalTotals: BlocksMayLack).
-func fillDirBlocks(path string, r *Entry) {
-	alloc, _, err := byHandle(path, false)
+func fillDirBlocks(path string, r *Entry, st *Stats) {
+	h, err := byHandle(path, askStandard, true, st)
 	if err != nil {
 		r.Blocks, r.Present = 0, r.Present&^HasBlocks
 		return
 	}
-	r.Blocks, r.Present = alloc, r.Present|HasBlocks
+	r.Blocks, r.Present = h.alloc, r.Present|HasBlocks
 }
 
-// byHandle reads the space on disk of the entry at path, and with id its
-// file ID where the volume has them (0 otherwise), through a handle that
-// asks for attributes alone, opened without following a link, so that one
-// another program holds open, or a directory whose listing is denied, is
-// read too.
-func byHandle(path string, id bool) (alloc, fileID int64, err error) {
+// fillLinks reads, at the links tier, the entry at path, which d (readDir's)
+// describes and whose row the enumeration filled, through a handle of its
+// own (byHandle): one open, one read and one close per entry, which the
+// stat tier does not make. It sets the entry's link count, and its dev to
+// its volume's serial number (readDir's, read once per directory), so that
+// its file ID (inode) and dev identify it as st_dev and st_ino do; and its
+// space on disk and, but for a directory, its length, which are current
+// where the enumeration's lag under a hard link's other names. Where the
+// enumeration gave a file ID, the handle reads it too, so that a name
+// replaced since by another file has no link count beside the other
+// file's ID. A failed read, or one that finds a directory where the
+// listing had a file or the reverse, or another file ID (the name replaced
+// since), keeps what the enumeration said, leaves nlink and dev null (a
+// directory's space on disk too, as fillDirBlocks), and is counted
+// (Handles.Failed); the entry is listed. On a volume without file IDs
+// (FAT, exFAT) inode stays null, and so nothing identifies a file there.
+func fillLinks(d fs.DirEntry, path string, r *Entry, st *Stats) {
+	dir := r.Kind == KindDir
+	ask := askStandard
+	if r.Has(HasInode) {
+		ask = askFileID
+	}
+	h, err := byHandle(path, ask, dir, st)
+	if err == nil && (r.Kind == KindFile && h.dir || dir && !h.dir || ask == askFileID && h.fileID != r.Inode) {
+		err = errHandleChanged
+		st.Handles.fail(err)
+	}
+	if err != nil {
+		if dir {
+			r.Blocks, r.Present = 0, r.Present&^HasBlocks
+		}
+		return
+	}
+	r.Blocks, r.Present = h.alloc, r.Present|HasBlocks
+	if !dir {
+		r.Size = h.size
+	}
+	fi, err := d.Info()
+	if err != nil {
+		return
+	}
+	if _, w := winData(fi); w != nil && w.HasVolume {
+		r.Nlink, r.Dev = h.links, int64(w.Volume)
+		r.Present |= HasNlink | HasDev
+	}
+}
+
+// handleAsk is what byHandle reads of an entry besides its
+// FileStandardInfo.
+type handleAsk uint8
+
+const (
+	askStandard handleAsk = iota // nothing more
+	askFileID                    // its file ID (fillLinks: the enumeration gave one)
+	askVolume                    // its volume's serial number and flags, and its file ID where they say the volume has them (fillRoot)
+)
+
+// handleRead is what a handle to an entry says of it (byHandle): its space
+// on disk, length and link count; whether it is a directory; and, where
+// asked, its file ID (0: the volume has none) and its volume's serial
+// number (hasVolume: read).
+type handleRead struct {
+	alloc, size int64
+	links       uint32
+	dir         bool
+	fileID      int64
+	volume      uint32
+	hasVolume   bool
+}
+
+// byHandle reads the entry at path, a directory if dir, through a handle
+// that asks for attributes alone, opened without following a link or any
+// other reparse point, so that one another program holds open, or a
+// directory whose listing is denied, is read too, and what ask asks besides.
+// It counts the read in st.Handles, and a failure by its reason.
+func byHandle(path string, ask handleAsk, dir bool, st *Stats) (handleRead, error) {
+	if dir {
+		st.Handles.Dirs++
+	} else {
+		st.Handles.Files++
+	}
+	h, err := openHandle(path, ask)
+	if err != nil {
+		st.Handles.fail(err)
+	}
+	return h, err
+}
+
+// openHandle is byHandle's read; tests replace it to fail.
+var openHandle = readHandle
+
+func readHandle(path string, ask handleAsk) (handleRead, error) {
+	var out handleRead
 	p, err := windows.UTF16PtrFromString(longPathW(path))
 	if err != nil {
-		return 0, 0, err
+		return out, err
 	}
 	h, err := windows.CreateFile(p, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
 		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
-		return 0, 0, err
+		return out, err
 	}
 	defer windows.CloseHandle(h)
 	var s struct { // FILE_STANDARD_INFO
@@ -273,16 +375,27 @@ func byHandle(path string, id bool) (alloc, fileID int64, err error) {
 		DeletePending, Directory  uint8
 	}
 	if err := windows.GetFileInformationByHandleEx(h, windows.FileStandardInfo, (*byte)(unsafe.Pointer(&s)), uint32(unsafe.Sizeof(s))); err != nil {
-		return 0, 0, err
+		return out, err
 	}
+	out.alloc, out.size, out.links, out.dir = s.AllocationSize, s.EndOfFile, s.NumberOfLinks, s.Directory != 0
 	var flags uint32
 	var bh windows.ByHandleFileInformation
-	if id && readDirFileIDs && windows.GetVolumeInformationByHandle(h, nil, 0, nil, nil, &flags, nil, 0) == nil &&
-		flags&windows.FILE_SUPPORTS_OBJECT_IDS != 0 && flags&windows.FILE_SUPPORTS_OPEN_BY_FILE_ID != 0 &&
-		windows.GetFileInformationByHandle(h, &bh) == nil {
-		fileID = int64(bh.FileIndexHigh)<<32 | int64(bh.FileIndexLow)
+	switch ask {
+	case askFileID:
+		if err := windows.GetFileInformationByHandle(h, &bh); err != nil {
+			return out, err
+		}
+		out.fileID = int64(bh.FileIndexHigh)<<32 | int64(bh.FileIndexLow)
+	case askVolume:
+		if windows.GetVolumeInformationByHandle(h, nil, 0, &out.volume, nil, &flags, nil, 0) == nil {
+			out.hasVolume = true
+			if readDirFileIDs && flags&windows.FILE_SUPPORTS_OBJECT_IDS != 0 && flags&windows.FILE_SUPPORTS_OPEN_BY_FILE_ID != 0 &&
+				windows.GetFileInformationByHandle(h, &bh) == nil {
+				out.fileID = int64(bh.FileIndexHigh)<<32 | int64(bh.FileIndexLow)
+			}
+		}
 	}
-	return s.AllocationSize, fileID, nil
+	return out, nil
 }
 
 // longPathW gives a path of MAX_PATH or more the extended-length form the

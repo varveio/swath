@@ -43,6 +43,8 @@ func OpenDir(root *os.File, prefix string, opt Options) (*Opened, error) {
 		return nil, errors.New("localfs: a held root needs each directory's device: not with the names metadata tier")
 	case opt.Fields == Statx && (opt.Portable || !nativeEngine):
 		return nil, errors.New("the statx tier needs the Linux engine")
+	case opt.Fields == Links:
+		return nil, errLinksTier
 	}
 
 	opt.OneFilesystem = true

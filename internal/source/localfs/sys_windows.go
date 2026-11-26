@@ -11,9 +11,10 @@ import (
 	"syscall"
 )
 
-// statLinks: no tier reads a link count or device here; the file ID is
-// read where the filesystem has one, but nothing tells a hard-linked file
-// from another (#364).
+// statLinks: the stat tier reads no link count or device here; the file ID
+// is read where the filesystem has one, but nothing tells a hard-linked
+// file from another. The links tier reads them, through a handle per entry
+// (fillLinks).
 const statLinks = false
 
 // statBlocks: a stat tier reads each entry's space on disk, from the
@@ -24,7 +25,8 @@ const statBlocks = true
 // FileInfo) and LastAccessTime is the access time. From an entry of the
 // directory enumeration (readDir), allocated_bytes is its AllocationSize
 // and inode its file ID where the filesystem gives one; Lstat's (a file
-// root, fillRoot) carries neither. uid, gid, dev and nlink stay null.
+// root, fillRoot) carries neither. uid and gid stay null, and dev and
+// nlink but at the links tier (fillLinks).
 //
 // NTFS keeps a copy of each file's length and allocation in every directory
 // entry that names it, and refreshes only the entry the file was opened

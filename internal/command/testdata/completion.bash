@@ -39,7 +39,7 @@ _swath_kind() {
     --ca-bundle) echo 'file';;
     --request-timeout) echo 'value';;
     --request-rate) echo 'value';;
-    --metadata) echo 'enum names stat statx';;
+    --metadata) echo 'enum names stat statx links';;
     --azure-sas-token) echo 'value';;
     --gcs-credentials-file) echo 'file';;
     --gcs-billing-project) echo 'value';;

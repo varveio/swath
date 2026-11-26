@@ -23,7 +23,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   volume supports object IDs and opening by ID, else `FileFullDirectoryInfo`), so that each entry keeps what
   Go drops: `allocated_bytes` is its `AllocationSize`, `inode` its file ID (null with `FileFullDirectoryInfo`:
   FAT, exFAT, some shares), beside the size, times and attributes (no call per file; no `uid`, `gid`, `nlink` or
-  `dev`). The enumeration gives a directory an allocation of 0 whatever its index takes, so a directory's own
+  `dev` but at the `links` tier, below). The enumeration gives a directory an allocation of 0 whatever its index takes, so a directory's own
   `allocated_bytes` is read through a handle that asks for attributes alone (`fillDirBlocks`, one per directory);
   a failed read leaves it null, which `swath du` counts as missing (`BlocksMayLack`, as for `statx`). The entries' modes are Go's (`winMode`, checked against
   `ReadDir` by `TestReadDirIsReadDir`). NTFS keeps a copy of the length and allocation in each directory entry and
@@ -87,7 +87,29 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   cold, 2× warm, on 1M files in one directory on a 4-CPU runner. A listing still reads a directory whole: it
   sorts it.
 - **Tiers** (`--metadata`): `names` (no stat; `d_type` gives the kind), `stat` (`fstatat`, plus `readlinkat` for
-  symlinks), `statx` (full mask, adds `created_at`).
+  symlinks), `statx` (full mask, adds `created_at`), `links` (Windows only; `New` and `OpenDir` refuse it elsewhere,
+  where `stat` reads links). The `links` tier is the stat tier plus one handle per entry (`fillLinks`; a file root's
+  `fillRoot`), opened as the directory's own handles are (`byHandle`: `FILE_READ_ATTRIBUTES`, every sharing mode,
+  `FILE_FLAG_OPEN_REPARSE_POINT`, so a symbolic link, a junction or a cloud placeholder is read as itself, never
+  followed or recalled) and read with one `GetFileInformationByHandleEx(FileStandardInfo)`: `nlink`, and the
+  current length (but for a directory) and `allocated_bytes`, which replace the enumeration's, stale under a hard
+  link's other names. Where the enumeration gave a file ID, `GetFileInformationByHandle` reads it from the same
+  handle, so that a name replaced by another file since the directory was read is not given that file's link
+  count beside the first file's ID, which would make two files one. `dev` is the volume's serial number, which `readDir` reads with the volume's flags, once per
+  directory, and every entry there shares, since none is followed; with the file ID as `inode` it identifies a
+  hard-linked file (`LinksRead`), so `swath du` counts it once. The serial is 32 bits and not unique across volumes (a
+  cloned disk keeps its own): a listing enters no junction or mount point, but two volumes it reaches through
+  a directory the redirector serves elsewhere (a DFS link) could share one, and then a file ID on both would be
+  taken for one file. A read that fails, or that finds a directory where the
+  listing had a file or the reverse, or another file ID, keeps the enumeration's values, leaves `nlink` and `dev` null (a directory's
+  `allocated_bytes` too, as `fillDirBlocks`), lists the entry and counts no error; the totals then count it under
+  its name and claim no `links_once`. Owner (`uid`) is not read: it needs `READ_CONTROL` access, which a handle
+  for attributes does not ask, and another call per entry, and a SID does not fit the column. The report's
+  `entry_handles` counts every handle opened for an entry (`files`, `dirs`) and its failures by reason
+  (`failed`: `not_found`, `permission`, `changed`, `other`). It is in the report at the `links` tier only
+  (`Handles.IsZero`): the stat tier's report is the one it was without the tier, though the stat tier opens the
+  directories (`fillDirBlocks`) and a file root (`fillRoot`) and counts them, and opens no file below a directory
+  root (`TestLinksTier`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
 - **Descriptor-relative opens** (Linux, macOS; `dirfd_unix.go`). The root is opened by its path, as the run
@@ -194,7 +216,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on a platform other than Linux, macOS and Windows), and `emit` keeps a `dir` row whose `dev`
   differs but hands on no child range for it (counter `other_device_dirs`). On Windows no device or volume is
-  read or compared: a junction or a volume mount point is a `symlink` row, never walked, with or without the
+  compared (`otherDevice`, `volumeDev`; the `links` tier's `dev` is never compared either): a junction or a volume mount point is a `symlink` row, never walked, with or without the
   option, which is accepted (`filesystem_boundary` `reparse_point`) to record the filter. A directory reparse
   point of another tag (`IO_REPARSE_TAG_DFS`, a cloud placeholder) keeps the directory bit and is walked, and a
   path the redirector sends to another server shows no boundary at all: the option does not stop either. On macOS the opened-handle volume check also stops same-device

@@ -37,9 +37,10 @@ const (
 	Stat  Fields = iota // one fstatat per entry: every stat column
 	Names               // no stat: key and kind from the directory entry type
 	Statx               // one statx per entry (Linux, full mask): stat columns plus created_at
+	Links               // Windows: the stat tier plus one handle per entry, for nlink, dev and the current size and allocation (fillLinks)
 )
 
-// ParseFields maps names, stat and statx to Fields.
+// ParseFields maps names, stat, statx and links to Fields.
 func ParseFields(s string) (Fields, error) {
 	switch s {
 	case "stat":
@@ -48,11 +49,17 @@ func ParseFields(s string) (Fields, error) {
 		return Names, nil
 	case "statx":
 		return Statx, nil
+	case "links":
+		return Links, nil
 	}
-	return 0, fmt.Errorf("unknown metadata tier %q (names, stat or statx)", s)
+	return 0, fmt.Errorf("unknown metadata tier %q (names, stat, statx or links)", s)
 }
 
-func (f Fields) String() string { return [...]string{"stat", "names", "statx"}[f] }
+func (f Fields) String() string { return [...]string{"stat", "names", "statx", "links"}[f] }
+
+// errLinksTier refuses the links tier where a stat tier reads the link
+// counts itself (handleLinks: not Windows).
+var errLinksTier = errors.New("the links tier is for Windows, whose stat tier reads no link count; the stat tier reads them here")
 
 // Options configure a Provider.
 type Options struct {
@@ -104,6 +111,9 @@ type Stats struct {
 	KeyTooLong int64     `json:"key_too_long"`
 	LongPaths  LongPaths `json:"long_paths"`
 	DirOpens   DirOpens  `json:"dir_opens"`
+	// Handles count the entries read through a handle of their own
+	// (Windows). The report has them at the links tier only (IsZero).
+	Handles Handles `json:"entry_handles,omitzero"`
 	// unreadTo is the Expand's emitter, told what it did not read (unread);
 	// nil when the emitter takes no reports.
 	unreadTo source.Unreader
@@ -142,6 +152,62 @@ func (o *DirOpens) add(x *DirOpens) {
 			o.Failed = map[string]int64{}
 		}
 		o.Failed[k] += v
+	}
+}
+
+// Handles account for the entries read through a handle of their own, one
+// open and close each (Windows: byHandle), apart from the directories the
+// walk reads: a directory's own space on disk (fillDirBlocks), a file
+// root's (fillRoot) and, at the links tier, every entry (fillLinks). The
+// stat tier opens no file below the root: Files counts the links tier's
+// and a file root.
+type Handles struct {
+	Files int64 `json:"files"` // every kind but a directory
+	Dirs  int64 `json:"dirs"`
+	// Failed counts the reads that failed, by reason: not_found,
+	// permission, changed (a directory where the listing had a file, or
+	// the reverse, or another file ID) or other. The entry keeps what the directory listing
+	// said of it, and what only the handle gives stays null.
+	Failed map[string]int64 `json:"failed,omitempty"`
+	// links: the listing reads at the links tier (Provider.Stats), the
+	// one whose report has them.
+	links bool
+}
+
+// IsZero leaves Handles out of the report but at the links tier, so that
+// the stat tier's report is the one it was before the tier: its counts
+// (the directories, a file root) stay for the tests.
+func (h Handles) IsZero() bool { return !h.links }
+
+// errHandleChanged: a handle opened at the links tier found a directory
+// where the directory listing had a file, or the reverse, or another file
+// ID (fillLinks).
+var errHandleChanged = errors.New("replaced during listing")
+
+func (h *Handles) fail(err error) {
+	reason := "other"
+	switch {
+	case errors.Is(err, errHandleChanged):
+		reason = "changed"
+	case errors.Is(err, fs.ErrNotExist):
+		reason = "not_found"
+	case errors.Is(err, fs.ErrPermission):
+		reason = "permission"
+	}
+	if h.Failed == nil {
+		h.Failed = map[string]int64{}
+	}
+	h.Failed[reason]++
+}
+
+func (h *Handles) add(o *Handles) {
+	h.Files += o.Files
+	h.Dirs += o.Dirs
+	for k, v := range o.Failed {
+		if h.Failed == nil {
+			h.Failed = map[string]int64{}
+		}
+		h.Failed[k] += v
 	}
 }
 
@@ -270,6 +336,7 @@ func (s *Stats) add(o *Stats) {
 	s.KeyTooLong += o.KeyTooLong
 	s.LongPaths.add(&o.LongPaths)
 	s.DirOpens.add(&o.DirOpens)
+	s.Handles.add(&o.Handles)
 	for _, x := range o.Samples {
 		if len(s.Samples) < maxSamples {
 			s.Samples = append(s.Samples, x)
@@ -317,8 +384,11 @@ type Provider struct {
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
 	file     bool // the root is not a directory (expandFile)
-	mu       sync.Mutex
-	stats    Stats
+	// volumeDev: the rows' dev is their volume's serial number (Windows, at
+	// the links tier), which OneFilesystem does not compare (otherDevice).
+	volumeDev bool
+	mu        sync.Mutex
+	stats     Stats
 	// warn tells the user of a directory left out (Open's warn); nil
 	// outside a run. warnMu serialises the workers' calls.
 	warn   func(code, msg string)
@@ -369,7 +439,10 @@ func New(root string, opt Options) (*Provider, error) {
 	if opt.Fields == Statx && (opt.Portable || !nativeEngine) {
 		return nil, errors.New("the statx tier needs the Linux engine")
 	}
-	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi}
+	if opt.Fields == Links && !handleLinks {
+		return nil, errLinksTier
+	}
+	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi, volumeDev: reparseLinks}
 	p.keep.limit = keepLimit()
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
@@ -415,6 +488,8 @@ func (p *Provider) Stats() Stats {
 	s.Samples = slices.Clone(s.Samples)
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
 	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
+	s.Handles.Failed = maps.Clone(s.Handles.Failed)
+	s.Handles.links = p.opt.Fields == Links
 	s.DirOpens.PeakKept, s.DirOpens.MaxKept = p.keep.peak.Load(), p.keep.limit
 	return s
 }
@@ -620,7 +695,7 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 	default:
 		if fi, err = os.Lstat(p.root); err == nil {
 			fromFileInfo(&row.Data, fi)
-			fillRoot(p.root, &row.Data)
+			fillRoot(p.root, p.opt.Fields, &row.Data, st)
 		}
 	}
 	if tooLong(err) {
@@ -702,8 +777,11 @@ func (p *Provider) portableRows(ctx context.Context, r Range, f *os.File, ents [
 				p.statFailed(key, path, st, err)
 				continue
 			}
-			if dirBlocks && row.Data.Kind == KindDir {
-				fillDirBlocks(path, &row.Data) // Windows: the enumeration gives a directory none
+			switch {
+			case p.opt.Fields == Links:
+				fillLinks(d, path, &row.Data, st) // Windows: a handle per entry
+			case dirBlocks && row.Data.Kind == KindDir:
+				fillDirBlocks(path, &row.Data, st) // Windows: the enumeration gives a directory none
 			}
 			if row.Data.Kind == KindSymlink && p.opt.LinkTarget {
 				if t, err := readlinkIn(f, path, name); err == nil {

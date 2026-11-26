@@ -145,8 +145,8 @@ func walk(t *testing.T, p *Provider, workers, budget int) ([]Row, Stats) {
 func TestListingEqualsSortedOracle(t *testing.T) {
 	root := buildTree(t)
 	for _, portable := range []bool{false, true} {
-		for _, fields := range []Fields{Names, Stat, Statx} {
-			if fields == Statx && (portable || !nativeEngine) {
+		for _, fields := range []Fields{Names, Stat, Statx, Links} {
+			if fields == Statx && (portable || !nativeEngine) || fields == Links && !handleLinks {
 				continue
 			}
 			for _, noDirs := range []bool{false, true} {
@@ -215,11 +215,35 @@ func checkRows(t *testing.T, rows []Row, fields Fields, portable bool) {
 	if runtime.GOOS == "darwin" && !z.Has(HasBtime) {
 		t.Errorf("z: no birth time on darwin: %+v", z)
 	}
+	// A directory has a row of its own but with --no-dirs; the caller
+	// checks which rows are listed.
+	for k, n := range map[string]uint32{"z": 1, "dangling": 1, "mixed/": 1} {
+		if e, ok := by[k]; fields == Links && (ok || k != "mixed/") && (e.Nlink != n || !e.Has(HasNlink|HasDev)) {
+			t.Errorf("links tier: %s: nlink %d, presence %b", k, e.Nlink, e.Present)
+		}
+	}
 	if l := by["link-file"]; l.LinkTarget != "z" || !l.Has(HasLink) {
 		t.Errorf("link target %q", l.LinkTarget)
 	}
 	if fields == Statx && !z.Has(HasBtime) {
 		t.Log("filesystem reports no birth time") // tmpfs, older kernels
+	}
+}
+
+// TestTierNames: every tier parses from its name; the links tier lists on
+// Windows only, and is refused where the stat tier reads link counts.
+func TestTierNames(t *testing.T) {
+	for _, f := range []Fields{Stat, Names, Statx, Links} {
+		if g, err := ParseFields(f.String()); err != nil || g != f {
+			t.Errorf("%s: %v, %v", f, g, err)
+		}
+	}
+	if _, err := ParseFields("handles"); err == nil {
+		t.Error("an unknown tier parsed")
+	}
+	_, err := New(t.TempDir(), Options{Fields: Links})
+	if handleLinks != (err == nil) || !handleLinks && !errors.Is(err, errLinksTier) {
+		t.Errorf("links tier: %v", err)
 	}
 }
 
@@ -272,8 +296,8 @@ func TestFileRootAsListed(t *testing.T) {
 		names = append(names, "l")
 	}
 	for _, portable := range []bool{false, true} {
-		for _, fields := range []Fields{Names, Stat, Statx} {
-			if fields == Statx && (portable || !nativeEngine) {
+		for _, fields := range []Fields{Names, Stat, Statx, Links} {
+			if fields == Statx && (portable || !nativeEngine) || fields == Links && !handleLinks {
 				continue
 			}
 			opt := Options{Portable: portable, Fields: fields, LinkTarget: true}
@@ -369,8 +393,8 @@ func (f *failAfter) Write(_ context.Context, segs [][]Row) error {
 func TestUnsortedCountEqualsSortedListing(t *testing.T) {
 	root := buildTree(t)
 	for _, portable := range []bool{false, true} {
-		for _, fields := range []Fields{Names, Stat, Statx} {
-			if fields == Statx && (portable || !nativeEngine) {
+		for _, fields := range []Fields{Names, Stat, Statx, Links} {
+			if fields == Statx && (portable || !nativeEngine) || fields == Links && !handleLinks {
 				continue
 			}
 			t.Run(fmt.Sprintf("portable=%v/%s", portable, fields), func(t *testing.T) {
