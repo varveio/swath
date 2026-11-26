@@ -117,7 +117,8 @@ declared its end. A resume lists it again and checks it the same way.
 
 **Cost.** On a correct service the check asks nothing again: only ladders, one round trip each. On AWS, at
 1 and 64 workers (2026-11-25), it added 1 to 6 requests a run to listings of 2,180 to 62,557 keys
-(`TestEndCheckHealthyStoresCostLittle` bounds it on the fixtures). On MinIO it turns the 107,651 listed keys
+([measurements.md](measurements.md#the-end-check-of-s3-listings-2026-11-25);
+`TestEndCheckHealthyStoresCostLittle` bounds it on the fixtures). On MinIO it turns the 107,651 listed keys
 and exit 0 of `nara-1950-census`'s first 250,000 into exit 1, `omitted_keys`, at 1, 8 and 64 workers, with
 and without the seed. Garage, SeaweedFS and versitygw list the shapes bucket whole.
 

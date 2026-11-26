@@ -112,6 +112,10 @@ Notable changes per release. The human summary of the current release is in the
 - `swath du --allocated`: the view's heading says `on disk`, not `size`, and the closing line gives the space on
   disk, not the lengths.
 
+- On Windows a read of a dataset in GCS, its manifest or a part, is retried when the service resets the
+  connection, as an upload to GCS already was: the read clients of `objfile/gcs` took the SDK's own retry rule,
+  which does not recognise Windows' wording of a reset (#687).
+
 - A local listing on Linux and macOS opens every directory below the root relative to its parent's open
   descriptor (`openat`, `O_NOFOLLOW`), never by its path. A symbolic link swapped in for a directory, or for any
   directory above it, while the walk runs is not followed, so the walk does not leave its root through one; it
@@ -449,8 +453,7 @@ describe 0.4.0 as released.
   refused so is put back as above, and `swath resume` installs the replacement once the reader is closed.
   Power loss is safe on local NTFS; on ReFS or an SMB share a crash or kill is recovered, but a power loss
   may lose the latest part names (#605). An upload to a GCS destination whose connection the
-  service reset is retried there as on other systems (#611), and so is a read of a dataset in GCS, its
-  manifest or a part (#687).
+  service reset is retried there as on other systems (#611).
 - A run that writes to a bucket is resumed by its work directory, which may have moved to another path or
   machine; the bucket, prefix, endpoint and region stay as recorded (#515).
 - `swath resume DIR` writes `run.json` beside the dataset as any run does, and a `--report FILE` only when

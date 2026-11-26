@@ -17,8 +17,9 @@ not promoted: 0.5.0 will be a fresh build
 
 - **`swath du` on a local tree leads with the space on disk**, as `du`, ncdu, gdu and dust do: the table's and
   the view's figure is `on disk`, `--sort size` orders by it, and the closing line gives it. A directory's own
-  blocks count in it, so a tree's total is `du -s`'s less the source directory's own blocks. `-A`
-  (`--apparent-size`) shows the lengths, as 0.4.0 did. A listing that reads no blocks (`--metadata names`), an
+  blocks count in it, as `du` counts them, so without a size or time filter a tree's total is below
+  `du -sB1`'s by the source directory's own blocks (How sizes are counted lists the other differences).
+  `-A` (`--apparent-size`) shows the lengths, as 0.4.0 did. A listing that reads no blocks (`--metadata names`), an
   object store and a saved dataset without allocated bytes lead with the lengths. `--allocated` now only
   requires the space on disk, and its heading and closing line say `on disk`
   ([How sizes are counted](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/totals.md#how-sizes-are-counted)).
@@ -27,8 +28,10 @@ not promoted: 0.5.0 will be a fresh build
   end of the range and exited 0 (107,651 of 250,000 keys in testing). swath now checks each such page against
   the keys and folders the run has listed past it, or, where there are none, by one round trip of small
   requests these stores answer correctly, and asks again for a page proved wrong. A store that keeps omitting
-  keys stops the run with exit 1, cause `omitted_keys`, and the run can be resumed. On AWS the check adds 1 to
-  6 requests a run. Versions listings (`--all-versions`) are not checked yet
+  keys stops the run with exit 1, cause `omitted_keys`, and the run can be resumed. On the AWS listings
+  measured, of 2,180 to 62,557 keys at 1 and 64 workers, the check added 1 to 6 requests a run
+  ([2026-11-25](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#the-end-check-of-s3-listings-2026-11-25)).
+  Versions listings (`--all-versions`) are not checked yet
   ([S3-compatible stores](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/sources/s3.md#s3-compatible-stores)).
 - **Windows local trees.** The default stat tier fills `allocated_bytes` (the space on disk) and `inode` (the
   file ID) from the directory listing swath already reads, with no call per file, so `swath du` leads with the
@@ -63,8 +66,10 @@ not promoted: 0.5.0 will be a fresh build
   `Source`, and asks it during the program's own run for a page of a prefix's children, a lookup of one key, or
   a walk of everything under a prefix, with no swath process and no output files. `source.Open` takes an
   address (`s3://BUCKET`, `gs://BUCKET`, `az://ACCOUNT/CONTAINER`) through the providers the program imports;
-  each provider also has its own typed `Open`. Every answer carries its `Evidence`, and every error is one of
-  `reader/listing`'s classes. An `objfile` `Observer` on the context also receives a live source's requests
+  each provider also has its own typed `Open`. Every answer carries its `Evidence`, and an error matches one of
+  `reader/listing`'s classes with `errors.Is`, but for the context's own error and, from a walk, an error the
+  program's callback returned or a panic the walk recovered. An `objfile` `Observer` on the context also
+  receives a live source's requests
   ([The Go library](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/library.md)).
 - **Inventories, totals and the command from Go.** `reader/view` answers the same pages, lookups and walks from
   a saved dataset (`view.Open`, `view.OpenDir`), and `Summarize` gives the totals under several prefixes,
@@ -75,9 +80,10 @@ not promoted: 0.5.0 will be a fresh build
   what it prints is unchanged
   ([The du tally](https://github.com/varveio/swath/blob/v0.5.0-rc.1/reader/README.md#the-du-tally)).
   `command.Main` runs the whole command line in a child process the program dedicates to it, and `command.List`
-  runs one `swath list` in the calling process from typed `ListOptions`, returning a `ListResult` whose error
-  matches `ErrOutputInUse`, `ErrSourceNotFound`, `ErrSourceDenied`, `ErrUsage` or the context's error with
-  `errors.Is`
+  runs one `swath list` in the calling process from typed `ListOptions`. It returns a `ListResult` and, for a run
+  that did not complete, an error: an output another run holds, a source not found or denied, refused options
+  and a `ctx` that ended match `ErrOutputInUse`, `ErrSourceNotFound`, `ErrSourceDenied`, `ErrUsage` and the
+  context's error with `errors.Is`, and any other failure, of the output for one, matches none of them
   ([Run a listing from Go](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/library.md#run-a-listing-from-go)).
   Every package named here is experimental.
 - **Smaller changes.** The `swath du` table heads the newest time under a prefix `newest (ZONE)`, as the
@@ -106,12 +112,21 @@ not promoted: 0.5.0 will be a fresh build
   ([du rows](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/output.md#du-rows)).
 - **The `swath du` table** heads its time column `newest (ZONE)`, not `last_modified (ZONE)`. TSV and JSONL keep
   the field `max_last_modified`.
+- **`swath show`** prints less without `-v`: a dataset's `storage` line no longer names the SeekParquet format,
+  and an interrupted run's output no longer gives the journal version or the identity a resume must match. `-v`
+  prints them, and the build that wrote the dataset, from the manifest's new optional
+  `extensions.swath.written_by`
+  ([swath show](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/commands/swath-show.md)).
+- **The run report's diagnostics** gain `dir_opens` on Linux and macOS local walks, `entry_handles` on Windows
+  with `--metadata links`, and the `end_check` counters on S3; like every diagnostic, they may change in any
+  release ([Diagnostics](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/reference/run-report.md#diagnostics)).
 - **S3-compatible stores.** A listing that 0.4.0 completed with exit 0 and keys missing now fails with exit 1,
   cause `omitted_keys`; a supervisor that resumes on exit 1 when `error.json` says so resumes it, and the resume
   checks again ([Exit codes](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/reference/exit-codes.md)).
 - **Windows local listings.** A junction or a volume mount point is kind `symlink` with its target in
   `link_target`, where 0.4.0 listed it as `unknown`. Rows at the default tier now carry `allocated_bytes` and
-  `inode`, and `swath du` leads with the space on disk.
+  `inode`, and `swath du` leads with the space on disk. `--one-file-system`, which 0.4.0 refused there (exit 1),
+  is accepted and recorded among a dataset's filters, though it compares no device or volume (below).
 - **macOS `--one-file-system`** stops at a different volume even where its device number matches, so a scan of
   `/` no longer enters the Data volume through `/Users` or `/System/Volumes/Data`. Select a directory on Data as
   the root to list it.
@@ -119,9 +134,12 @@ not promoted: 0.5.0 will be a fresh build
   getdents engine counted it in `open_errors`.
 - **Local datasets** have no `cuts.txt`, and `--seed-from` does not take a local source. `--overwrite` removes
   the `cuts.txt` an earlier version wrote.
-- **Azure Blob runs interrupted under 0.4.0.** An interrupted run whose `--include` has a literal leading
-  prefix must be finished with 0.4.0: `swath resume` refuses it (exit 2), because this release lists the
-  narrowed prefix.
+- **Azure Blob with an `--include` that has a literal leading prefix.** The run lists only that prefix: the
+  report's `invocation.narrowing` says `narrowed` where 0.4.0 said `provider_lists_root`, `invocation.source`
+  and the manifest's source and `scope.prefix` name the prefix, and `output.rows_filtered` counts only the rows
+  under it. A 0.4.0 dataset of such a run no longer seeds it (`--seed-from` refuses it, exit 2), and an
+  interrupted 0.4.0 run must be finished with 0.4.0: `swath resume` refuses it (exit 2)
+  ([What narrows the listing](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/filters.md#what-narrows-the-listing)).
 - **Programs that read datasets.** `reader.Dataset.CheckSchema`, and `view.OpenDir`, which runs it, refuse a
   column whose annotation SeekParquet does not recognize, which 0.4.0 took for an unannotated one. No swath
   writer writes such a column. The reader module now requires `golang.org/x/text`.
@@ -188,8 +206,8 @@ results are in the `ci.yml` run of the push to `main` at the tagged commit and i
   ([2026-11-17](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#a-billion-live-objects-on-the-040-release-against-032-sentinel-cogs-2026-11-17)),
   and another in 238 seconds at 2,048 workers on one 64-vCPU VM
   ([2026-11-17](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#the-same-bucket-on-64-vcpus-at-2048-workers-sentinel-cogs-2026-11-17)),
-  one run each. Since 0.4.0, on builds of `main`: the space on disk that the Windows directory listing reports,
-  against a call per file, on a GitHub Windows runner
+  one run each. Since 0.4.0, each on a build of its change's branch before the change merged: the space on disk
+  that the Windows directory listing reports, against a call per file, on a GitHub Windows runner
   ([2026-11-25](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#space-on-disk-in-a-windows-directory-listing-2026-11-25));
   the macOS volume checks on a GitHub macOS runner, whose small synthetic run resolves no added cost
   ([2026-11-23](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#macos-volume-boundary-checks-2026-11-23));
@@ -201,16 +219,20 @@ results are in the `ci.yml` run of the push to `main` at the tagged commit and i
   S3 buckets with 0.4.0-rc.2, 50.6 billion objects in all, each writing its dataset to a GCS bucket with default
   credentials
   ([2026-11-13](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#spill-at-billion-scale-and-a-spill-cap-too-small-2026-11-13));
-  versioned listings of seven small public S3 buckets and one GCS bucket; anonymous listings of a public Azure
-  Blob container of 1.84 million blobs; a private GCS bucket of 5.1 million objects, listed by an earlier
-  build; and, of S3-compatible stores, MinIO. New in this release, the end check of S3 listings ran
+  anonymous listings of a public Azure Blob container of 1.84 million blobs; a private GCS bucket of 5.1
+  million objects, listed by an earlier build; and, of S3-compatible stores, MinIO. Versioned listings of seven
+  small public S3 buckets and one GCS bucket were checked against an independent listing, as
+  [Known limits](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/troubleshooting.md#known-limits)
+  records; measurements.md has no record of those runs. New in this release, the end check of S3 listings ran
   against MinIO, where it stops the listing 0.4.0 completed with keys missing, and on AWS
-  ([S3-compatible stores](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/sources/s3.md#s3-compatible-stores)).
+  ([2026-11-25](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#the-end-check-of-s3-listings-2026-11-25)).
   The rest of what is new, the library's live sources included, has no run against the real service recorded
   in measurements.md; it is tested against fakes, emulators, replays and CI's Linux, macOS and Windows
-  runners. Still not run against the real service: S3 credential refresh
-  ([#577](https://github.com/varveio/swath/issues/577)); Azure Blob with a SAS, Shared Key or Entra ID
-  ([#346](https://github.com/varveio/swath/issues/346)); and datasets written to S3 and Azure Blob buckets.
+  runners. Still not run against the real service: credential renewal during a run, on any service (S3's
+  credential refresh is [#577](https://github.com/varveio/swath/issues/577)); Azure Blob with a SAS, Shared Key
+  or Entra ID ([#346](https://github.com/varveio/swath/issues/346)); a service throttling a run
+  ([not measured](https://github.com/varveio/swath/blob/v0.5.0-rc.1/docs/internals/measurements.md#skipped-or-not-measured));
+  and datasets written to S3 and Azure Blob buckets.
 
 ## Limits and known issues
 
@@ -227,7 +249,11 @@ results are in the `ci.yml` run of the push to `main` at the tagged commit and i
 - **Experimental packages.** Every library package new in this release (`source` and its providers, `command`,
   `reader/listing`, `reader/view`, `reader/du` and `reader/du/tree`) is experimental: its API may change in any
   release. `view.OpenDir` opens a dataset with SeekParquet's default reader limits, which a dataset with very
-  long keys can exceed ([#500](https://github.com/varveio/swath/issues/500)).
+  long keys can exceed ([#500](https://github.com/varveio/swath/issues/500)). `view.Open` checks the values
+  it reads, not each part's schema: on a dataset a program opened without `Dataset.CheckSchema`, which
+  `view.OpenDir` runs, `Summarize` can refuse a defect with another error class than the check's, or sum a
+  column whose logical annotation alone is wrong
+  ([The inventory view](https://github.com/varveio/swath/blob/v0.5.0-rc.1/reader/README.md#the-inventory-view)).
   `go install github.com/varveio/swath/cmd/swath@v0.5.0-rc.1`, and an outside program that imports the library
   by this version, have not been tried yet ([#567](https://github.com/varveio/swath/issues/567)); the release
   builds the command as an outside project does, from its own checkout.
