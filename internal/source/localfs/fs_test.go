@@ -215,8 +215,10 @@ func checkRows(t *testing.T, rows []Row, fields Fields, portable bool) {
 	if runtime.GOOS == "darwin" && !z.Has(HasBtime) {
 		t.Errorf("z: no birth time on darwin: %+v", z)
 	}
+	// A directory has a row of its own but with --no-dirs; the caller
+	// checks which rows are listed.
 	for k, n := range map[string]uint32{"z": 1, "dangling": 1, "mixed/": 1} {
-		if e := by[k]; fields == Links && (e.Nlink != n || !e.Has(HasNlink|HasDev)) {
+		if e, ok := by[k]; fields == Links && (ok || k != "mixed/") && (e.Nlink != n || !e.Has(HasNlink|HasDev)) {
 			t.Errorf("links tier: %s: nlink %d, presence %b", k, e.Nlink, e.Present)
 		}
 	}
