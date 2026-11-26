@@ -761,8 +761,12 @@ func runDu(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 // command is one of the list commands: swath list, swath du (a count that
-// totals per prefix), and the swath diag forms of list and count.
-type command struct{ diag, count, du bool }
+// totals per prefix), and the swath diag forms of list and count; embed is
+// a swath list a program that embeds swath runs (List), nil for Main's.
+type command struct {
+	diag, count, du bool
+	embed           *embedding
+}
 
 // name is the command as typed.
 func (c command) name() string {
@@ -1077,10 +1081,13 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 	statusNow.Store(&status)
 	defer statusNow.Store(nil)
 	spill := &spillWatch{dir: cfg.Output.Dir, wait: o.spillWait, fixed: cfg.Limits.Spill.Max > 0}
-	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, spill, cfg.Warn, tt.disp)
+	cmd.embed.start()
+	stopWatch := supervise(ctx, cancel, cfg.Progress, cfg.Output.Dir, o.stall, spill, cfg.Warn, tt.disp, cmd.embed)
 	sum, err := inventory.Run(ctx, cfg)
+	cmd.embed.settled(embedRun{local: pf.Scheme == "", opened: sum.Invocation.SchemaID != ""}, err)
 	_ = faults.At("run-returned") // tests: a stop cause arriving while the run settles
 	stopWatch()
+	cmd.embed.stopped(cfg.Progress)
 	tt.disp.stop()
 	if prof != nil {
 		prof.stop()

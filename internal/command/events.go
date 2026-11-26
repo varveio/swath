@@ -318,7 +318,11 @@ func (l *eventLog) ended(o outcome) { l.result.Store(&o) }
 // failure prints "swath: MESSAGE" (and a usage error's help hint), with
 // -v the outcome as one JSON line before it; in json the outcome event
 // ends every run, and any failure. -qq prints nothing.
-func conclude(err error) int {
+func conclude(err error) int { return concluded(err).ExitCode }
+
+// concluded is conclude's: it ends a command on stderr and returns its
+// outcome.
+func concluded(err error) outcome {
 	if errors.Is(err, pflag.ErrHelp) {
 		err = nil
 	}
@@ -344,7 +348,7 @@ func conclude(err error) int {
 		o.Message = cr.Error() // the cause is -v's
 	}
 	if l.quiet >= 2 {
-		return o.ExitCode
+		return o
 	}
 	if l.json {
 		if err != nil || l.attempt != "" {
@@ -360,24 +364,24 @@ func conclude(err error) int {
 			}
 			noteFinal(errOut, l.line(level, evOutcome, msg, outcomeFields{o.Class, o.ExitCode, o.Resumable, o.Cause, o.Status, o.Complete, o.StopReason, o.Unreadable}))
 		}
-		return o.ExitCode
+		return o
 	}
 	if err == nil {
-		return o.ExitCode
+		return o
 	}
 	if ee != nil && l.shows(lvInfo) {
 		b, _ := json.Marshal(o)
 		noteFinal(errOut, fmt.Sprintf("swath: outcome: %s\n", b))
 	}
 	if ee != nil && ee.stated {
-		return o.ExitCode // the closing line said it
+		return o // the closing line said it
 	}
 	noteFinal(errOut, "swath: "+escapeControl(err.Error())+"\n")
 	var sh seeHelp
 	if errors.As(err, &sh) {
 		noteFinal(errOut, sh.see()+"\n")
 	}
-	return o.ExitCode
+	return o
 }
 
 // persistFor is how long requests must fail with one cause, none

@@ -14,6 +14,12 @@
 // a command-line timeout stopped and that has not finished stopping after a
 // grace period. docs/library.md has the details.
 //
+// List runs the work of swath list in the calling process from a typed
+// ListOptions instead of arguments, through the same code as Main, and
+// returns a typed result whose error matches stable reasons with
+// errors.Is. It sets no signal handling and no forced exit: the run stops
+// when its context ends.
+//
 // The package is experimental: its API may change in any release.
 package command
 

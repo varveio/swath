@@ -16,7 +16,7 @@ The library is **experimental**: it is implemented and tested, but its API may c
 | `github.com/varveio/swath/source/gcs` | `Open`, which opens a Google Cloud Storage bucket as a `Source` ([Google Cloud Storage](#google-cloud-storage)) |
 | `github.com/varveio/swath/source/azblob` | `Open`, which opens an Azure Blob Storage container as a `Source` ([Azure Blob Storage](#azure-blob-storage)) |
 | `github.com/varveio/swath/source/local` | `Open`, which opens a directory the program opened as a `Source` ([A local directory](#a-local-directory)) |
-| `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
+| `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)); `List`, one `swath list` run from typed options ([Run a listing from Go](#run-a-listing-from-go)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
 | `github.com/varveio/swath/reader/du` | `New`, a `Tally` that sums a walk's entries per key prefix by du's rules ([Sum a walk as du does](#sum-a-walk-as-du-does)) |
 | `github.com/varveio/swath/reader/du/tree` | `Select` and `Render`, which choose and draw the view `swath du` shows on a terminal, with columns of the program's own ([Draw the view as swath du does](#draw-the-view-as-swath-du-does)) |
@@ -437,6 +437,64 @@ signal.
 `--version`, the run report, the journal, Parquet `created_by` and the User-Agent give is swath's own: the version
 of swath the host requires, or `devel` for a local replacement or a workspace module, with no revision, unless
 the host's build sets swath's version or revision at link time.
+
+## Run a listing from Go
+
+`command.List(ctx, opts)` runs the work of `swath list` in the calling process from a `command.ListOptions` instead of
+arguments: `Source` is the SOURCE operand, and each other field is the flag its tag names, with the meaning, values
+and default `swath list --help` gives it. No field is parsed as an argument, so a source or a value that begins with
+`-` is taken as it is. `List` goes through the code `Main` runs: the same rows, dataset, run report, progress file and
+outcome. It returns a `ListResult` (completed, canceled or failed, with the class, cause and exit code `swath list`
+would end with, [Exit codes](reference/exit-codes.md)) and, for a run that did not complete, a `*command.ListError`
+that `errors.Is` matches to a stable reason, so a program branches without reading messages:
+
+| Reason | When |
+|---|---|
+| `command.ErrOutputInUse` | another run, in this process or another, holds the output's lock; that run is left as it is |
+| `command.ErrSourceNotFound` | the bucket, the container or the local root does not exist |
+| `command.ErrSourceDenied` | the source refused the credentials or the access, or there were none, or the local root cannot be opened |
+| `command.ErrUsage` | the options were refused before the run started (class `usage`, exit 2) |
+| `context.Canceled`, `context.DeadlineExceeded` | the run stopped because `ctx` ended (its error is `ctx`'s error or cause), or `ctx` ended before the call got its turn: the result's `Status` is `ListCanceled`. A `ctx` that ends after the run failed otherwise, while the output is finalized or `Progress` runs, leaves a failed run failed |
+
+A failure of the output (a bucket output that is not there, a directory that cannot be made) or of a file the run reads
+besides its source (`--seed-from`, `--ca-bundle`) matches none of the source's reasons; a source's failure matches its
+reason whether the output is a directory or a bucket. The error's text is the line
+`swath list` prints and may change in any release.
+
+```go
+r, err := command.List(ctx, command.ListOptions{
+	Source:   "s3://example-bucket/logs/",
+	Output:   "/data/logs-inventory",
+	Progress: func(p command.ListProgress) { log.Printf("%s: %d rows", p.State, p.RowsFetched) },
+})
+switch {
+case errors.Is(err, command.ErrOutputInUse):
+	// another run is writing there
+case errors.Is(err, context.Canceled):
+	// r.Resumable: swath resume can continue it
+case err != nil:
+	log.Fatal(err)
+}
+```
+
+The package's [`ExampleList`](../command/example_test.go) is a whole program, which the tests run.
+
+`Progress`, when set, is handed the run's progress (`ListProgress`, the fields of
+[`progress.json`](watch-a-run.md)) at the progress file's cadence, from one goroutine at a time; a slow callback
+misses the snapshots taken meanwhile and gets the latest, and holds up neither the progress file nor the stall
+timeout. The callback samples on the tick the progress file is written, from its own snapshot. A run that started
+hands it its final progress once the run has ended and its dataset, report and outcome are written, before `List`
+returns; only that progress says `done` or `failed`. `List` waits for every call to return, and a call that calls `List` waits for the run that calls it to end, as
+any other call does. The progress file is written as before.
+
+Unlike `Main`, `List` sets no signal handling and no forced exit: the run stops when `ctx` ends, and `List` returns
+once it has stopped and recorded its outcome. Like `Main` it turns the Azure SDK's own log off. Calls in one process
+run one at a time: a call waits for the run before it, or for its own `ctx` to end, when it returns canceled and runs
+nothing, as a call whose `ctx` had ended does. A panic out of `List` (from a `Stdout` or `Stderr`) leaves the next call
+its turn. A process should not call `Main` and `List` at once. `Stdout` and `Stderr` take what the
+command writes there (nil discards it), and a writer that is not an `*os.File` is not a terminal. For a run isolated
+from the program, call `List` in a child process the program starts. A local source is given by its path:
+`ListOptions` takes no opened directory yet.
 
 ## Not in the library yet
 
