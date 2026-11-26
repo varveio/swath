@@ -7,6 +7,12 @@ Notable changes per release. The human summary of the current release is in the
 
 ### Added
 
+- `command.List` (package `github.com/varveio/swath/command`, experimental) runs one `swath list` in the calling
+  process from a typed `ListOptions` instead of arguments, through the code `Main` runs, and returns a `ListResult`
+  (completed, canceled or failed). The error of a run that did not complete matches `ErrOutputInUse`,
+  `ErrSourceNotFound`, `ErrSourceDenied`, `ErrUsage` or the context's error with `errors.Is`. A `Progress` callback
+  gets the run's progress at the progress file's cadence. It sets no signal handling and no forced exit
+  ([library guide](docs/library.md#run-a-listing-from-go)). The `swath` command does not change (#691).
 - A dataset's manifest records the build that wrote it (`extensions.swath.written_by`: tool, version and
   revision). The member is optional: older readers ignore it and older manifests open without it.
   `swath show -v` prints it.

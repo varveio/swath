@@ -875,8 +875,9 @@ func progressWrite(dir string, pr *inventory.Progress) {
 // stops as stuck. A source without Frontier is live by its answered
 // requests (Answered). It is the only place that decides a run cannot go
 // on; nothing in the pipeline gives up on a slow source. It also watches
-// listing wait on a full spill cap (spill), which may stop the run.
-func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *inventory.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(code, msg string), d *display) (stop func()) {
+// listing wait on a full spill cap (spill), which may stop the run, and
+// offers e (nil: none) a snapshot whenever the progress file is due.
+func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *inventory.Progress, dir string, stall time.Duration, spill *spillWatch, warn func(code, msg string), d *display, e *embedding) (stop func()) {
 	done := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
@@ -902,9 +903,12 @@ func supervise(ctx context.Context, cancel context.CancelCauseFunc, pr *inventor
 			case now := <-t.C:
 				s := pr.Snapshot()
 				d.offer(s)
-				if dir != "" && now.Sub(written) >= every-tick/2 {
+				if now.Sub(written) >= every-tick/2 {
 					written = now
-					writeProgress(dir, pr)
+					if dir != "" {
+						writeProgress(dir, pr)
+					}
+					e.offer(s)
 				}
 				if err := spill.check(s, now); err != nil {
 					cancel(err)
