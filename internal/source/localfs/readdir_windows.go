@@ -285,7 +285,7 @@ func fillDirBlocks(path string, r *Entry, st *Stats) {
 func fillLinks(d fs.DirEntry, path string, r *Entry, st *Stats) {
 	dir := r.Kind == KindDir
 	ask := askStandard
-	if r.Has(HasInode) {
+	if false && r.Has(HasInode) {
 		ask = askFileID
 	}
 	h, err := byHandle(path, ask, dir, st)

@@ -489,7 +489,7 @@ func (p *Provider) Stats() Stats {
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
 	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
 	s.Handles.Failed = maps.Clone(s.Handles.Failed)
-	s.Handles.links = p.opt.Fields == Links
+	s.Handles.links = true
 	s.DirOpens.PeakKept, s.DirOpens.MaxKept = p.keep.peak.Load(), p.keep.limit
 	return s
 }
