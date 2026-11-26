@@ -430,7 +430,7 @@ that `errors.Is` matches to a stable reason, so a program branches without readi
 | `command.ErrSourceNotFound` | the bucket, the container or the local root does not exist |
 | `command.ErrSourceDenied` | the source refused the credentials or the access, or there were none, or the local root cannot be opened |
 | `command.ErrUsage` | the options were refused before the run started (class `usage`, exit 2) |
-| `context.Canceled`, `context.DeadlineExceeded` | `ctx` had ended when the run stopped, or while the call waited for its turn: the result's `Status` is `ListCanceled`. A `ctx` that ends later, while the output is finalized or `Progress` runs, leaves a failed run failed |
+| `context.Canceled`, `context.DeadlineExceeded` | the run stopped because `ctx` ended (its error is `ctx`'s error or cause), or `ctx` ended before the call got its turn: the result's `Status` is `ListCanceled`. A `ctx` that ends after the run failed otherwise, while the output is finalized or `Progress` runs, leaves a failed run failed |
 
 A failure of the output (a bucket output that is not there, a directory that cannot be made) or of a file the run reads
 besides its source (`--seed-from`, `--ca-bundle`) matches none of the source's reasons; a source's failure matches its
@@ -460,13 +460,14 @@ The package's [`ExampleList`](../command/example_test.go) is a whole program, wh
 misses the snapshots taken meanwhile and gets the latest, and holds up neither the progress file nor the stall
 timeout. The callback samples on the tick the progress file is written, from its own snapshot. A run that started
 hands it its final progress once the run has ended and its dataset, report and outcome are written, before `List`
-returns. `List` waits for every call to return, and a call that calls `List` waits for the run that calls it to end, as
+returns; only that progress says `done` or `failed`. `List` waits for every call to return, and a call that calls `List` waits for the run that calls it to end, as
 any other call does. The progress file is written as before.
 
 Unlike `Main`, `List` sets no signal handling and no forced exit: the run stops when `ctx` ends, and `List` returns
 once it has stopped and recorded its outcome. Like `Main` it turns the Azure SDK's own log off. Calls in one process
 run one at a time: a call waits for the run before it, or for its own `ctx` to end, when it returns canceled and runs
-nothing. A process should not call `Main` and `List` at once. `Stdout` and `Stderr` take what the
+nothing, as a call whose `ctx` had ended does. A panic out of `List` (from a `Stdout` or `Stderr`) leaves the next call
+its turn. A process should not call `Main` and `List` at once. `Stdout` and `Stderr` take what the
 command writes there (nil discards it), and a writer that is not an `*os.File` is not a terminal. For a run isolated
 from the program, call `List` in a child process the program starts. A local source is given by its path:
 `ListOptions` takes no opened directory yet.

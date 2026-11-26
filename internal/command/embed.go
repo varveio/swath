@@ -39,11 +39,12 @@ type ListEnd struct {
 	Resumable bool
 	Complete  bool   // the output covers its whole scope
 	Reason    string // a Reason*, "" for none of them
-	// Canceled is the caller's context's error when that context had
-	// ended by the time the run's error was settled (inventory.Run
-	// returned, or the command stopped before it), nil otherwise: the run
-	// ended because it was canceled. A context that ends later, while the
-	// run is finalized or a progress callback runs, does not make it so.
+	// Canceled is the caller's context's error when the run's error, as
+	// it was settled (inventory.Run returned, or the command stopped
+	// before it), is that context's ending (canceledBy), nil otherwise:
+	// the run ended because it was canceled. A context that ends after the
+	// run failed otherwise, or while it is finalized or a progress
+	// callback runs, does not make it so.
 	Canceled error
 }
 
@@ -57,7 +58,7 @@ type embedding struct {
 	fed      chan struct{}
 	run      *embedRun // nil: the run stopped before it listed (inventory.Run)
 	final    *inventory.ProgressSnapshot
-	canceled error // ctx's error when the run's error was settled
+	canceled error // canceledBy(ctx, the run's error), once it is settled
 }
 
 // embedRun is what a run that listed tells a Reason by.
@@ -83,9 +84,11 @@ func (e *embedding) start() {
 }
 
 // offer queues s for the callback in place of a snapshot it has not
-// taken yet; it never waits. Only supervise's goroutine offers.
+// taken yet; it never waits. Only supervise's goroutine offers. A done or
+// failed snapshot is not offered: the callback has the run's end once the
+// command has ended (deliver), not before its report is written.
 func (e *embedding) offer(s inventory.ProgressSnapshot) {
-	if e == nil || e.feed == nil {
+	if e == nil || e.feed == nil || s.State == inventory.StateDone || s.State == inventory.StateFailed {
 		return
 	}
 	select {
@@ -103,16 +106,16 @@ func (e *embedding) offer(s inventory.ProgressSnapshot) {
 	}
 }
 
-// stopped records, once inventory.Run returned and supervise stopped, r,
-// whether the caller's context had ended, and the run's final snapshot
-// when it started, as the progress file keeps it; it ends the feed
-// without waiting for the callback, which may be waiting for what the
-// command writes after the run (deliver).
-func (e *embedding) stopped(pr *inventory.Progress, r embedRun) {
+// stopped records, once inventory.Run returned err and supervise
+// stopped, r, whether err is the caller's context's ending, and the run's
+// final snapshot when it started, as the progress file keeps it; it ends
+// the feed without waiting for the callback, which may be waiting for what
+// the command writes after the run (deliver).
+func (e *embedding) stopped(pr *inventory.Progress, r embedRun, err error) {
 	if e == nil {
 		return
 	}
-	e.run, e.canceled = &r, e.ctx.Err()
+	e.run, e.canceled = &r, canceledBy(e.ctx, err)
 	if e.feed == nil {
 		return
 	}
@@ -146,22 +149,31 @@ var listing = make(chan struct{}, 1)
 // returns how it ended; the lines Main prints at the end go to stderr too.
 // Unlike Main it sets no signal handling and no forced exit: cancelling ctx
 // stops the run. It turns the Azure SDK's own log off, as Main does. Calls
-// run one at a time; a call whose ctx ends while it waits for its turn
-// returns ctx's error, canceled, and runs nothing. progress (nil: none) is
+// run one at a time; a call whose ctx ends while it waits for its turn, or
+// has ended when it gets it, returns ctx's error, canceled, and runs
+// nothing. progress (nil: none) is
 // handed a snapshot at the progress file's cadence, the latest one when it
 // is slow, and the final one once the command has ended, before List
 // returns; List waits for it to return.
 func List(ctx context.Context, args []string, stdout, stderr io.Writer, progress func(inventory.ProgressSnapshot)) ListEnd {
-	select {
-	case listing <- struct{}{}:
-	case <-ctx.Done():
-		err := fmt.Errorf("waiting for another run in this process: %w", ctx.Err())
+	notRun := func(err error) ListEnd {
 		o := classify(err, nil, "")
 		return ListEnd{Err: err, Class: o.Class, ExitCode: o.ExitCode, Canceled: ctx.Err()}
 	}
+	select {
+	case listing <- struct{}{}:
+	case <-ctx.Done():
+		return notRun(fmt.Errorf("waiting for another run in this process: %w", ctx.Err()))
+	}
+	if ctx.Err() != nil { // the select takes the turn as readily as the end
+		<-listing
+		return notRun(fmt.Errorf("before the run: %w", ctx.Err()))
+	}
 	e := &embedding{ctx: ctx, progress: progress}
-	end := list(ctx, e, args, stdout, stderr)
-	<-listing
+	end := func() ListEnd {
+		defer func() { <-listing }() // a panic out of the command too
+		return list(ctx, e, args, stdout, stderr)
+	}()
 	e.deliver()
 	return end
 }
@@ -176,7 +188,7 @@ func list(ctx context.Context, e *embedding, args []string, stdout, stderr io.Wr
 	defer func() { errOut, stdoutFile, stderrFile = prevErr, prevOut, prevErrFile }()
 	err := runWith(ctx, command{embed: e}, args, stdout, nil, false, nil)
 	if e.run == nil {
-		e.canceled = ctx.Err() // the command stopped before the run: its error is settled now
+		e.canceled = canceledBy(ctx, err) // the command stopped before the run: its error is settled now
 	}
 	o := concluded(err)
 	end := ListEnd{Class: o.Class, Cause: o.Cause, ExitCode: o.ExitCode, Resumable: o.Resumable, Complete: o.Complete}
@@ -190,6 +202,16 @@ func list(ctx context.Context, e *embedding, args []string, stdout, stderr io.Wr
 		}
 	}
 	return end
+}
+
+// canceledBy is ctx's error when err is ctx's ending: it matches ctx's
+// cause (a run stopped by it fails with that) or ctx's error. nil
+// otherwise, also when ctx ended after err was settled by something else.
+func canceledBy(ctx context.Context, err error) error {
+	if c := ctx.Err(); c != nil && err != nil && (errors.Is(err, context.Cause(ctx)) || errors.Is(err, c)) {
+		return c
+	}
+	return nil
 }
 
 // writerRef is a writer that can key a map (diagSinks) whatever it holds.

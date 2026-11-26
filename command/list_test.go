@@ -15,12 +15,15 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/varveio/swath/internal/command"
+	"github.com/varveio/swath/internal/faults"
 	"github.com/varveio/swath/internal/journal"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/s3/s3test"
@@ -307,32 +310,35 @@ func TestListUsage(t *testing.T) {
 }
 
 // TestListCanceled: a run whose context is canceled while a request is in
-// flight ends canceled, and its error is the context's.
+// flight ends canceled, and its error is the context's, whether the
+// context was canceled with a cause or without.
 func TestListCanceled(t *testing.T) {
 	s3test.NoCredentials(t)
 	t.Setenv("AWS_REGION", "")
 	t.Setenv("AWS_DEFAULT_REGION", "")
-	reached := make(chan struct{})
-	var once sync.Once
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		once.Do(func() { close(reached) })
-		<-r.Context().Done() // held until the run lets go of the request
-	}))
-	defer srv.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-reached
-		cancel()
-	}()
-	out := filepath.Join(t.TempDir(), "ds")
-	r, err := List(ctx, ListOptions{Source: "s3://bkt/p/", EndpointURL: srv.URL, S3PathStyle: new(true), Anonymous: true, Workers: 1, Output: out})
-	select {
-	case <-reached:
-	default:
-		t.Fatal("no request reached the server")
-	}
-	if r.Status != ListCanceled || !errors.Is(err, context.Canceled) || errors.Is(err, ErrSourceNotFound) || r.ExitCode == 0 {
-		t.Errorf("%+v %v", r, err)
+	for _, cause := range []error{nil, errors.New("the caller's cause")} {
+		reached := make(chan struct{})
+		var once sync.Once
+		srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			once.Do(func() { close(reached) })
+			<-r.Context().Done() // held until the run lets go of the request
+		}))
+		ctx, cancel := context.WithCancelCause(context.Background())
+		go func() {
+			<-reached
+			cancel(cause)
+		}()
+		out := filepath.Join(t.TempDir(), "ds")
+		r, err := List(ctx, ListOptions{Source: "s3://bkt/p/", EndpointURL: srv.URL, S3PathStyle: new(true), Anonymous: true, Workers: 1, Output: out})
+		srv.Close()
+		select {
+		case <-reached:
+		default:
+			t.Fatal("no request reached the server")
+		}
+		if r.Status != ListCanceled || !errors.Is(err, context.Canceled) || errors.Is(err, ErrSourceNotFound) || r.ExitCode == 0 {
+			t.Errorf("cause %v: %+v %v", cause, r, err)
+		}
 	}
 }
 
@@ -475,17 +481,19 @@ func TestListCanceledAfterFailure(t *testing.T) {
 }
 
 // TestListFinalProgressAfterReport: the final progress comes once the
-// command has ended: the report it was asked for is written.
+// command has ended: the report it was asked for is written. It is the
+// only progress that says done, and the last.
 func TestListFinalProgressAfterReport(t *testing.T) {
 	src := tree(t, "a", "b")
 	report := filepath.Join(t.TempDir(), "report.json")
 	var mu sync.Mutex
 	var reported []bool
+	var states []string
 	_, err := List(context.Background(), ListOptions{Source: src, Output: filepath.Join(t.TempDir(), "ds"), Report: report,
-		Progress: func(ListProgress) {
+		Progress: func(p ListProgress) {
 			_, err := os.Stat(report)
 			mu.Lock()
-			reported = append(reported, err == nil)
+			reported, states = append(reported, err == nil), append(states, p.State)
 			mu.Unlock()
 		}})
 	if err != nil {
@@ -493,6 +501,9 @@ func TestListFinalProgressAfterReport(t *testing.T) {
 	}
 	if len(reported) == 0 || !reported[len(reported)-1] {
 		t.Errorf("the final progress came before the report was written: %v", reported)
+	}
+	if n := slices.Index(states, "done"); n != len(states)-1 {
+		t.Errorf("states %v: done before the final progress", states)
 	}
 }
 
@@ -540,5 +551,73 @@ func TestListQueuedCanceled(t *testing.T) {
 	}
 	if _, err := List(context.Background(), ListOptions{Source: tree(t, "a")}); err != nil {
 		t.Errorf("a call after both: %v", err)
+	}
+}
+
+// TestListCanceledAfterRun: a context canceled once the run has failed,
+// after inventory.Run returned and before the command finalizes the run,
+// leaves the run failed with its reason.
+func TestListCanceledAfterRun(t *testing.T) {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	endpoint := s3test.Bucket(t, s3test.Keys(10, 2)) // serves bucket bkt only
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reached atomic.Bool
+	defer faults.Set(func(p string) error {
+		if p == "run-returned" {
+			reached.Store(true)
+			cancel()
+		}
+		return nil
+	})()
+	r, err := List(ctx, ListOptions{Source: "s3://nobucket/p/", EndpointURL: endpoint, S3PathStyle: new(true), Anonymous: true, Workers: 1,
+		Output: filepath.Join(t.TempDir(), "ds")})
+	if !reached.Load() {
+		t.Fatal("the run did not return")
+	}
+	if r.Status != ListFailed || !errors.Is(err, ErrSourceNotFound) || errors.Is(err, context.Canceled) {
+		t.Errorf("%+v %v", r, err)
+	}
+}
+
+// TestListCanceledTurnFree: a call whose context has ended returns
+// canceled and runs nothing, also when its turn is free. Each call's wait
+// has both its turn and its context's end ready, either of which it may
+// take; 64 calls take the turn at least once but with odds of 2^-64.
+func TestListCanceledTurnFree(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	src, dir := tree(t, "a"), t.TempDir()
+	for i := range 64 {
+		out := filepath.Join(dir, strconv.Itoa(i))
+		r, err := List(ctx, ListOptions{Source: src, Output: out})
+		if r.Status != ListCanceled || !errors.Is(err, context.Canceled) {
+			t.Fatalf("call %d: %+v %v", i, r, err)
+		}
+		if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("call %d ran: %v", i, err)
+		}
+	}
+}
+
+// TestListPanicReleasesTurn: a Stdout that panics, writing the report, and
+// a caller that recovers leave the next call its turn.
+func TestListPanicReleasesTurn(t *testing.T) {
+	src := tree(t, "a")
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the Stdout did not panic")
+			}
+		}()
+		_, _ = List(context.Background(), ListOptions{Source: src, Output: filepath.Join(t.TempDir(), "ds"), Report: "-",
+			Stdout: writeFunc(func([]byte) (int, error) { panic("the caller's Stdout") })})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // a guard: the next call waits for its turn
+	defer cancel()
+	if r, err := List(ctx, ListOptions{Source: src}); err != nil {
+		t.Errorf("the next call: %+v %v", r, err)
 	}
 }

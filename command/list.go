@@ -41,9 +41,10 @@ type ListOptions struct {
 	// that is shorter), from one goroutine at a time; a call that is slow
 	// misses the snapshots taken meanwhile and gets the latest. A run that
 	// started hands it its final progress last, once the run has ended and
-	// its dataset, report and outcome are written, before List returns.
-	// List waits for every call to return. A call that calls List waits
-	// for the run that calls it to end, as any other call does.
+	// its dataset, report and outcome are written, before List returns;
+	// only that progress says done or failed. List waits for every call
+	// to return. A call that calls List waits for the run that calls it to
+	// end, as any other call does.
 	Progress func(ListProgress)
 
 	// Output.
@@ -160,9 +161,10 @@ const (
 	// written, or there was nothing to do.
 	ListCompleted ListStatus = iota + 1
 	// ListCanceled is a run that ended early because its context ended:
-	// the context had ended when the run stopped, or while the call waited
-	// for its turn. A context that ends after that, while the run's output
-	// is finalized or Progress runs, leaves the result as it is.
+	// the run stopped on it (its error is the context's error or cause),
+	// or the context ended before the call got its turn. A context that
+	// ends after the run failed otherwise, while the run's output is
+	// finalized or Progress runs, leaves the result as it is.
 	ListCanceled
 	// ListFailed is any other run that did not complete, a partial output
 	// (exit 3) included.
@@ -247,7 +249,8 @@ func (e *ListError) Unwrap() []error {
 // its outcome. Like Main it turns the Azure SDK's own log off. Calls to
 // List in one process run one at a time: a call waits for the run before
 // it to end, or for its own ctx to end, when it returns canceled and runs
-// nothing. Stderr is written through a goroutine; a line still waiting
+// nothing, as a call whose ctx had ended does. A panic out of List (from
+// Stdout or Stderr) leaves the next call its turn. Stderr is written through a goroutine; a line still waiting
 // for a Stderr that does not take it can be written after List returns.
 func List(ctx context.Context, opts ListOptions) (ListResult, error) {
 	stdout, stderr := opts.Stdout, opts.Stderr
