@@ -212,7 +212,7 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   `New` reads the root's device (refused under the `names` tier, or where the engine reads no device: the
   portable engine on a platform other than Linux, macOS and Windows), and `emit` keeps a `dir` row whose `dev`
   differs but hands on no child range for it (counter `other_device_dirs`). On Windows no device or volume is
-  compared (`otherDevice`; the `links` tier's `dev` is never compared either): a junction or a volume mount point is a `symlink` row, never walked, with or without the
+  compared (`otherDevice`, `volumeDev`; the `links` tier's `dev` is never compared either): a junction or a volume mount point is a `symlink` row, never walked, with or without the
   option, which is accepted (`filesystem_boundary` `reparse_point`) to record the filter. A directory reparse
   point of another tag (`IO_REPARSE_TAG_DFS`, a cloud placeholder) keeps the directory bit and is walked, and a
   path the redirector sends to another server shows no boundary at all: the option does not stop either. On macOS the opened-handle volume check also stops same-device

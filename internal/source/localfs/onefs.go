@@ -59,7 +59,7 @@ func rootDevice(fi fs.FileInfo, f Fields) (int64, error) {
 // otherDevice reports a directory row on another device than the root's,
 // with Options.OneFilesystem: it is listed but not walked. On Windows,
 // where the links tier gives each row its volume's serial number as dev,
-// none is compared (rootDevice).
+// none is compared (volumeDev, rootDevice).
 func (p *Provider) otherDevice(row *Row) bool {
-	return p.opt.OneFilesystem && !reparseLinks && row.Data.Has(HasDev) && row.Data.Dev != p.dev
+	return p.opt.OneFilesystem && !p.volumeDev && row.Data.Has(HasDev) && row.Data.Dev != p.dev
 }

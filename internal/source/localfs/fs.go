@@ -375,8 +375,11 @@ type Provider struct {
 	// are not sorted (order.Options.Unordered). Set before listing starts.
 	unsorted bool
 	file     bool // the root is not a directory (expandFile)
-	mu       sync.Mutex
-	stats    Stats
+	// volumeDev: the rows' dev is their volume's serial number (Windows, at
+	// the links tier), which OneFilesystem does not compare (otherDevice).
+	volumeDev bool
+	mu        sync.Mutex
+	stats     Stats
 	// warn tells the user of a directory left out (Open's warn); nil
 	// outside a run. warnMu serialises the workers' calls.
 	warn   func(code, msg string)
@@ -430,7 +433,7 @@ func New(root string, opt Options) (*Provider, error) {
 	if opt.Fields == Links && !handleLinks {
 		return nil, errLinksTier
 	}
-	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi}
+	p := &Provider{root: filepath.Clean(root), opt: opt, native: nativeEngine && !opt.Portable, file: !fi.IsDir(), rootInfo: fi, volumeDev: reparseLinks}
 	p.keep.limit = keepLimit()
 	if opt.OneFilesystem {
 		if p.dev, err = rootDevice(fi, opt.Fields); err != nil {
