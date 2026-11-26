@@ -93,6 +93,32 @@ exFAT (no file ID; `TestAllocatedBytes` covers the class without IDs). Runs
 ./internal/source/localfs`; the rows are the `MEASURE` lines of its output. (The runs above made it through
 `go-stress.yml` before the test was gated.)
 
+## The end check of S3 listings (2026-11-25)
+
+What the end check ([range engine](range-engine.md), `end_check` counters) cost on AWS and caught on MinIO, as
+pull request [#684](https://github.com/varveio/swath/pull/684) records it: its description, and the message of
+its commit `624b4699`, which added the folder ladder that confirms a final page with nothing listed past it, and
+the cost paragraph of [range-engine.md](range-engine.md). The runs used builds of that branch; their
+repetitions and host were not recorded.
+
+- **AWS, anonymous.** With the ladder, at 1 and 64 workers, the check added 1 to 6 requests a run to listings of
+  2,180 to 62,557 keys. Before the ladder (a build of the same branch whose check sent no request without a
+  key or folder listed past the page), a prefix of `noaa-gestofs-pds` and `nara-1950-census/1950census-maps/`
+  listed the same objects with the same requests as `main`: `end_check.claims` 6 and 37, nothing contradicted.
+- **MinIO** (the pinned Chainguard image; [s3.md](../sources/s3.md#s3-compatible-stores) names
+  `RELEASE.2026-11-23T00-10-37Z`), the first 250,000 keys of `nara-1950-census`: where `main` listed 107,651
+  keys and exited 0, the build exits 1, cause `omitted_keys`, at 1, 8 and 64 workers, with and
+  without the seed; `error.json` says `resumable: true`, and `swath resume` fails the same way. The ladder
+  answered 30,393 claims under four scopes with no wrong answer.
+- **versitygw and SeaweedFS 4.55**, the 10,761-key shapes bucket at 1, 8 and 64 workers: the same object counts,
+  nothing contradicted. range-engine.md adds Garage, which lists that bucket whole too.
+
+Not recorded: which AWS buckets and prefixes the 2,180 to 62,557 keys were, each run's request count and the
+commands. The pull request's later commits, which changed how a contradicted page is asked again,
+and the merged build were not measured again. Not measured: versions listings, which the check does not cover;
+listings above 62,557 keys or above 64 workers on AWS; and the check's cost in time.
+`TestEndCheckHealthyStoresCostLittle` bounds the ladder's requests on the fixtures.
+
 ## Output identity with the Java tool
 
 Every comparison was row-identical on the 13 canonical columns, with identical minimum and maximum keys
