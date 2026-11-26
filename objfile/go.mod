@@ -16,7 +16,7 @@ require (
 	github.com/aws/smithy-go v1.28.9
 	github.com/johannesboyne/gofakes3 v1.2.0
 	github.com/parquet-go/parquet-go v0.32.1
-	github.com/varveio/seekparquet/go v0.2.1-0.20261126211023-da520db1b1b5
+	github.com/varveio/seekparquet/go v0.3.0
 	google.golang.org/api v0.316.0
 )
 

@@ -1179,7 +1179,7 @@ The thin reader's tests cover metadata parsing, schema checks, concrete decoders
 examples and the absence of cloud SDK dependencies (`TestNoCloudSDK`). Main-module
 `inventory` tests check rows from production writers against the registered schemas
 and concrete decoders. Generic execution tests and benchmarks live in
-[SeekParquet](https://github.com/varveio/seekparquet/tree/da520db1b1b5/go), including
+[SeekParquet](https://github.com/varveio/seekparquet/tree/go/v0.3.0/go), including
 parallel scan scheduling and folds.
 The former reader wrapper benchmarks were removed with those unreleased APIs;
 their dated results remain in

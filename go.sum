@@ -173,8 +173,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/twpayne/go-geom v1.7.0 h1:zMHTHNlenoHAc2ZSiHFh7SMoG0Wdw8gF0orBnrBhfjE=
 github.com/twpayne/go-geom v1.7.0/go.mod h1:y9Q2YcKKaC2PHXwtRvwEunOPx5Oa+U8aAxPmFvscROk=
-github.com/varveio/seekparquet/go v0.2.1-0.20261126211023-da520db1b1b5 h1:LsrynyQY/xjipN3sXewvtDKgyrPb/bRqY12vYciJbiQ=
-github.com/varveio/seekparquet/go v0.2.1-0.20261126211023-da520db1b1b5/go.mod h1:Glyac5E3ucgiRW0/eSMIv487Ztl3h5TMxcSOuMXGA08=
+github.com/varveio/seekparquet/go v0.3.0 h1:WQH+SFOCVS/3GBQ8zir+AjXlEENGgW20rUmjH62myPs=
+github.com/varveio/seekparquet/go v0.3.0/go.mod h1:Glyac5E3ucgiRW0/eSMIv487Ztl3h5TMxcSOuMXGA08=
 github.com/varveio/swath/objfile v0.4.0 h1:8aO7keMyQ/25o1oKq6SMcLi2UPvO4QyUSdjgefGPlJ0=
 github.com/varveio/swath/objfile v0.4.0/go.mod h1:DZqWTlQIeKX09bA61HPUeMSuLIN8Qs4/qkqfZ9BlsQA=
 github.com/varveio/swath/reader v0.4.0 h1:YsJeKfvSkYSWMszdojCg0DR7qgWLfnrQUg5Q9Qg6VcM=

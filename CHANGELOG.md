@@ -86,8 +86,8 @@ Notable changes per release. The human summary of the current release is in the
   GCS. A prefix the source URL cannot carry beside its SAS is not narrowed, and the report says so
   (`invocation.narrowing` `provider_declined_prefix`). An Azure run with such an include that was
   interrupted under 0.4.0 must be finished with 0.4.0: `swath resume` refuses it (exit 2) (#621).
-- The reader module, and the root module, use SeekParquet's v0.3.0 API (`github.com/varveio/seekparquet/go`,
-  pinned at a commit ahead of that release). A program that reads through `Dataset.SeekParquet()` follows its
+- The reader module, and the root module, use SeekParquet `go/v0.3.0` (`github.com/varveio/seekparquet/go`). A
+  program that reads through `Dataset.SeekParquet()` follows its
   breaking changes: `Dataset.Page` and the named reductions (`Dataset.Aggregate`, `Dataset.AggregateRows`) are
   removed (a page is a `List` of one entry more, a count `PlanRows` and `Plan.Count`, a reduction `FoldRows`), a
   zero `FoldOptions.ValueBudgetBytes` is unlimited and a negative one refused, `Dataset.Columns` takes read
