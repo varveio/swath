@@ -104,8 +104,10 @@ chunk ranges of 2048 sorted names that share one reference-counted directory fd,
   its name and claim no `links_once`. Owner (`uid`) is not read: it needs `READ_CONTROL` access, which a handle
   for attributes does not ask, and another call per entry, and a SID does not fit the column. The report's
   `entry_handles` counts every handle opened for an entry (`files`, `dirs`) and its failures by reason
-  (`failed`: `not_found`, `permission`, `changed`, `other`); at the stat tier `files` is 0 below a directory
-  root, `dirs` the directories (`fillDirBlocks`). It is absent where nothing is opened (Linux, macOS).
+  (`failed`: `not_found`, `permission`, `changed`, `other`). It is in the report at the `links` tier only
+  (`Handles.IsZero`): the stat tier's report is the one it was without the tier, though the stat tier opens the
+  directories (`fillDirBlocks`) and a file root (`fillRoot`) and counts them, and opens no file below a directory
+  root (`TestLinksTier`).
 - **Cancellation:** a huge directory stays cancellable. getdents checks the context every 64 reads, the sort
   is bracketed by checks (skipped with it in a count), the portable engine checks every 1,024 entries, and each stat loop checks the context.
 - **Descriptor-relative opens** (Linux, macOS; `dirfd_unix.go`). The root is opened by its path, as the run

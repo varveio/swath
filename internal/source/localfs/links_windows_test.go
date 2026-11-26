@@ -4,6 +4,7 @@
 package localfs
 
 import (
+	"encoding/json"
 	"maps"
 	"os"
 	"path/filepath"
@@ -198,6 +199,47 @@ func TestLinksTierHandleFails(t *testing.T) {
 	for _, k := range []string{"a/f", "y"} {
 		if d := by[k]; d.Nlink != 1 || !d.Has(HasNlink|HasDev) {
 			t.Errorf("%s: %+v, want nlink 1 and dev", k, d)
+		}
+	}
+}
+
+// TestHandlesReportLinksTierOnly: the run report has entry_handles at the
+// links tier only. At the stat tier the walk still reads a directory's own
+// space on disk, and a file root's, through a handle, and counts it, but
+// its report is the one it was before the links tier.
+func TestHandlesReportLinksTierOnly(t *testing.T) {
+	root, _ := linksTree(t)
+	for _, tc := range []struct {
+		root        string
+		fields      Fields
+		files, dirs int64
+		reported    bool
+	}{
+		{root, Stat, 0, 3, false},
+		{filepath.Join(root, "c"), Stat, 1, 0, false},
+		{root, Links, 5, 3, true},
+		{filepath.Join(root, "c"), Links, 1, 0, true},
+	} {
+		o, err := Open(tc.root, Options{Fields: tc.fields}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		walk(t, o.p, 2, 1<<12)
+		rep := o.Report()
+		st := rep.Stats.(*Stats)
+		if st.Handles.Files != tc.files || st.Handles.Dirs != tc.dirs {
+			t.Errorf("%s %s: handles %+v, want %d files and %d directories", tc.root, tc.fields, st.Handles, tc.files, tc.dirs)
+		}
+		b, err := json.Marshal(rep.Stats)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := m["entry_handles"]; ok != tc.reported {
+			t.Errorf("%s %s: entry_handles reported %v, want %v: %s", tc.root, tc.fields, ok, tc.reported, m["entry_handles"])
 		}
 	}
 }

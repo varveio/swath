@@ -112,7 +112,7 @@ type Stats struct {
 	LongPaths  LongPaths `json:"long_paths"`
 	DirOpens   DirOpens  `json:"dir_opens"`
 	// Handles count the entries read through a handle of their own
-	// (Windows); absent elsewhere.
+	// (Windows). The report has them at the links tier only (IsZero).
 	Handles Handles `json:"entry_handles,omitzero"`
 	// unreadTo is the Expand's emitter, told what it did not read (unread);
 	// nil when the emitter takes no reports.
@@ -169,7 +169,15 @@ type Handles struct {
 	// the reverse) or other. The entry keeps what the directory listing
 	// said of it, and what only the handle gives stays null.
 	Failed map[string]int64 `json:"failed,omitempty"`
+	// links: the listing reads at the links tier (Provider.Stats), the
+	// one whose report has them.
+	links bool
 }
+
+// IsZero leaves Handles out of the report but at the links tier, so that
+// the stat tier's report is the one it was before the tier: its counts
+// (the directories, a file root) stay for the tests.
+func (h Handles) IsZero() bool { return !h.links }
 
 // errHandleChanged: a handle opened at the links tier found a directory
 // where the directory listing had a file, or the reverse (fillLinks).
@@ -480,6 +488,7 @@ func (p *Provider) Stats() Stats {
 	s.LongPaths.Failed = maps.Clone(s.LongPaths.Failed)
 	s.DirOpens.Failed = maps.Clone(s.DirOpens.Failed)
 	s.Handles.Failed = maps.Clone(s.Handles.Failed)
+	s.Handles.links = p.opt.Fields == Links
 	s.DirOpens.PeakKept, s.DirOpens.MaxKept = p.keep.peak.Load(), p.keep.limit
 	return s
 }
