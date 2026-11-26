@@ -65,7 +65,8 @@ The view fills the terminal's height from the largest down, opening the largest 
 heading and the line of totals on screen. An entry smaller than 0.5 % of the total (more on a short terminal)
 gets no line of its own: a long tail of small prefixes stays in its `(N more)` line, and the view can end before
 the terminal is full. On a narrow terminal the bar shrinks, then the share and the date go; a long path is cut in
-the middle, keeping its end, and a line never wraps. Every figure is exact, whatever the size of the source.
+the middle, keeping its end, and a line wraps only on a very narrow terminal or under a path nested many levels
+deep. Every figure is exact, whatever the size of the source.
 
 The line under the view gives the total once, exactly, with the other figure where the source has one
 (`36.5 MiB on disk in 6 files · 100 MiB of data`); `-q` leaves it out. Color follows `--color` and `NO_COLOR`.

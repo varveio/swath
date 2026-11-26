@@ -23,7 +23,9 @@ type Layout struct {
 	// Color styles the heading, the bar and the fold rows with ANSI escapes.
 	Color bool
 	// Loc is the dates' zone (nil: time.Local), named once, on the total's
-	// row.
+	// row. The date column is padded by bytes, as swath du pads it, so a
+	// zone named outside ASCII moves the total's later cells left by its
+	// bytes beyond its columns.
 	Loc *time.Location
 	// SizeHeading and CountHeading head the size and count columns ("":
 	// "size" and "objects"; swath du writes "on disk" for the space on
@@ -96,21 +98,38 @@ var eighths = [...]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
 // for a row with Missing objects; the counts are Count's; the dates are
 // local, the zone named on the total's row.
 //
-// Rows fit the width. As it shrinks, columns go in this order: the bar
-// narrows and goes, then the share, then the date, then the caller's
-// columns from the last to the first; the size, the count and the path
-// stay, the path cut in the middle (Clip) where the row would pass the
-// width. Only a width too narrow for the size, the count and the
-// indented path's ellipsis is passed. The names are written as given: the caller escapes them for the
-// terminal.
+// Rows fit the width. The paths keep a room: the longest indented path
+// below the total (two columns a level and its name), at most 16 columns,
+// and with the caller's columns at least the heading's "path". Where the
+// width leaves the paths less, columns go in this order: the bar narrows
+// and goes, then the share, then the date, then the caller's columns from
+// the last to the first; the size and the count stay. A path is cut in the
+// middle (Clip) to the room left, never below its indentation and an
+// ellipsis. So a line passes the width only where the room left is less
+// than that, a row indented deeper than the room or a width too narrow
+// for the size and the count, or, without the caller's columns (swath
+// du's view, unchanged), less than the heading's "path". The names are
+// written as given: the caller escapes them for the terminal.
 //
-// Render writes nothing for no rows, and refuses a column whose cells are
-// not one per row before writing anything.
+// The rows are in tree order: the first at level 0, each next one at most
+// one level below the row before it. Render writes nothing for no rows,
+// and before writing anything refuses rows out of that order, and a
+// column whose cells are not one per row or whose alignment is neither
+// Left nor Right.
 func Render(w io.Writer, l Layout, rows []Row, extra ...Column) error {
 	for _, c := range extra {
 		if len(c.Cells) != len(rows) {
 			return fmt.Errorf("tree: column %q has %d cells for %d rows", c.Heading, len(c.Cells), len(rows))
 		}
+		if c.Align != Left && c.Align != Right {
+			return fmt.Errorf("tree: column %q has alignment %d, neither Left nor Right", c.Heading, c.Align)
+		}
+	}
+	for i, prev := 0, -1; i < len(rows); i++ { // bounds the indentation by the rows
+		if l := rows[i].Level; l < 0 || l > prev+1 {
+			return fmt.Errorf("tree: row %d is at level %d after level %d: rows are in tree order from level 0", i, l, prev)
+		}
+		prev = rows[i].Level
 	}
 	if len(rows) == 0 {
 		return nil
@@ -201,6 +220,12 @@ func Render(w io.Writer, l Layout, rows []Row, extra ...Column) error {
 		return n
 	}
 	need := min(nameW, pathRoom) // the room the paths keep
+	if len(extra) > 0 {
+		// The total's path (alone on its row, not in nameW) and the
+		// heading's keep theirs too. swath du, with no columns of its own,
+		// keeps its view as it was.
+		need = max(need, len(pathHeading))
+	}
 	bar := 0
 	switch room := width - before(); {
 	case width >= wideView && room-wideBar-len(gutter) >= need:
@@ -244,8 +269,12 @@ func Render(w io.Writer, l Layout, rows []Row, extra ...Column) error {
 				b = append(b, dim...) // the bar's color ends with a reset
 			}
 		}
-		if shown.date {
-			b = append(pad(b, date, dateW, Left), gutter...)
+		if shown.date { // in bytes, as dateW and swath du's view
+			b = append(b, date...)
+			for range dateW - len(date) {
+				b = append(b, ' ')
+			}
+			b = append(b, gutter...)
 		}
 		for j, c := range extra[:shown.extra] {
 			cell := c.Heading

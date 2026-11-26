@@ -23,6 +23,17 @@
 // among the nodes given, so the view of a tree summed to two levels opens
 // two levels at most.
 //
+// The totals must add up: what the nodes directly under a node hold is
+// part of what it holds, each file counted under one name. Package du
+// counts a file with several hard links once within each prefix, so a
+// file with names under two sibling prefixes counts in both, and in their
+// parent once: their nodes hold more than it, and the view can show the
+// file's bytes twice, their shares together over 100 %. The du.Totals
+// alone cannot say which name to count it under; a caller whose hard links
+// cross prefixes attributes each such file to one of its names before it
+// sums (swath du takes its smallest), for instance by feeding package du
+// that name only.
+//
 // # Rows
 //
 // Select picks at most the rows asked for, from the largest down, and
@@ -39,9 +50,8 @@
 // with what the fold holds, or to leave empty. As the width shrinks,
 // Render drops the bar, then the share, then the date, then the caller's
 // columns from the last to the first; the size, the count and the path
-// stay, a path cut in the middle where its row would pass the width. No
-// row passes a width that holds the size, the count and the indented
-// paths' ellipses.
+// stay, a path cut in the middle where its row would pass the width.
+// Render says when a line can still pass it.
 //
 // Cells, Clip, Size, Count and Grouped are the measures and forms the view
 // uses, for a caller's own cells to match it.

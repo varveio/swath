@@ -5,6 +5,8 @@ package tree
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -102,6 +104,25 @@ func TestSelectFolds(t *testing.T) {
 		got := rowsOf(Select(&Tree{Total: c.total, Nodes: nodes, Unreadable: c.unread}, c.rows))
 		if got != c.want {
 			t.Errorf("%s:\n%s\nwant\n%s", c.name, got, c.want)
+		}
+	}
+}
+
+// TestSelectRowBudget: a row budget whose four rows a line overflow int
+// (a quarter of a row's share is the floor) chooses rows as a large one
+// does, and does not divide by zero.
+func TestSelectRowBudget(t *testing.T) {
+	tree := &Tree{
+		Total: Node{Bytes: 300, Objects: 3, Children: 2},
+		Nodes: []Node{{Key: "a", Bytes: 200, Objects: 2, Children: -1}, {Key: "b", Bytes: 100, Objects: 1, Children: -1}},
+	}
+	want := rowsOf(Select(tree, 1000))
+	for _, rows := range []int{1 << (strconv.IntSize - 2), math.MaxInt} {
+		if got := rowsOf(Select(tree, rows)); got != want {
+			t.Errorf("%d rows:\n%s\nwant\n%s", rows, got, want)
+		}
+		if got := Select(&Tree{}, rows); len(got) != 1 {
+			t.Errorf("%d rows of an empty tree: %+v", rows, got)
 		}
 	}
 }

@@ -15,7 +15,8 @@ import (
 const floor = 200
 
 // Tree is the totals Select chooses rows from: the total and the nodes
-// under it.
+// under it, which add up (the package's documentation, Totals): a node's
+// children hold no more than it.
 type Tree struct {
 	// Total is the whole: its Key is the origin, the key prefix the totals
 	// are under ("" for a whole bucket or tree, "logs/" or "logs/2026/0").
@@ -202,7 +203,7 @@ func Select(t *Tree, rows int) []Row {
 	// node under the floor: a share of the total that one row of the view
 	// would barely show (floor, or a quarter of a row's share of the
 	// rows), and once none is left above it the view ends, shorter.
-	least := max(t.Total.Bytes/floor, t.Total.Bytes/int64(4*max(rows, 1)))
+	least := max(t.Total.Bytes/floor, t.Total.Bytes/4/int64(max(rows, 1))) // not 4*rows: it can overflow
 	type part struct{ i int }
 	var parts []part
 	if len(nodes[0].kids) > 0 {

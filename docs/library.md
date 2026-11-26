@@ -229,7 +229,8 @@ err := tree.Render(os.Stdout, tree.Layout{Label: "s3://bucket", Width: width}, r
 
 As the width shrinks, the bar goes, then the share, then the date, then the program's columns from the last to
 the first; the size, the count and the path stay, a path cut in the middle. The package's documentation says how
-a `du.Totals` becomes a node, and its example draws a column.
+a `du.Totals` becomes a node and why the totals must add up (a hard-linked file with names under two prefixes
+is counted under one of them), and its example draws a column.
 
 ## Evidence and errors
 

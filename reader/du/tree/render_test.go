@@ -5,6 +5,7 @@ package tree
 
 import (
 	"bytes"
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -179,5 +180,91 @@ func TestRenderLayout(t *testing.T) {
 		if err := Render(&b, Layout{}, rows, short); err == nil || b.Len() > 0 {
 			t.Errorf("%d cells for %d rows: %v, wrote %q", n, len(rows), err, b.String())
 		}
+	}
+}
+
+// TestRenderZoneBytes: the date column is padded by bytes, as swath du
+// pads it, so a zone named outside ASCII leaves the total's later cells
+// where swath du writes them. The lines are swath du's before the view
+// moved here.
+func TestRenderZoneBytes(t *testing.T) {
+	want := map[int]string{
+		120: "" +
+			"    size  objects  share                        newest          path\n" +
+			"2.00 TiB    37.1M   100%  ████████████████████  2025-11-15 界  s3://bucket\n" +
+			"1.50 TiB    12.0k  75.0%  ███████████████       2025-11-13        logs/\n" +
+			"1.00 TiB        1  50.0%  ██████████            2025-11-13          2025/app-events-archive.tar\n" +
+			" 512 GiB    12.0k  25.0%  █████                 2025-10-16          (1,234 more)\n" +
+			" 512 GiB    37.1M  25.0%  █████                                   (9 more)\n",
+		60: "" +
+			"    size  objects  share  newest          path\n" +
+			"2.00 TiB    37.1M   100%  2025-11-15 界  s3://bucket\n" +
+			"1.50 TiB    12.0k  75.0%  2025-11-13        logs/\n" +
+			"1.00 TiB        1  50.0%  2025-11-13          2025/a…ive.tar\n" +
+			" 512 GiB    12.0k  25.0%  2025-10-16          (1,234 more)\n" +
+			" 512 GiB    37.1M  25.0%                    (9 more)\n",
+	}
+	for width, w := range want {
+		var b bytes.Buffer
+		if err := Render(&b, Layout{Width: width, Loc: time.FixedZone("界", 0)}, viewRows()); err != nil {
+			t.Fatal(err)
+		}
+		if b.String() != w {
+			t.Errorf("width %d:\n%s\nwant\n%s", width, b.String(), w)
+		}
+	}
+}
+
+// TestRenderTotalColumn: a view of the total alone keeps the heading's
+// "path" and the total's ellipsis in the width when the caller adds a
+// column: the column goes first.
+func TestRenderTotalColumn(t *testing.T) {
+	rows := []Row{{Name: "root"}}
+	tag := Column{Heading: "1234567", Cells: []string{""}}
+	var b bytes.Buffer
+	if err := Render(&b, Layout{Width: 24}, rows, tag); err != nil {
+		t.Fatal(err)
+	}
+	if want := "" +
+		"size  objects  path\n" +
+		" 0 B        0  root\n"; b.String() != want {
+		t.Errorf("width 24:\n%s\nwant\n%s", b.String(), want)
+	}
+	for width := 19; width <= 60; width++ { // narrower, the size and the count alone pass it
+		b.Reset()
+		if err := Render(&b, Layout{Width: width}, rows, tag); err != nil {
+			t.Fatal(err)
+		}
+		checkWidth(t, b.String(), width)
+	}
+}
+
+// TestRenderRefuses: rows out of tree order (a negative level, a first row
+// not at level 0, a row more than one level below the one before it, a
+// level so large that its indentation would overflow) and a column of an
+// unknown alignment are refused before anything is written.
+func TestRenderRefuses(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		rows  []Row
+		align Align
+	}{
+		{"negative level", []Row{{Level: -1}}, Left},
+		{"first row below 0", []Row{{Level: 1}}, Left},
+		{"negative later", []Row{{}, {Level: -1}}, Left},
+		{"two levels down", []Row{{}, {Level: 1}, {Level: 3}}, Left},
+		{"huge level", []Row{{}, {Level: math.MaxInt}}, Left},
+		{"unknown alignment", []Row{{}, {Level: 1}}, Align(99)},
+		{"negative alignment", []Row{{}, {Level: 1}}, Align(-1)},
+	} {
+		var b bytes.Buffer
+		col := Column{Heading: "x", Align: c.align, Cells: make([]string, len(c.rows))}
+		if err := Render(&b, Layout{}, c.rows, col); err == nil || b.Len() > 0 {
+			t.Errorf("%s: %v, wrote %q", c.name, err, b.String())
+		}
+	}
+	var b bytes.Buffer
+	if err := Render(&b, Layout{}, []Row{{}, {Level: 1}, {Level: 2}, {Level: 1}, {Level: 1}}); err != nil {
+		t.Errorf("rows in tree order: %v", err)
 	}
 }

@@ -235,7 +235,9 @@ with it. Its API is experimental: it may change in any release. It imports only 
 
 `Select` chooses the rows from a `Tree`: the total and the nodes under it, each a prefix's or an object's
 `Bytes`, `Objects`, `Missing`, `Children` and `Newest`, from whatever the program counted (a `du.Totals` maps onto
-a `Node` field by field; the package documentation says how). `Render` writes them to a writer for a `Layout`: the
+a `Node` field by field; the package documentation says how). The totals must add up: `du` counts a hard-linked file
+once within each prefix, so a file with names under two sibling prefixes is attributed to one name before it is
+summed. `Render` writes them to a writer for a `Layout`: the
 total's label, the width, color on or off, the zone of the dates and the headings of the size and count columns.
 A program adds columns of its own: each `Column` is a heading, an alignment and one formatted cell per row, a fold
 row's included (its aggregate, or empty). As the width shrinks, `Render` drops the bar, then the share, then the
