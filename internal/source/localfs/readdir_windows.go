@@ -241,7 +241,7 @@ func fillRoot(path string, f Fields, r *Entry, st *Stats) {
 	if h.fileID != 0 {
 		r.Inode, r.Present = h.fileID, r.Present|HasInode
 	}
-	if f == Links && h.hasVolume && false { // THROWAWAY: links not filled
+	if f == Links && h.hasVolume {
 		r.Size, r.Nlink, r.Dev = h.size, h.links, int64(h.volume)
 		r.Present |= HasNlink | HasDev
 	}
@@ -301,7 +301,7 @@ func fillLinks(d fs.DirEntry, path string, r *Entry, st *Stats) {
 	if err != nil {
 		return
 	}
-	if _, w := winData(fi); w != nil && w.HasVolume && false { // THROWAWAY: links not filled
+	if _, w := winData(fi); w != nil && w.HasVolume {
 		r.Nlink, r.Dev = h.links, int64(w.Volume)
 		r.Present |= HasNlink | HasDev
 	}
