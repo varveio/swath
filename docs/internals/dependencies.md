@@ -22,6 +22,7 @@ Linked into `cmd/swath` unless marked tests.
 | `golang.org/x/sync` (`singleflight`) | BSD-3 | One token refresh shared by concurrent callers (`tokensource`: S3 bearer tokens, GCS credentials and Azure Entra tokens). |
 | `golang.org/x/sys` | BSD-3 | Linux `getdents64` and `statx` for the filesystem lister; Windows `LockFileEx` (the output lock), `NtCreateFile` and `FlushFileBuffers` (a directory's sync), `MoveFileEx` (write-through renames), console VT mode, `GetDiskFreeSpaceEx` (free space for the spill reserve) and the closed-pipe and sharing-violation errors. |
 | `github.com/spf13/pflag` | BSD-3 | The CLI's flag parser (`command`): GNU-style long options, `--no-NAME` negations, and the flag table that help and `swath completion` are generated from. |
+| `golang.org/x/text` (`width`) | BSD-3 | The East Asian width of a character, so that `swath du`'s view measures names and cells in terminal columns (`reader/du/tree`, which the reader module requires it for). |
 | `golang.org/x/term` | BSD-3 | Whether stderr is a terminal, and its width, for the progress line. |
 | `github.com/klauspost/compress` (`zstd`, `gzip`) | BSD-3 | zstd for Parquet pages and spill frames, gzip and zstd for text output; the standard library has no zstd, and the same module's gzip is a drop-in for `compress/gzip`. |
 | `github.com/varveio/seekparquet/go` | Apache-2.0 | The SeekParquet format's mechanisms: the part writer (`write`), the manifest's JSON, footer and key-page inspection, and the reader `swath-replay` serves datasets through. Pinned at its release `go/v0.2.0`. |

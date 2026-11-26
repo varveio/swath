@@ -19,6 +19,7 @@ The library is **experimental**: it is implemented and tested, but its API may c
 | `github.com/varveio/swath/command` | `Main`, the whole swath command line as a function ([Run the command line](#run-the-command-line)) |
 | `github.com/varveio/swath/reader/listing` | the requests, results, entries, evidence and error classes ([the listing contract](../reader/README.md#the-listing-contract)) |
 | `github.com/varveio/swath/reader/du` | `New`, a `Tally` that sums a walk's entries per key prefix by du's rules ([Sum a walk as du does](#sum-a-walk-as-du-does)) |
+| `github.com/varveio/swath/reader/du/tree` | `Select` and `Render`, which choose and draw the view `swath du` shows on a terminal, with columns of the program's own ([Draw the view as swath du does](#draw-the-view-as-swath-du-does)) |
 
 Pages, lookups and walks answer from the location as it is during the call. To ask the same questions of a saved inventory
 instead, or for the totals under several prefixes (a summary), open it with the `reader/view` package
@@ -207,6 +208,29 @@ own blocks); the prefix's own directory counts only when its entry is fed, and a
 so feed a `KindDir` at `""` with the root's blocks; and a same-device bind mount of an ancestor is a cycle that
 swath's walk enters and counts again, where GNU du skips it. Every bound and equality holds on acyclic traversal
 scopes only, and on a tree that does not change during the walk.
+
+## Draw the view as swath du does
+
+The package `github.com/varveio/swath/reader/du/tree` draws [the view](totals.md#the-view) of `swath du` from
+totals the program holds, live or from an inventory, and `swath du` draws its own with it. `Select` chooses the
+rows, at most as many as asked for, from a `Tree` (the total and its prefixes and objects, each with its bytes,
+objects, children and newest time); `Render` writes them for a width, with color or without, and with the
+program's own columns: a heading, an alignment and one formatted cell per row, a `(N more)` row's included or left
+empty. It imports only the standard library and `golang.org/x/text`'s width tables, and is experimental.
+
+```go
+rows := tree.Select(&tree.Tree{Total: total, Nodes: nodes}, 20)
+cost := tree.Column{Heading: "cost/mo", Align: tree.Right}
+for _, r := range rows {
+	cost.Cells = append(cost.Cells, monthly(r.Bytes)) // a fold's cell: what it holds
+}
+err := tree.Render(os.Stdout, tree.Layout{Label: "s3://bucket", Width: width}, rows, cost)
+```
+
+As the width shrinks, the bar goes, then the share, then the date, then the program's columns from the last to
+the first; the size, the count and the path stay, a path cut in the middle. The package's documentation says how
+a `du.Totals` becomes a node and why the totals must add up (a hard-linked file with names under two prefixes
+is counted under one of them), and its example draws a column.
 
 ## Evidence and errors
 

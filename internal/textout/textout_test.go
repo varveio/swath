@@ -19,7 +19,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 
 	"github.com/varveio/swath/internal/schema"
-	"github.com/varveio/swath/internal/totals"
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 type obj struct {
@@ -191,11 +191,12 @@ func TestFileCompressedAndAtomic(t *testing.T) {
 // then the date; the path is cut so that no line passes the width.
 func TestWriteView(t *testing.T) {
 	at := int64(1_763_210_310_000_000) // 2025-11-15T12:38:30Z
-	rows := []totals.ViewRow{
-		{Name: "s3://bucket", Bytes: 2048 << 30, Objects: 37_100_000, Newest: at, HasNewest: true},
-		{Name: "logs/", Level: 1, Bytes: 1536 << 30, Objects: 12_000, Newest: at - 3_600_000_000*48, HasNewest: true},
-		{Name: "2025/app-events-archive.tar", Level: 2, Bytes: 1024 << 30, Objects: 1, Newest: at - 3_600_000_000*48, HasNewest: true},
-		{Fold: true, Level: 2, Bytes: 512 << 30, Objects: 11_999, More: 1234, Newest: at - 3_600_000_000*24*30, HasNewest: true},
+	when := func(micros int64) *time.Time { t := time.UnixMicro(micros); return &t }
+	rows := []tree.Row{
+		{Name: "s3://bucket", Bytes: 2048 << 30, Objects: 37_100_000, Newest: when(at)},
+		{Name: "logs/", Level: 1, Bytes: 1536 << 30, Objects: 12_000, Newest: when(at - 3_600_000_000*48)},
+		{Name: "2025/app-events-archive.tar", Level: 2, Bytes: 1024 << 30, Objects: 1, Newest: when(at - 3_600_000_000*48)},
+		{Fold: true, Level: 2, Bytes: 512 << 30, Objects: 11_999, More: 1234, Newest: when(at - 3_600_000_000*24*30)},
 		{Fold: true, Level: 1, Bytes: 512 << 30, Objects: 37_088_000, More: 9},
 	}
 	want := map[int]string{
@@ -244,8 +245,8 @@ func TestWriteView(t *testing.T) {
 			t.Errorf("width %d:\n%s\nwant\n%s", width, b.String(), w)
 		}
 		for _, l := range strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n") {
-			if cells(l) > width {
-				t.Errorf("width %d: %q is %d columns", width, l, cells(l))
+			if tree.Cells(l) > width {
+				t.Errorf("width %d: %q is %d columns", width, l, tree.Cells(l))
 			}
 		}
 	}
@@ -262,21 +263,13 @@ func TestWriteView(t *testing.T) {
 		!strings.HasPrefix(lines[5], "\x1b[2m") || !strings.HasSuffix(lines[5], "(9 more)\x1b[0m") {
 		t.Errorf("local, colored:\n%q", b.String())
 	}
-	for _, c := range []struct {
-		n    int64
-		want string
-	}{{0, "0"}, {750, "750"}, {999, "999"}, {1000, "1.00k"}, {11_050, "11.1k"}, {12_000, "12.0k"}, {999_499, "999k"}, {999_500, "1.00M"}, {37_100_000, "37.1M"}} {
-		if got := string(appendAbbreviated(nil, c.n)); got != c.want {
-			t.Errorf("count %d: %q, want %q", c.n, got, c.want)
-		}
-	}
 }
 
 // TestWriteViewClips: no line passes the width: a long name is cut in the
 // middle, its end kept, the total's label too.
 func TestWriteViewClips(t *testing.T) {
 	long := strings.Repeat("n", 40) + "-tail.parquet"
-	rows := []totals.ViewRow{
+	rows := []tree.Row{
 		{Name: "s3://bucket/" + long, Bytes: 100},
 		{Name: long, Level: 1, Bytes: 60},
 		{Fold: true, Level: 1, Bytes: 40, More: 2},
@@ -296,28 +289,16 @@ func TestWriteViewClips(t *testing.T) {
 			t.Errorf("width 40: nothing cut\n%s", plain)
 		}
 	}
-	if got := clip("abcdefghij.txt", 9); got != "abcd….txt" {
-		t.Errorf("clip: %q", got)
-	}
-	// Columns, not runes: an East Asian wide character takes two, a
-	// combining mark none.
+	// Columns, not runes: an East Asian wide character takes two.
 	wide := strings.Repeat("界", 30) + ".bin"
-	for _, room := range []int{10, 21, 40} {
-		if got := clip(wide, room); cells(got) > room || !strings.HasSuffix(got, ".bin") || !strings.Contains(got, "…") {
-			t.Errorf("clip %d: %q, %d columns", room, got, cells(got))
-		}
-	}
-	if n := cells("e\u0301界a"); n != 4 {
-		t.Errorf("cells: %d", n)
-	}
 	var b bytes.Buffer
-	rows = []totals.ViewRow{{Name: "s3://b", Bytes: 2}, {Name: wide, Level: 1, Bytes: 1}, {Fold: true, Level: 1, Bytes: 1, More: 1}}
+	rows = []tree.Row{{Name: "s3://b", Bytes: 2}, {Name: wide, Level: 1, Bytes: 1}, {Fold: true, Level: 1, Bytes: 1, More: 1}}
 	if err := WriteView(&b, ViewLayout{Label: "s3://b", Width: 40}, rows); err != nil {
 		t.Fatal(err)
 	}
 	for _, l := range strings.Split(strings.TrimSuffix(b.String(), "\n"), "\n") {
-		if cells(l) > 40 {
-			t.Errorf("width 40: %q is %d columns", l, cells(l))
+		if tree.Cells(l) > 40 {
+			t.Errorf("width 40: %q is %d columns", l, tree.Cells(l))
 		}
 	}
 }
