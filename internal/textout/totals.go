@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/totals"
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 // The per-prefix totals' fields (swath du): TSV columns and JSONL members,
@@ -284,8 +285,8 @@ func widths(l *TotalsLayout, rows []totals.Prefix) tableWidths {
 	for i := range rows {
 		r := &rows[i]
 		w.figure = max(w.figure, len(appendTableFigure(num[:0], r, l.primary())))
-		w.objects = max(w.objects, len(appendGrouped(num[:0], r.Objects)))
-		w.dirs = max(w.dirs, len(appendGrouped(num[:0], r.Dirs)))
+		w.objects = max(w.objects, len(tree.Grouped(r.Objects)))
+		w.dirs = max(w.dirs, len(tree.Grouped(r.Dirs)))
 	}
 	return w
 }
@@ -331,30 +332,13 @@ func (w tableWidths) row(b []byte, l *TotalsLayout, r *totals.Prefix) []byte {
 	return appendTSV(b, r.Prefix)
 }
 
-// appendGrouped appends a count for the table, its digits in groups of
-// three (60,010), as the command's statistics write counts.
-func appendGrouped(b []byte, n int64) []byte {
-	var num [24]byte
-	d := strconv.AppendInt(num[:0], n, 10)
-	if n < 0 {
-		b, d = append(b, '-'), d[1:]
-	}
-	for i, c := range d {
-		if i > 0 && (len(d)-i)%3 == 0 {
-			b = append(b, ',')
-		}
-		b = append(b, c)
-	}
-	return b
-}
-
 // appendCount appends a count of r's for the table: grouped, or "-" for
 // a directory that could not be read, whose count is unknown.
 func appendCount(b []byte, r *totals.Prefix, n int64) []byte {
 	if r.Unreadable {
 		return append(b, missingCell...)
 	}
-	return appendGrouped(b, n)
+	return append(b, tree.Grouped(n)...)
 }
 
 // appendPadded appends s right-aligned in width columns.
@@ -366,7 +350,7 @@ func appendPadded(b, s []byte, width int) []byte {
 }
 
 // TableFigure is a prefix's figure (totals.Size or AllocatedBytes) as the
-// table shows it: appendIEC, "-" when it is unknown, and after ">= " when
+// table shows it: tree.Size, "-" when it is unknown, and after ">= " when
 // objects without a value leave it a lower bound.
 func TableFigure(r *totals.Prefix, figure string) string {
 	return string(appendTableFigure(nil, r, figure))
@@ -385,38 +369,9 @@ func appendTableFigure(b []byte, r *totals.Prefix, figure string) []byte {
 	case missing > 0:
 		b = append(b, partialMark...)
 	}
-	return appendIEC(b, n)
+	return tree.AppendSize(b, n)
 }
 
-// iecUnits are the binary units a table's sizes are given in.
-var iecUnits = [...]string{"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
-
-// Size is n bytes for people to read, appendIEC's form: the tables', and
-// every size the command prints on the terminal.
-func Size(n int64) string { return string(appendIEC(nil, n)) }
-
-// appendIEC appends a size for reading, the tables' one form: bytes below
-// 1 KiB, else at most three significant digits in binary units (5.88 MiB,
-// 695 KiB, 0.98 MiB for 1000 KiB), as du -h and rclone size do.
-func appendIEC(b []byte, n int64) []byte {
-	if n < 1024 {
-		return append(strconv.AppendInt(b, n, 10), " B"...)
-	}
-	v, u := float64(n), 0
-	for v >= 1024 && u < len(iecUnits)-1 {
-		v /= 1024
-		u++
-	}
-	if v >= 999.5 && u < len(iecUnits)-1 { // four digits: the next unit's 0.98 to 1.00
-		v /= 1024
-		u++
-	}
-	prec := 0
-	switch {
-	case v < 9.995:
-		prec = 2
-	case v < 99.95:
-		prec = 1
-	}
-	return append(append(strconv.AppendFloat(b, v, 'f', prec, 64), ' '), iecUnits[u]...)
-}
+// Size is n bytes for people to read (tree.Size): the tables' one form,
+// and every size the command prints on the terminal.
+func Size(n int64) string { return tree.Size(n) }

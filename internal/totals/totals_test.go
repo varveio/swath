@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"unsafe"
+
+	"github.com/varveio/swath/reader/du/tree"
 )
 
 // bruteWith is the oracle: every prefix of every key, summed one row at a
@@ -243,7 +245,7 @@ func TestDirBlocks(t *testing.T) {
 		// The drawn lines: s/ shares its line with s/g, and the line gives
 		// s/'s bytes, its own block too; the total's lines add up to it.
 		var top, shared int64
-		for _, r := range v.Select(20) {
+		for _, r := range tree.Select(v.Tree(), 20) {
 			if r.Level == 1 {
 				top += r.Bytes
 			}
@@ -252,7 +254,7 @@ func TestDirBlocks(t *testing.T) {
 			}
 		}
 		if shared != 8192 || top != 25600 {
-			t.Errorf("ordered %v: shared line %d bytes, the total's lines %d: %+v", ordered, shared, top, v.Select(20))
+			t.Errorf("ordered %v: shared line %d bytes, the total's lines %d: %+v", ordered, shared, top, tree.Select(v.Tree(), 20))
 		}
 	}
 }
@@ -316,7 +318,7 @@ func TestDirBlocksSharedFold(t *testing.T) {
 			t.Fatal(err)
 		}
 		r.End()
-		lines := tl.View().Select(20)
+		lines := tree.Select(tl.View().Tree(), 20)
 		var shared, under int64
 		for _, l := range lines {
 			switch {
