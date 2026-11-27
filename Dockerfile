@@ -77,7 +77,7 @@ USER 65532:65532
 WORKDIR /opt/swath-replay
 ENTRYPOINT ["/opt/swath-replay/swath-replay"]
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS swath
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS swath
 ARG TARGETOS
 ARG TARGETARCH
 COPY --from=build --chmod=0555 /out/${TARGETOS}-${TARGETARCH}/swath /opt/swath/swath
