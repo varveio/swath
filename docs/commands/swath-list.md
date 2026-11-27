@@ -162,6 +162,11 @@ so in its manifest.
 
   For a test endpoint only. A resume replays it, and warns again.
 
+- <a id="option-listing"></a>[`--listing auto|range|tree`](#option-listing)\
+  list by key ranges (range) or folder by folder (tree) (default `auto`)
+
+  auto: key ranges, except on Cloudflare R2 (S3), which does not list keys in byte order: folder by folder there. tree is S3's only: each folder listed by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.
+
 - <a id="option-all-versions"></a>[`--all-versions`](#option-all-versions)\
   list every version of every key, not only the current objects
 

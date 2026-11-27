@@ -52,6 +52,7 @@ _swath_list() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
+        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -120,6 +121,7 @@ _swath_du() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
+        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -201,6 +203,7 @@ _swath_diag_list() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
+        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -287,6 +290,7 @@ _swath_diag_count() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
+        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \

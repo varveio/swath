@@ -49,7 +49,9 @@ local directory left out), `lock_unenforced`, `durable_spill_off`, `unresumable_
 `spill_not_removed`, `spill_in_memory` (spill on `tmpfs`), and for a committed dataset whose aftermath failed:
 `run_report_unwritten`, `cuts_unwritten`, `commit_marker_unwritten`, `aftermath_unfinished`; and
 `replaced_not_removed` (`--overwrite`: the replaced dataset's files were not removed after the new one was
-installed).
+installed); `tree_listing` (S3 listed folder by folder: chosen for a Cloudflare R2 endpoint, or a dataset run
+that cannot be resumed) and `range_listing_unordered` (`--listing range` on Cloudflare R2:
+[S3](../sources/s3.md#cloudflare-r2)).
 
 The verbosity options gate the events as they gate the text lines: `start` needs `-v`, `request` events `-vv`
 or `-vvv`, and progress records `-v` or `--progress`; they come every `--progress-interval` (30 seconds by

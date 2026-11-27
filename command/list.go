@@ -105,6 +105,9 @@ type ListOptions struct {
 	CABundle    string `flag:"ca-bundle"`
 	NoVerifySSL bool   `flag:"no-verify-ssl"`
 	AllVersions bool   `flag:"all-versions"`
+	// Listing is auto, range or tree ("" for auto): tree lists an S3
+	// bucket folder by folder, the default on Cloudflare R2.
+	Listing string `flag:"listing"`
 
 	// A local directory.
 	Metadata      string `flag:"metadata"`

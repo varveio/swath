@@ -9,6 +9,10 @@
 // A range whose owner sees idle workers splits itself at a page boundary into
 // (cursor, pivot] and (pivot, hi] (see keyrange.Engine). With Sequential the
 // whole scope is one continuation-token chain: the reference oracle.
+//
+// A store that does not list in byte order (Cloudflare R2) is listed folder
+// by folder instead (Tree, Options.Listing): each folder read whole by
+// continuation tokens and sorted, on the tree core's delimited reader.
 package s3
 
 import (
@@ -71,7 +75,16 @@ type Options struct {
 	// violation (a library walk's); otherwise its size is taken as 0.
 	NeedSize bool
 	Workers  int // parallel: the order stage's worker count (split demand)
-	Client   API // optional; built from the options above when nil
+	// Listing is how the bucket is listed (--listing): the range engine,
+	// or a folder walk (Tree), which the default chooses for a
+	// Cloudflare R2 endpoint (R2Endpoint).
+	Listing source.Listing
+	// TreeFolderBytes and TreeStagingBytes bound what the folder walk
+	// holds while it reads folders whole: one folder, and every folder
+	// being read at once (0: tree.DefaultFolderBytes,
+	// tree.DefaultStagingBytes).
+	TreeFolderBytes, TreeStagingBytes int64
+	Client                            API // optional; built from the options above when nil
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -100,6 +113,12 @@ type Stats struct {
 	Credentials string `json:"credentials,omitempty"` // where they came from
 	Region      string `json:"region,omitempty"`
 	NoVerifySSL bool   `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
+	// Listing is how the bucket was listed: "range" (the range engine)
+	// or "tree" (the folder walk), and ListingReason why (Reason*).
+	Listing       string `json:"listing"`
+	ListingReason string `json:"listing_reason"`
+	// R2Endpoint: the endpoint is Cloudflare R2's (R2Endpoint).
+	R2Endpoint bool `json:"r2_endpoint,omitempty"`
 	// MeanActive is the time-weighted mean of ranges in Expand.
 	MeanActive float64           `json:"mean_active"`
 	Counters   counters.Snapshot `json:"counters"`
@@ -124,6 +143,7 @@ type provider[P any] struct {
 	creds            string
 	region           string // the resolved signing region ("" with a supplied Client)
 	route            string // a supplied Routed client's Route ("" otherwise)
+	reason           string // why the listing is the range engine (Reason*)
 }
 
 // Range is the engine's unit of listing work.
@@ -145,6 +165,13 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, errors.New("s3: Options.AllVersions lists versions: use NewVersions")
 	}
+	tree, reason, err := opt.listing()
+	if err != nil {
+		return nil, err
+	}
+	if tree {
+		return nil, errTreeOpen
+	}
 	p, own, err := connect[Object](ctx, opt)
 	if err != nil {
 		return nil, err
@@ -163,7 +190,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.Engine = e
+	p.Engine, p.reason = e, reason
 	return p, nil
 }
 
@@ -172,6 +199,13 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 // The client must implement VersionsAPI.
 func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	opt.AllVersions = true
+	tree, reason, err := opt.listing()
+	if err != nil {
+		return nil, err
+	}
+	if tree {
+		return nil, treeRefusal(&opt, reason)
+	}
 	p, own, err := connect[Version](ctx, opt)
 	if err != nil {
 		return nil, err
@@ -196,7 +230,7 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.Engine = e
+	p.Engine, p.reason = e, reason
 	return p, nil
 }
 
@@ -271,7 +305,7 @@ func (p *provider[P]) Stats() Stats {
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
-		MeanActive: e.MeanActive, Counters: e.Counters}
+		Listing: "range", ListingReason: p.reason, R2Endpoint: R2Endpoint(p.opt.Endpoint), MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is

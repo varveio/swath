@@ -128,6 +128,9 @@ func (o *gcsFlagged) options() (gcs.Options, error) {
 	if opt.Anonymous && opt.CredentialsFile != "" {
 		return gcs.Options{}, source.AnonymousConflict("--gcs-credentials-file")
 	}
+	if o.store != nil && o.store.Listing == source.ListingTree {
+		return gcs.Options{}, errTreeUnsupported("GCS")
+	}
 	return opt, nil
 }
 

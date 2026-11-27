@@ -440,6 +440,78 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `credentials.expired_refreshes` | count | refreshes |  | renewals fetched after an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to credentials that can expire, its request retried once: one per generation of credentials, however many requests it refused |
 <!-- s3:end -->
 
+### The S3 folder walk (`--listing tree`)
+
+A listing folder by folder (the default on Cloudflare R2: [S3](../sources/s3.md#cloudflare-r2)) has its own
+table: the HTTP client's counters above, then the delimited reader's (`tree.DelimitedCounters`, package
+`internal/source/tree`), which any provider listing folder by folder would share. Its engagement is not a
+counter: `diagnostics.source.stats.listing` (`range` or `tree`) and `listing_reason` (`default_range`,
+`explicit_range`, `explicit_tree`, `r2_endpoint`), with `r2_endpoint` true for an R2 host. The violations stop
+the run (`protocol`), so a report shows at most one of them; `tree.limit.*` are the bounds the run had.
+
+<!-- s3-tree:begin -->
+| Key | Kind | Unit | Feature | Meaning |
+|---|---|---|---|---|
+| `attempts` | count | requests |  | HTTP requests sent: every attempt, client retries and engine requeues included (the request economics) |
+| `retries` | count | requests |  | attempts repeated after a retryable failure |
+| `throttles` | count | requests |  | attempts answered 429/503/SlowDown, retried or not (the last of an exhausted call included) |
+| `timeouts` | count | requests |  | attempts past -request-timeout, retried or not |
+| `parse_failures` | count | responses |  | 200 answers whose body did not parse (retried) |
+| `unreachable.attempts` | count | requests |  | attempts that failed to connect deterministically (refused, host not found, network or host unreachable) while nothing in the run had answered |
+| `unreachable.stops` | count | calls |  | calls stopped as unreachable: nothing in the run had answered, and connections had failed so for 30s (at most half --stall-timeout; exit 75, cause unreachable) |
+| `inflight.peak_active` | max | requests |  | most attempts in flight at once (admitted, send to body read) |
+| `inflight.busy_ns` | count | ns |  | attempts' time in flight, summed: over the listing's wall time, the mean in flight |
+| `inflight.p50_ns` | gauge | ns |  | attempt latency (send to body read), 50th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.p90_ns` | gauge | ns |  | attempt latency (send to body read), 90th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.p99_ns` | gauge | ns |  | attempt latency (send to body read), 99th percentile: the upper edge of its bucket in a log-spaced histogram, at most 25% above; 9223372036854775807 (open) when it falls past 2^40 ns |
+| `inflight.latency_overflow` | count | attempts |  | attempts at or past 2^40 ns (about 18 min 20 s), the latency histogram's open last bucket |
+| `limiter.decreases` | count | steps | limiter | cuts: limit multiplied by 0.7 on a 429/503/SlowDown answer, at most one per round trip, while 15 % or more of the window's answers were throttles |
+| `limiter.floor_throttles` | count | answers | limiter | cuts due at a limit of 1: no decrease |
+| `limiter.cuts_suppressed.round_trip` | count | answers | limiter | 429/503/SlowDown answers to attempts sent before the last cut: no further cut (one per round trip) |
+| `limiter.cuts_suppressed.tolerated` | count | answers | limiter | 429/503/SlowDown answers while under 15 % of the window's answers were throttles: no cut (a background the retries absorb) |
+| `limiter.throttle_permille` | gauge | permille | limiter | throttle answers per 1,000 of the window (the last 4 x workers answers since the last cut) at the end |
+| `limiter.limit` | gauge | permits | limiter | the limit at the end: where it converged |
+| `limiter.increases` | count | steps | limiter | growth steps: limit raised by one, at most one per second, while the window since the last cut is full with under 7.5 % throttles, or after 10 s without a throttle answer |
+| `limiter.growth_cooldown` | count | steps | limiter | due growth steps held back by throttling: the window since a cut not yet full, or 7.5 % or more of it throttles, and a throttle answer in the last 10 s |
+| `limiter.growth_latency_frozen` | count | steps | limiter | due growth steps held back: successful attempts' latency EWMA above twice the baseline |
+| `limiter.growth_timeout_frozen` | count | steps | limiter | due growth steps held back: 3 or more attempt timeouts in the last 10 s |
+| `limiter.valve` | count | steps | limiter | limit raised by one through the latency freeze (at most one per 30 s, with progress) |
+| `limiter.waits` | count | attempts | limiter | attempts that waited for a permit |
+| `limiter.wait_ns` | count | ns | limiter | time those attempts waited, summed |
+| `limiter.peak_depth` | max | permits | limiter | most permits the limit stood below the worker count |
+| `slow_start.doubles` | count | steps | slow_start | --adaptive-limit-slow-start: limit doubled (from 4, at most once per second, before the first cut or timeout) |
+| `slow_start.ramp_ns` | max | ns | slow_start | --adaptive-limit-slow-start: time from the start to the ramp's end (the worker count reached, or the first cut or timeout) |
+| `slow_start.end_limit` | max | permits | slow_start | --adaptive-limit-slow-start: the limit the ramp ended at (0: still ramping) |
+| `rate.waits` | count | attempts | request_rate | attempts that waited for a --request-rate token |
+| `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
+| `credentials.refreshes` | count | refreshes |  | signing credentials fetched after the first: ahead of their expiry (by the smaller of 5 minutes and a quarter of their lifetime), or renewed; 0 for credentials that do not expire, --anonymous, a bearer token or a supplied client |
+| `credentials.expired_refreshes` | count | refreshes |  | renewals fetched after an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to credentials that can expire, its request retried once: one per generation of credentials, however many requests it refused |
+| `tree.folders_started` | count | folders |  | folders whose listing began (the walk's root and every child folder) |
+| `tree.folders_completed` | count | folders |  | folders read whole, checked, sorted and handed on |
+| `tree.pages` | count | pages |  | delimited listing pages answered (a page the client retried is one) |
+| `tree.empty_pages` | count | pages |  | continuing pages that held no entry |
+| `tree.requeues` | count | pages |  | pages asked again, after a backoff, once the HTTP client's retries were exhausted on a transient failure |
+| `tree.objects` | count | objects |  | objects listed, the scope's and those of the start folder outside it |
+| `tree.prefixes` | count | folders |  | child folders (common prefixes) listed |
+| `tree.markers` | count | objects |  | objects whose key is their folder's own prefix (folder markers), emitted as rows in that folder |
+| `tree.empty_segments` | count | folders |  | child folders whose last segment is empty (a//), walked as any other |
+| `tree.non_nfc_names` | count | entries |  | entries whose name below the folder is not in Unicode NFC: where a store that matches names in NFC can merge two spellings of one folder |
+| `tree.out_of_scope` | count | entries |  | entries of the start folder whose keys do not start with the source prefix: left out, not walked |
+| `tree.max_folder_entries` | max | entries |  | the most entries (objects and child folders) of one folder |
+| `tree.max_folder_bytes` | max | bytes |  | the most one folder staged (keys, payload strings, entries, tokens: an estimate) |
+| `tree.peak_staged_bytes` | max | bytes |  | the most every folder being read staged at once |
+| `tree.limit.folder_bytes` | max | bytes |  | the bound on one folder's staging: a folder past it stops the run (folder_limit) |
+| `tree.limit.staging_bytes` | max | bytes |  | the bound on every folder's staging at once: a folder that would pass it stops the run (folder_limit) |
+| `tree.budget_refusals` | count | folders |  | folders stopped at a staging bound |
+| `tree.sort_ns` | count | ns |  | time spent sorting folders' entries by raw bytes, summed |
+| `tree.violations.raw_prefix` | count | entries |  | an object or child folder whose raw bytes do not start with its folder's (a store that matched the prefix another way): the run stops, protocol |
+| `tree.violations.delimiter` | count | entries |  | an object with a '/' below its folder, or a child folder that is not one segment and a '/': the run stops, protocol |
+| `tree.violations.self_reference` | count | entries |  | a child folder equal to its own folder: the run stops, protocol |
+| `tree.violations.empty_key` | count | entries |  | an object with an empty key: the run stops, protocol |
+| `tree.violations.duplicate` | count | entries |  | an entry listed twice in one folder: the run stops, protocol |
+| `tree.violations.token` | count | pages |  | a truncated page without a continuation token, or with one the folder already returned: the run stops, protocol |
+<!-- s3-tree:end -->
+
 Every object-store attempt is normalized once into an error carrying transient, throttle and timeout
 signals, HTTP status, provider code or reason, and a safe cause. Admission feedback, retries and these
 counters consume that same value; parse accounting uses its `parse` diagnostic. Exhaustion wraps it,

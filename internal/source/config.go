@@ -4,6 +4,7 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -94,4 +95,41 @@ type Store struct {
 	Anonymous bool
 	// Trust is how the service's TLS certificate is verified.
 	Trust Trust
+	// Listing is how the store is listed (--listing); "" is ListingAuto.
+	Listing Listing
+}
+
+// Listing is how an object store is listed.
+type Listing string
+
+// The listings.
+const (
+	// ListingAuto is the provider's choice: the range engine, except
+	// where the provider knows its store does not list in byte order
+	// (S3: a Cloudflare R2 endpoint, listed as ListingTree).
+	ListingAuto Listing = "auto"
+	// ListingRange is the range engine: key ranges listed in parallel
+	// from start keys, which needs pages in byte order.
+	ListingRange Listing = "range"
+	// ListingTree is a folder walk: each folder listed with delimiter '/'
+	// by continuation tokens only, read whole and sorted (S3 only for
+	// now).
+	ListingTree Listing = "tree"
+)
+
+// ParseListing is the listing s names: auto, range or tree.
+func ParseListing(s string) (Listing, error) {
+	switch l := Listing(s); l {
+	case ListingAuto, ListingRange, ListingTree:
+		return l, nil
+	}
+	return "", errors.New("want auto, range or tree")
+}
+
+// OrAuto is l, or ListingAuto when l is "".
+func (l Listing) OrAuto() Listing {
+	if l == "" {
+		return ListingAuto
+	}
+	return l
 }

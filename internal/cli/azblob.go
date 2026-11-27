@@ -126,7 +126,12 @@ func (o *azblobFlagged) options(sas string) (azblob.Options, error) {
 		opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions
 	}
 
+	if o.store != nil {
+		opt.Listing = o.store.Listing
+	}
 	switch {
+	case opt.Listing == source.ListingTree:
+		return azblob.Options{}, errTreeUnsupported("Azure Blob")
 	case opt.Anonymous && opt.SAS != "":
 		return azblob.Options{}, source.AnonymousConflict("--azure-sas-token")
 	case opt.Anonymous && sas != "":

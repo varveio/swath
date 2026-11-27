@@ -84,6 +84,10 @@ const (
 
 // Options configure a listing.
 type Options struct {
+	// Listing is how the account is listed (--listing): auto, or range,
+	// which a hierarchical namespace refuses (it is listed by directory);
+	// tree is not served here.
+	Listing   source.Listing
 	Account   string
 	Container string
 	Prefix    string

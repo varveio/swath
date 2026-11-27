@@ -5,7 +5,9 @@
 // support; nothing in the tool imports it): bucket population, the
 // server's lifecycle and isolation from the host's AWS credentials. A test
 // that injects faults wraps Handler before serving it; protocol oracles
-// and malformed-response handlers stay with their tests.
+// and malformed-response handlers stay with their tests. R2 is the one
+// store model kept here, for the tests of several packages: Cloudflare
+// R2's ListObjectsV2 as measured, written from its rules.
 package s3test
 
 import (

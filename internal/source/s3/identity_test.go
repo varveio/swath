@@ -179,7 +179,7 @@ func openRoot(t *testing.T, root string, opt Options) *Opened[Object] {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return src
+	return src.(*Opened[Object])
 }
 
 // TestPolicyReachesEngine: the range engine's policy in the options is

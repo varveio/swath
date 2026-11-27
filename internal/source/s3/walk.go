@@ -5,6 +5,7 @@ package s3
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/varveio/swath/internal/bind"
@@ -26,7 +27,15 @@ const walkWorkers = 64
 // listing.ErrInvalidPage, and each range's keys are checked strictly
 // ascending and apart from every other range's (live.Count). Its errors
 // are classed as the source's other calls' are.
+//
+// On a Cloudflare R2 endpoint a walk is refused (listing.ErrUnsupported):
+// R2 does not list keys in byte order, so the range engine could miss
+// keys without an error, and the folder walk (Tree) is not offered to a
+// live walk yet.
 func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
+	if l.r2 {
+		return errR2Walk
+	}
 	workers := w.Workers
 	if workers == 0 {
 		workers = walkWorkers
@@ -47,6 +56,9 @@ func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	}
 	return nil
 }
+
+// errR2Walk refuses a live walk of a Cloudflare R2 bucket.
+var errR2Walk = fmt.Errorf("%w: a walk of a Cloudflare R2 bucket: R2 does not list keys in byte order, so a walk by key ranges could miss keys without an error", listing.ErrUnsupported)
 
 // entries are a range's rows as the contract's entries: an object each,
 // its key copied, the values the row's own, which share the page's

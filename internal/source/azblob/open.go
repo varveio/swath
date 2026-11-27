@@ -6,6 +6,7 @@ package azblob
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -67,6 +68,9 @@ func OpenNarrowed(ctx context.Context, root, original string, opt Options) (Inve
 	if opt.AllVersions {
 		return nil, errors.New("Azure Blob: Options.AllVersions lists every entry: use OpenVersions")
 	}
+	if opt.Listing == source.ListingTree {
+		return nil, source.Unsupported(errors.New("--listing tree is not supported for Azure Blob sources yet (only S3)"))
+	}
 	narrowed := opt.Prefix
 	if original != "" {
 		account, container, prefix, _, err := ParseURL(original)
@@ -86,6 +90,9 @@ func OpenNarrowed(ctx context.Context, root, original string, opt Options) (Inve
 	hns, err := p.admit(ctx, true)
 	if err != nil {
 		return nil, err
+	}
+	if hns && opt.Listing == source.ListingRange {
+		return nil, source.Unsupported(fmt.Errorf("--listing range: Azure Blob account %s has a hierarchical namespace, which is listed by directory; give --listing auto", opt.Account))
 	}
 	if hns {
 		// Preserve the user's original scope. A directory used as the

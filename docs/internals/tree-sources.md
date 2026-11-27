@@ -1,7 +1,8 @@
 # Tree sources (`internal/source/tree`)
 
-The tree core shares ordered child splicing between local filesystems and Azure hierarchical namespaces
-(HNS). Azure uses `Walker` and its seekable-directory reader, `Ordered`. localfs uses `EmitRows` with its
+The tree core shares ordered child splicing between local filesystems, Azure hierarchical namespaces
+(HNS) and S3's folder walk. Azure uses `Walker` and its seekable-directory reader, `Ordered`. S3's
+`--listing tree` uses `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
 own ranges, retaining descriptor ownership, unread-entry reporting, platform readers and count paths.
 
 ## Ordering and ownership
@@ -20,6 +21,9 @@ keys. Those checks detect malformed output, but cannot prove that a provider omi
 - `Leaf` emits one row, regardless of a trailing slash in its key.
 - `Descend` emits a directory row followed by its child; `NoDirs` suppresses the row only.
 - `Prune` emits the directory row without walking it; `Omit` emits neither.
+- `Folder` descends into a virtual folder: a child with no row of its own (an object store's common
+  prefix). Its key extends the range's by one segment without `/`, possibly empty (`a//` below `a/`), and a
+  `/`; anything else is a protocol violation and nothing is emitted. No path cleaning applies.
 
 Rows transfer ownership to the emitter. A child transfers ownership even when `Child` returns an error.
 `EmitRows` constructs a child only after the preceding rows were accepted: localfs retains a descriptor
@@ -37,10 +41,12 @@ only when it never enters `Read`. Directory handles in `Dir` must not own resour
 
 The walker's recursive-exclude predicate proves that every descendant is excluded. It can suppress a
 `Descend` child while the directory row still goes through ordinary filtering. Reader-owned `Prune` and
-`Omit` take precedence. A future virtual-folder API must distinguish traversal from emitted rows: a virtual folder can contain
-a real marker object whose key equals its prefix, and excluding descendants does not exclude that marker.
-A provider must prove exclusion of both before omitting such a branch. A real marker returned inside its
-own prefix is a `Leaf`, emitted once. Such an API must also reject self-referential folder responses.
+`Omit` take precedence. A virtual folder (`Folder`) keeps traversal apart from emitted rows: it can contain
+a real marker object whose key equals its prefix, and excluding descendants does not exclude that marker,
+so the predicate never applies to it and a virtual folder is always walked. A provider would have to prove
+exclusion of both before omitting such a branch; `Delimited` does not try, and S3's folder walk installs
+no predicate (ordinary filters still apply to the rows). A real marker returned inside its own prefix is a
+`Leaf`, emitted once. `Delimited` rejects self-referential folder responses.
 
 ## Azure ordered directories
 
@@ -63,21 +69,80 @@ and split directories, held directories, candidate lookups, retries, and evidenc
 range-engine counters describe segment work. Azure reports requests for the whole walk and shares HTTP
 activity with the watchdog.
 
-Neither the generic walker nor Azure HNS declares durable coverage fences or resume support. Tree resume,
-unordered-directory spill, Vercel Blob and Cloudflare R2 providers are not implemented here.
+Neither the generic walker, Azure HNS nor S3's folder walk declares durable coverage fences or resume
+support. Tree resume, unordered-directory spill and a Vercel Blob provider are not implemented here.
+
+## Token-only delimited folders
+
+`Delimited` reads a store that lists one folder at a time with delimiter `/` and continuation tokens only, and
+whose pages need not be in byte order (Cloudflare R2; [S3](../sources/s3.md#cloudflare-r2)). A provider
+supplies a `FolderLister`: one delimited list call from a prefix and a token ("" for the folder's first page)
+to the objects directly in the folder, as rows of its own payload, its child prefixes as the service spelled
+them, and the next token. S3's is `ListObjectsV2` with `Delimiter: "/"`, never `StartAfter`, its objects
+mapped by the range listing's `rows`. A GCS adapter (`delimiter` and `pageToken`) or an Azure flat one
+(`delimiter` and `marker`) would be the same few lines; neither is wired.
+
+A range is a folder (`FolderRange`). `Read` lists it whole, follows tokens only, and checks every page before
+anything is emitted; a violation stops the run (`protocol`) rather than drop a row:
+
+- every object key and child prefix starts with the folder's raw prefix bytes: a store that matched the
+  prefix in another form (R2 matches NFC) returns keys that do not;
+- an object key is not empty and holds no `/` after the prefix: with delimiter `/` every key that does is
+  rolled into a child prefix, and the folder's own marker (its key the prefix) has an empty remainder;
+- a child prefix is the folder's prefix, one segment without `/` (possibly empty) and one `/`, and is not the
+  folder itself;
+- no entry is listed twice in a folder;
+- a truncated page carries a token the folder has not returned before; a terminal page needs none.
+
+The folder's entries are then sorted by raw bytes, a child by its prefix (which ends in `/`, so it sorts where
+its subtree belongs), and handed on: runs of objects as `Leaf` rows, each child as a `Folder`, listed by its
+prefix exactly as returned, never normalized. That is the localfs argument: no sibling sorts between a
+folder's key and the keys that extend it, so emitting each folder's sorted entries with its children spliced
+in place is global byte order, whatever order the service sent. It relies on what the service's own
+definition of a complete listing gives (continuation tokens and the delimiter's grouping), not on its order
+or a seek. The checks cannot see what a service never sends: a common prefix whose hidden members belong
+elsewhere is caught only when they arrive, under the folder that does not hold them.
+
+**The scope.** `Select` is a raw-byte prefix. The walk starts at its deepest folder (`Select` up to its last
+`/`) and keeps from that folder, after validation, only the objects and child prefixes whose keys start with
+`Select` (counted as `tree.out_of_scope` otherwise); below a kept child every key does. So a scope that does not
+end in `/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing are exact in raw bytes,
+whatever the service's own prefix matching does.
+
+**Memory.** A folder is held whole while it is read: each entry is charged its key, its payload's strings (the
+provider's `Bytes`), twice its staging slot (the slot and the row it becomes), and each token its length. One
+folder may stage `FolderBytes` (64 MiB by default) and every folder being read at once `StagingBytes`
+(256 MiB). A page that would pass either stops the run with `FolderLimitError` (cause `folder_limit`), naming
+the folder; nothing waits for budget, so no set of workers can deadlock on it, and the staging is released on
+every return, cancellation included. Once a folder is handed on its rows are the order stage's, under its own
+budget. A folder is not spilled: one larger than the bound cannot be listed this way.
+
+**Progress and counters.** `Frontier` counts pages that held an entry or ended a folder, and empty continuing
+pages within `keyrange.EmptyChainLive` of each other, for the watchdog. A page whose failure the provider's
+`Requeue` accepts is asked again with the same token after `keyrange.RequeueBackoff`. `DelimitedCounters` are
+the reader's counters (folders started and completed, pages, empty pages, requeues, objects, prefixes, markers,
+empty segments, non-NFC names, out-of-scope entries, the largest folder's entries and bytes, peak staging,
+the bounds, budget refusals, sort time and each kind of violation), placed in the provider's table
+([Counters](counters.md#the-s3-folder-walk---listing-tree)).
+
+**Resume, not yet.** No delimited listing declares resume. The intended shape, once a published key `K` is
+journaled: skip the objects at or below `K`, and the folders whose whole subtree sorts at or below `K`,
+without listing them; re-list only the folders on `K`'s path (each of `K`'s ancestors), keeping their entries
+above `K`. Since a folder is emitted whole and in order, a sorted folder is the unit a resume re-reads; nothing
+here keeps state that would block it.
 
 ## Other directory APIs
 
 A token-only ordered API can reuse the walker and continuation segments without `Ordered` or
-`keyrange.Engine`. A virtual-folder operation that emits no row can be added when such a provider is built.
+`keyrange.Engine`, or `Delimited` and its `Folder` operation, at the cost of sorting what is already in order.
 The Vercel investigation observed ordered folded pages with separate blobs and virtual folders; an adapter
 would have to merge them, preserve real markers and validate order across pages. One large flat directory
 would remain a serial cursor chain; tiny folders can amplify requests. Those service contracts and a full
 recursive walker need independent validation before a provider is added.
 
 Cloudflare R2's observed listing order differs from raw key order even within a directory, and normalization
-can change routing and subtree placement. It cannot feed such pages directly into this ordered splicer.
-A future R2 adapter needs a separately validated sorting stage or order conversion before using ordered
-emission. Sorting each page is insufficient. The order stage's spill stores already-ordered work; it is not
-a global external sorter. The measured R2 comparator is not a service contract, and checking page order
-alone cannot prove that a seek or range bound omitted nothing.
+can change routing and subtree placement, so its pages cannot feed `Ordered`. `Delimited` sorts each whole
+folder instead (sorting each page is insufficient), and validates placement by raw bytes. A global external
+sort, a spilled folder, key-range parallelism within one folder and a model of R2's comparator are not
+implemented: the measured comparator is not a service contract, and checking page order alone cannot prove
+that a seek or range bound omitted nothing.
