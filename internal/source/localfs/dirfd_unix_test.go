@@ -148,6 +148,44 @@ func (c *cancelAfter) Write(_ context.Context, segs [][]Row) error {
 	return nil
 }
 
+type rejectRows struct {
+	err error
+	t   *testing.T
+}
+
+func (e rejectRows) Rows([]Row) error { return e.err }
+
+func (e rejectRows) Child(r Range) error {
+	e.t.Errorf("submitted child %q after Rows failed", r.prefix)
+	r.at.release()
+	return e.err
+}
+
+func TestRejectedDirectoryRowsDoNotKeepDescriptor(t *testing.T) {
+	p, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st Stats
+	r := p.Root()
+	d, ok, err := p.openPortable(context.Background(), r, &st)
+	if !ok {
+		t.Fatalf("opening root: %v, %+v", err, st)
+	}
+	want := errors.New("emit failed")
+	rows := []Row{{Key: "child/", Data: Entry{Kind: KindDir}}}
+	err = p.emit(r, d, rows, rejectRows{err: want, t: t}, &st)
+	d.release()
+	if !errors.Is(err, want) {
+		t.Fatalf("emit: %v, want %v", err, want)
+	}
+	if n := p.keep.open.Load(); n != 0 {
+		// Drop the extra reference if a regression leaked it.
+		d.release()
+		t.Fatalf("%d descriptors still kept after Rows rejected the child", n)
+	}
+}
+
 // TestWalkReleasesDescriptors: a walk closes every directory descriptor it
 // opened, whether it completes, is cancelled or fails, with either engine,
 // with descriptors kept for queued subdirectories and without; a small

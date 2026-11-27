@@ -949,8 +949,12 @@ func runWith(ctx context.Context, cmd command, args []string, stdout io.Writer, 
 		noteKept(errOut, "hint: "+escapeControl(root)+" is a swath dataset; to total what it lists: swath du --from-dataset "+shellOperand(root)+"\n")
 	}
 	root, narrowing := narrowRoot(root, &o.filter)
+	var original string
+	if root != given {
+		original = given
+	}
 	cfg := inventory.Config{
-		Source: inventory.SourceConfig{URI: root, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
+		Source: inventory.SourceConfig{URI: root, OriginalURI: original, Options: o.sources[pf.Scheme], SeedFrom: o.seedFrom, Narrowing: narrowing},
 		// A text file is always replaced (written beside its name and
 		// renamed into place): --overwrite asks for what happens anyway.
 		Output: inventory.OutputConfig{Replace: o.overwrite && o.text == nil, Resume: resumed, NoJournal: o.noJournal, Text: o.text},

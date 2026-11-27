@@ -104,7 +104,7 @@ Narrowing changes the listed scope, which a dataset given to `--seed-from` must 
 `az://acct/ctr --include 'logs/**'` (scope `logs/`) seeds the same command, not `az://acct/ctr` without the
 include, and the reverse is refused too ([the cut file](dataset.md#the-cut-file)).
 
-Local and mounted trees also avoid traversing subtrees covered by recursive exclude globs, as described
+Local and mounted trees and Azure hierarchical namespaces also avoid traversing subtrees covered by recursive exclude globs, as described
 above. Their run report records the rule classification in `diagnostics.source.stats.pruning` and the directories
 not entered in `diagnostics.source.stats.pruned_dirs`. swath may still read the excluded directory's own
 metadata, but it does not enter the directory, so errors below it are not reported. No count or byte total is inferred for unvisited

@@ -47,6 +47,7 @@ const (
 	fromSeed
 	fromLower
 	fromUpper
+	fromWithin
 )
 
 // pivotSource is the synthesis that made a split's pivot; srcBound marks a
@@ -124,6 +125,10 @@ type Range struct {
 	// past it are boundary overfetch (resume.reuse.boundary_overfetch_keys).
 	cert   int
 	gapEnd bool
+	// A caller can tile an independent listing scope with Within. Its
+	// children inherit the scope, including an explicitly empty prefix.
+	scope  string
+	scoped bool
 }
 
 // estimate is the range's remainder before its first page: +Inf on the
@@ -550,6 +555,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		}
 	}()
 	in := p.query()
+	if r.scoped {
+		in.Prefix, in.scoped = r.scope, true
+	}
 	in.After = r.lo
 	in.Through, in.Bounded = r.hi, !r.open
 	c := r.lo
@@ -559,7 +567,10 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	// end, the split cursor and the end. llo is above the request bound
 	// after an unsafe resume key, whose keys up to K are dropped; a fence is
 	// declared only at a bound the provider accepts or at K itself.
-	fence, _ := e.(source.Fencer)
+	var fence source.Fencer
+	if !r.scoped {
+		fence, _ = e.(source.Fencer)
+	}
 	wait, _ := e.(source.Awaiter) // the account's only: whether the output waits for r
 	llo := max(r.lo, r.after)
 	k := p.resumeKey()
@@ -602,7 +613,7 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 		restart := ""
 		// A page that reaches hi ends the range whatever follows it.
 		atHi := !r.open && len(out.Rows) > 0 && out.Rows[len(out.Rows)-1].Key >= r.hi
-		if !out.Truncated && afterKey && !atHi && p.endChecks() {
+		if !out.Truncated && afterKey && !atHi && !r.scoped && p.endChecks() {
 			// The chain started after a key and the service says the scope
 			// ends here: checked before the range declares its end.
 			more, l, err := p.checkEnd(ctx, in, out, c)
@@ -793,7 +804,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.tracePage(r, st, before, c, n, pageNs, done)
 		}
 		if done {
-			p.covered(r.lo, r.hi, r.open)
+			if !r.scoped {
+				p.covered(r.lo, r.hi, r.open)
+			}
 			return faults.At("range-done")
 		}
 		// The pivot is placed outside the decision mutex, on this snapshot
@@ -847,7 +860,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			if err := faults.At("split"); err != nil {
 				return err
 			}
-			p.covered(r.lo, c, false)
+			if !r.scoped {
+				p.covered(r.lo, c, false)
+			}
 			fenceAt(c, false)
 			if err := e.Child(lower); err != nil {
 				return err
@@ -873,9 +888,27 @@ func (p *Engine[P]) covered(lo, hi string, open bool) {
 // on the open frontier the scope's prefixCeil, or nothing (bounded false).
 func (p *Engine[P]) ceiling(r Range) (string, bool) {
 	if r.open {
+		if r.scoped {
+			return prefixCeil(r.scope)
+		}
 		return prefixCeil(p.opt.Prefix)
 	}
 	return r.hi, true
+}
+
+// Within queues a caller-defined range listing the keys of scope after
+// after, with its upper bound at the prefix ceiling if one exists. The
+// caller emits it as a child. Its splits stay in scope. The flat listing's
+// seed, prior, structure probes and end checks do not apply to it.
+func (p *Engine[P]) Within(scope, after string) Range {
+	hi, bounded := prefixCeil(scope)
+	r := Range{lo: strings.Clone(after), hi: hi, open: !bounded, scope: strings.Clone(scope), scoped: true, born: fromWithin, id: p.ids.Add(1)}
+	p.lock()
+	p.account(time.Now())
+	p.queued++
+	p.c.Max(cMaxQueued, int64(p.queued))
+	p.unlock()
+	return r
 }
 
 // proposal is a split's pivot as the policy places it (propose), computed
@@ -1218,12 +1251,12 @@ func (p *Engine[P]) commit(st *running, r Range, c string, pv pivot) (lower, upp
 	if r.tile > 0 {
 		p.tileRanges(r.tile, 0, 2) // the children; the parent ends after
 	}
-	lower = Range{lo: c, hi: m, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
+	lower = Range{lo: c, hi: m, scope: r.scope, scoped: r.scoped, id: p.ids.Add(1), born: fromLower, depth: depth, pivot: pv.src, hiSrc: pv.src, tile: r.tile,
 		handout: r.open || r.handout, sb: structure{bounds: within(st.sb.bounds, c, m), capped: st.sb.capped}, zeroes: st.zeroes}
-	upper = Range{lo: m, hi: r.hi, open: r.open, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
+	upper = Range{lo: m, hi: r.hi, open: r.open, scope: r.scope, scoped: r.scoped, id: p.ids.Add(1), born: fromUpper, depth: depth, pivot: pv.src, hiSrc: r.hiSrc, tile: r.tile,
 		handout: r.handout, sb: structure{bounds: within(st.sb.bounds, m, r.hi), capped: st.sb.capped},
 		gen: min(r.gen+1, gallopMaxGen), anchor: pv.chain, zeroes: st.zeroes,
-		stall: stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
+		stall: !r.scoped && stalled(c, m, r, len(p.opt.Prefix)), gapEnd: r.gapEnd}
 	lower.lat, upper.lat, lower.slow, upper.slow = st.lat, st.lat, pv.slow, pv.slow
 	lower.est, lower.estOK, lower.prior = pv.lower, pv.estOK, pv.prior
 	lower.grown, upper.grown = st.grown, st.grown

@@ -210,7 +210,7 @@ func (p *Engine[P]) probeStructure(ctx context.Context, c, hi string) structure 
 // flight, not suppressed, and an idle worker now. Called without mu.
 func (p *Engine[P]) maybeProbe(ctx context.Context, st *running, r Range, c string) {
 	mode := p.opt.Structure
-	if mode == StructureOff || !hierarchical(c, len(p.opt.Prefix)) || !p.safe(c) {
+	if r.scoped || mode == StructureOff || !hierarchical(c, len(p.opt.Prefix)) || !p.safe(c) {
 		return
 	}
 	why := probeFrontier

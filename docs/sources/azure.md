@@ -2,7 +2,8 @@
 
 `az://ACCOUNT/CONTAINER[/PREFIX]`, or the same as `https://ACCOUNT.blob.core.windows.net/CONTAINER[/PREFIX]`,
 lists a container's current blobs, or those whose names start with the prefix, in an account with a flat
-namespace. `--all-versions` lists every entry: blob versions, snapshots and soft-deleted blobs beside the
+namespace. Hierarchical namespaces (Data Lake Storage Gen2) use directory traversal for current blobs.
+`--all-versions` lists every entry: blob versions, snapshots and soft-deleted blobs beside the
 current blobs.
 
 ## The smallest command
@@ -30,13 +31,17 @@ source is shown as `?sig=[redacted]`, and a resume needs the SAS again, by `--az
 `marker` or another List Blobs parameter, in any case) is refused at startup with exit 2, naming the parameter.
 Rules shared by every object store are in [Choose a source](README.md#credentials-on-every-object-store).
 
-**Flat namespace only.** Before listing, swath checks that the account's namespace is flat. An account with a
-hierarchical namespace (Data Lake Storage Gen2) is refused with exit 2 and cause `unsupported`. When swath
-cannot tell (some anonymous callers are refused every answer), the run is refused the same way unless
-`--azure-assume-flat` asserts a flat namespace; an account that reports a hierarchical namespace is refused
-whatever is asserted. A credential refused during the check ends the run as an authentication failure (exit
-1, cause `auth`). A busy or failing service is asked again until it answers or the run stops as stuck (exit
-75).
+**Namespace detection.** Before listing, swath checks the account's namespace. A flat namespace uses
+key ranges; a hierarchical namespace uses directory traversal. When the account checks cannot tell,
+a directory listing can establish a hierarchical namespace. Otherwise the run is refused unless
+`--azure-assume-flat` asserts a flat namespace. That assertion never overrides an affirmative hierarchical
+result. A credential refused during the check ends the run as an authentication failure (exit 1, cause
+`auth`). A busy or failing service is asked again until it answers or the run stops as stuck (exit 75).
+
+**Hierarchical namespaces.** List a container or a directory prefix ending in `/`. Directory rows have a
+trailing `/`; their subtrees follow them in byte order. The directory at the source root is not a row.
+These listings do not yet support resume, `--seed-from`, `--sequential`, `--max-keys`, `--all-versions` or range traces.
+A large directory can be divided among workers; small directories each cost a listing request.
 
 ## Options for this source
 
@@ -88,12 +93,16 @@ Azure's own:
 
 ## Limits and known differences
 
-- Hierarchical namespaces (Data Lake Storage Gen2) are not supported.
+- Hierarchical namespaces use the directory traversal described above; optional metadata, tags and
+  immutability columns remain null on directory rows.
+- A hierarchical directory whose key plus its trailing `/` exceeds the Azure dataset schema
+  limit of 3,072 UTF-8 bytes is refused; its name is never truncated.
 - Azure lists names in UTF-16 order; swath reorders them into byte order, as every other source's.
 - An `--include` with a literal prefix narrows the listing to it, as on S3 and GCS ([what narrows the
   listing](../filters.md#what-narrows-the-listing)). When the source URL cannot carry that prefix beside its
   SAS, swath lists the URL as given and filters the rows, and the report says why (`invocation.narrowing`
-  `provider_declined_prefix`).
+  `provider_declined_prefix`). For a hierarchical namespace, narrowing uses a directory boundary
+  that retains any matching directory row and skips unrelated subtrees; the row filter applies the exact include.
 - A run with such an include that was interrupted under 0.4.0 must be finished with 0.4.0: 0.4.0 listed the
   whole source URL, this release lists the narrowed prefix, so `swath resume` refuses the run (exit 2).
 - The report has no cost estimate for an Azure listing.

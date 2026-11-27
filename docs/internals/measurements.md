@@ -24,6 +24,99 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## Azure HNS live verification (2026-11-27)
+
+PR [#702](https://github.com/varveio/swath/pull/702), production source `67cc5a2c`, was checked against
+`az://overturemapswestus2/release/2026-10-21.0/` anonymously from Linux arm64 with Go 1.27.4.
+The binary was built with `./build.sh` immediately before committing the review fixes, so its report
+identifies `0f8f371f-dirty`; its production source is identical to `67cc5a2c`.
+These are correctness checks, not performance comparisons.
+
+The independent oracle used the Data Lake endpoint, not swath's Blob listing path:
+`GET https://overturemapswestus2.dfs.core.windows.net/release` with `resource=filesystem`,
+`directory=2026-10-21.0`, `recursive=true`, `maxResults=5000` and `x-ms-version: 2023-11-03`.
+It followed `x-ms-continuation`, appended `/` to directory names, and sorted the resulting keys by
+UTF-8 bytes. One request returned 1,041 keys. Every comparison below checked the complete ordered
+key sequence, including directory rows, rather than just counts.
+
+| Run | Keys | Result | Listing requests | Accepted splits |
+|---|---:|---|---:|---:|
+| Normal listing | 1,041 | Exact oracle match | 24 | 0 |
+| Diagnostic listing, page size 20 | 1,041 | Exact oracle match | 113 | 18 |
+| Include `^theme=addresses/` | 66 | Exact filtered-oracle match | 3 | 0 |
+
+The small-page run split eight directories. All runs selected tree mode from filesystem properties
+and completed successfully. Listing requests exclude namespace admission; total HTTP attempts were
+26, 115 and 5, respectively.
+
+Commands used the same root and common flags `--anonymous --workers 8 --format jsonl --columns key
+--no-stats --max-duration 90s --report REPORT.json`:
+
+```sh
+swath list az://overturemapswestus2/release/2026-10-21.0/ [common flags]
+swath diag list az://overturemapswestus2/release/2026-10-21.0/ [common flags] --page-size 20
+swath list az://overturemapswestus2/release/2026-10-21.0/ [common flags] --include-regex '^theme=addresses/'
+```
+
+The include run retained the matching directory row as well as its descendants. This check validates
+live anonymous traversal, paging, splitting and include pruning for this scope. It does not validate
+SAS admission, metadata columns, Parquet publication, or empty admission pages against the live service;
+the latter has deterministic regression coverage. The November 11 predecessor's Overture and Bing
+checks were different binaries and are not counted as validation of this rebuild.
+
+## Localfs tree extraction (2026-11-27)
+
+Base `f579bd64` versus PR [#702](https://github.com/varveio/swath/pull/702) production code
+`29e218b4`, built with `CGO_ENABLED=0 GOMAXPROCS=4 go build -trimpath ./cmd/swath`.
+This host differed from the default above: Linux arm64, Go 1.27.4, 18 logical CPUs, 31.4 GiB RAM,
+overlay filesystem, shared host. Runs used four workers, `GOMAXPROCS=4`, `GOMEMLIMIT=2GiB`,
+default GC settings and the shared benchmark lock.
+
+Synthetic fixtures reused `localtree_gen.py` with seed `20261127`: 120,000 files in each shape,
+24 directories in `bigdirs` (5,000 files each, crossing the chunk boundary) and 20,073 descendant
+directories in `smalldirs`. Files had deterministic nonzero sparse lengths, and all timestamps were
+fixed. [`localfs_ab.py`](../../bench/localfs_ab.py) compared native and portable `--metadata stat`
+listings (JSONL key, kind, size, mode and modification time) and `du --apparent-size -d 0`.
+All 64 invocations, including warmups, matched the independent listing or apparent-total oracle;
+complete output was byte-identical across arms within each shape/engine/command.
+
+Wall time below is milliseconds, median (min–max) of three measured runs per arm after one validated
+warmup per arm. Measured order was candidate/base, base/candidate, candidate/base; the harness now
+defaults to four repetitions to balance this order. Wall time includes startup, Python pipe
+draining and report writes. RSS is median process peak MiB, base / candidate.
+
+| Shape, reader, command | Base ms | Candidate ms | RSS MiB |
+|---|---:|---:|---:|
+| bigdirs, native, list | 68.4 (59.0–73.3) | 60.1 (58.9–64.0) | 61.3 / 61.2 |
+| bigdirs, native, du | 46.5 (44.4–52.0) | 47.9 (47.6–58.3) | 49.2 / 50.5 |
+| bigdirs, portable, list | 62.8 (62.6–80.7) | 66.0 (56.3–75.9) | 65.9 / 64.2 |
+| bigdirs, portable, du | 50.0 (44.6–50.4) | 52.3 (48.2–53.8) | 53.3 / 58.2 |
+| smalldirs, native, list | 182.2 (180.8–184.5) | 198.8 (192.2–199.2) | 68.3 / 69.6 |
+| smalldirs, native, du | 102.4 (92.0–114.3) | 101.8 (89.5–106.0) | 47.9 / 46.6 |
+| smalldirs, portable, list | 181.9 (173.7–185.7) | 175.5 (171.9–180.8) | 79.0 / 72.8 |
+| smalldirs, portable, du | 125.1 (121.8–126.4) | 111.7 (109.3–115.9) | 48.5 / 48.2 |
+
+The initial native `smalldirs` listing was 9.1% slower. A focused repeat on the same fixture,
+three pairs in the opposite starting order, gave base 179.9 (176.8–182.6) ms and candidate
+172.1 (170.0–181.7) ms, with identical output again. This did not reproduce the slowdown;
+neither sample establishes a speedup or a tight regression bound on this shared host.
+
+The identical `BenchmarkProviderEmit` source in both revisions measured already sorted batches
+of 2,048 rows, excluding traversal, sorting and output encoding. Three interleaved 300 ms runs
+per arm (base/candidate, candidate/base, base/candidate), `GOMAXPROCS=4`, gave these medians:
+
+| Batch | Base ns/row | Candidate ns/row | Bytes / allocations per batch, both arms |
+|---|---:|---:|---:|
+| files | 1.157 | 4.888 | 0 / 0 |
+| one directory per 16 rows | 6.278 | 8.280 | 10,240 / 256 |
+| same mixed batch, no directory rows | 6.036 | 8.149 | 10,240 / 256 |
+
+The extraction adds a measured 2–4 ns per row in this isolated path. ARM64 disassembly shows
+the per-row classifier remains an indirect call and copies its returned range even for a leaf;
+the former loop classified inline. Allocation counts are unchanged. This comparison covers
+warm-cache Linux metadata workloads, not cold disks, mounted/network filesystems, Parquet output
+or native macOS/Windows performance. Reproduction commands are in [testing.md](testing.md#running-tests-locally).
+
 ## macOS volume boundary checks (2026-11-23)
 
 Commit `fbfb8344`, Go 1.27.4, GitHub Actions `macos-latest` arm64, on the

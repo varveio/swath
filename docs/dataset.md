@@ -35,7 +35,7 @@ inventory/run.json
 - **`run.json`** is the [run report](reference/run-report.md): how the run went. It is written after the commit
   and is not part of the dataset.
 - **`cuts.txt`** is the [cut file](#the-cut-file), which the next listing of the same bucket can start from. It
-  is written last, after `run.json`; a dataset of a local tree has none.
+  is written last, after `run.json`; a dataset of a local tree or Azure hierarchical namespace has none.
 - **`error.json`** is what a run that did not commit leaves instead of a manifest: that run's outcome
   ([exit codes](reference/exit-codes.md#the-outcome-of-record)). A committed dataset has none, a partial one
   included, except beside a dataset that an `--overwrite` run failed to replace, where it is that run's outcome.
@@ -182,7 +182,7 @@ key's encoding and uniqueness, and the meaning of a row.
 | `swath/s3-versions/v1` | an S3 version or delete marker (`--all-versions`) | UTF-8 | no: one row per version | 1,024 bytes |
 | `swath/gcs-objects/v1` | a Cloud Storage live object | UTF-8 | yes | 1,024 bytes |
 | `swath/gcs-generations/v1` | a Cloud Storage generation, live or noncurrent (`--all-versions`) | UTF-8 | no: one row per generation | 1,024 bytes |
-| `swath/azure-objects/v1` | an Azure Blob current blob | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
+| `swath/azure-objects/v1` | an Azure Blob current blob or hierarchical-namespace directory | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
 | `swath/azure-versions/v1` | an Azure Blob version, snapshot, soft-deleted blob or current blob (`--all-versions`) | UTF-8 | no: one row per entry | 3,072 bytes |
 | `swath/local-entries/v1` | a filesystem entry below the root, directories included | arbitrary bytes (unannotated `BYTE_ARRAY`) | yes | none |
 
@@ -260,6 +260,12 @@ records `no_dirs` in `coverage.filters`):
 | `link_target` | binary | the `readlink` result, symlinks only (unless `--no-link-target`); exact bytes on Linux and other Unix systems, while the portable engine on Windows writes it with `/` separators (`filepath.ToSlash`) |
 
 Under `--metadata names` (no stat) the stat columns are null.
+
+**Azure hierarchical directories.** A directory row uses its name with a trailing `/`; the source root
+itself is omitted. It uses `swath/azure-objects/v1`, with no extra kind column. Dataset totals and `du`
+count these rows as objects and sum their reported size (normally zero); a trailing slash cannot
+distinguish a directory from a flat namespace's real marker blob. The tree source's diagnostic counters
+separate files and directories. Optional metadata, tags and immutability fields stay null on directories.
 
 **Totals from a local dataset.** A directory's `size` and `last_modified` are its own, never its subtree's, and
 the root has no row. Summing `size` over every row gives entry bytes, directories' own `st_size` included: not
@@ -375,7 +381,7 @@ These six lines are the `inventory` dataset's: their counts sum to its 5,252 row
 
 The file stays within 262,144 lines and 16 MiB whatever the dataset's size. It is advisory and outside the
 SeekParquet format: the manifest does not name it, readers ignore it, and a dataset without it is whole. A
-dataset has none when its source is a local tree (which `--seed-from` does not take), when it has no rows, when
+dataset has none when its source is a local tree or Azure hierarchical namespace (which `--seed-from` does not take), when it has no rows, when
 its last key holds a line feed, or when the run was stopped between its commit and the cut file. A run that
 cannot write it warns, and the dataset stands.
 

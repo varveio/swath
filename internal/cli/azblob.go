@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
@@ -49,7 +50,7 @@ func azblobFlags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any 
 		Long: "A JSON object, keys sorted; {} for a blob without any. Needs the right to read tags (a SAS with the t permission, or an Entra ID role such as Storage Blob Data Owner); without it every request fails, anonymous ones included."})
 	Define(f, Flag{Name: "azure-fetch-immutability", Value: Switch(&o.FetchImmutability), Usage: "fill the immutability policy and legal hold columns"})
 	Define(f, Flag{Name: "azure-assume-flat", Value: Switch(&o.Flat), Usage: "assume a flat namespace where the account will not tell",
-		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report still refuses. Frozen for resume and shown in the report."})
+		Long: "For when Get Account Information and the Data Lake host's Filesystem Get Properties are both refused or silent (a Data Lake host that refuses the account for soft delete or blob events already establishes a flat one); a hierarchical namespace they report uses tree listing for current blobs. Frozen for resume and shown in the report."})
 	return o
 }
 
@@ -99,11 +100,18 @@ func openAzblob(ctx context.Context, req registry.Request) (registry.Source, err
 		}
 		return &azblobSource[azblob.Version]{registry.From(o.Bound()), o}, nil
 	}
-	o, err := azblob.Open(ctx, req.Root, opt)
+	o, err := azblob.OpenNarrowed(ctx, req.Root, req.OriginalRoot, opt)
 	if err != nil {
 		return nil, err
 	}
-	return &azblobSource[azblob.Object]{registry.From(o.Bound()), o}, nil
+	switch o := o.(type) {
+	case *azblob.Opened[azblob.Object]:
+		return &azblobSource[azblob.Object]{registry.From(o.Bound()), o}, nil
+	case *azblob.OpenedTree:
+		return &azblobTreeSource{registry.From(o.Bound()), o}, nil
+	default:
+		return nil, fmt.Errorf("Azure Blob: unexpected inventory type %T", o)
+	}
 }
 
 // options are the Azure options the command line gives: the Azure flags
@@ -150,4 +158,28 @@ var (
 	_ source.Identified   = (*azblobSource[azblob.Version])(nil)
 	_ source.Capable      = (*azblobSource[azblob.Version])(nil)
 	_ source.Reporter     = (*azblobSource[azblob.Version])(nil)
+)
+
+// azblobTreeSource attaches output and recursive excludes to the tree listing.
+type azblobTreeSource struct {
+	registry.Bound[azblob.Object]
+	*azblob.OpenedTree
+}
+
+func (o *azblobTreeSource) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
+	if err := o.PruneDirectories(env.Filter); err != nil {
+		return order.Stats{}, nil, err
+	}
+	return o.Bound.Run(ctx, env)
+}
+
+var (
+	_ registry.Source   = (*azblobTreeSource)(nil)
+	_ source.Identified = (*azblobTreeSource)(nil)
+	_ source.Capable    = (*azblobTreeSource)(nil)
+	_ source.Reporter   = (*azblobTreeSource)(nil)
+	_ source.Live       = (*azblobTreeSource)(nil)
+	_ source.Faulted    = (*azblobTreeSource)(nil)
+	_ source.Advancing  = (*azblobTreeSource)(nil)
+	_ source.Requested  = (*azblobTreeSource)(nil)
 )

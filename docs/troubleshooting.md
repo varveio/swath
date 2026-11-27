@@ -127,7 +127,7 @@ A directory that holds an interrupted run is continued with `swath resume DIR`, 
 swath: inventory: output directory is not empty: it holds an interrupted run (swath resume DIR continues it; --overwrite starts over)
 ```
 
-A dataset run of an S3, GCS or Azure Blob source keeps a journal, and it and `swath resume` need an output
+A dataset run of an S3, GCS or flat-namespace Azure Blob source keeps a journal, and it and `swath resume` need an output
 directory (for a bucket destination, the `--work-dir`) on a filesystem that syncs directories. On Windows
 swath checks this when the run starts, and where the filesystem refuses, the run is refused before it writes
 anything, the filesystem's error in parentheses:

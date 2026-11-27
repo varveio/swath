@@ -32,7 +32,7 @@ var ErrProtocol = errors.New("protocol violation")
 var ErrOmitted = errors.New("the service omitted keys")
 
 // ErrUnsupported marks a source the tool refuses before listing (an S3
-// directory bucket or an Azure namespace that is not positively flat).
+// directory bucket or an Azure listing mode that cannot serve the request).
 // Admission may make requests to establish whether the source is supported.
 var ErrUnsupported = errors.New("unsupported source")
 

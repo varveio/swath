@@ -6,6 +6,7 @@ package command
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,10 +19,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/journal"
+	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 )
@@ -348,5 +351,76 @@ func TestAzblobNarrowedSeedScope(t *testing.T) {
 		if got := datasetKeys(t, dir); !slices.Equal(got, c.want) {
 			t.Fatalf("%s: %d keys, want %d", c.name, len(got), len(c.want))
 		}
+	}
+}
+
+// TestAzblobTreeIncludeNarrows passes the original command root through
+// admission. The inferred d/sub/ scope would omit the matching directory
+// row, so the walk keeps d/ and the row filter chooses both matching rows.
+func TestAzblobTreeIncludeNarrows(t *testing.T) {
+	captureStderr(t)
+	var lists atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("restype") == "account" && q.Get("comp") == "properties" {
+			w.Header().Set("x-ms-is-hns-enabled", "true")
+			return
+		}
+		lists.Add(1)
+		if q.Get("comp") != "list" || q.Get("delimiter") != "/" {
+			t.Errorf("unexpected Azure request %s", r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var entries string
+		switch q.Get("prefix") {
+		case "d/":
+			entries = `<BlobPrefix><Name>d/sub/</Name><Properties><ResourceType>directory</ResourceType></Properties></BlobPrefix>` +
+				`<Blob><Name>d/z</Name><Properties><ResourceType>file</ResourceType><Content-Length>3</Content-Length></Properties></Blob>`
+		case "d/sub/":
+			entries = `<Blob><Name>d/sub/match</Name><Properties><ResourceType>file</ResourceType><Content-Length>11</Content-Length></Properties></Blob>`
+		default:
+			t.Errorf("unexpected Azure listing prefix %q", q.Get("prefix"))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		io.WriteString(w, `<EnumerationResults><Blobs>`+entries+`</Blobs><NextMarker /></EnumerationResults>`)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	common := []string{"--endpoint-url", srv.URL, "--anonymous", "--workers", "2", "--azure-assume-flat"}
+	for _, tc := range []struct {
+		root, flag, reason string
+	}{
+		{"az://acct/c/d/su", "", "must name a directory"},
+		{"az://acct/c/d/", "--sequential", "--sequential"},
+		{"az://acct/c/d/", "--all-versions", "--all-versions"},
+	} {
+		args := slices.Concat([]string{tc.root}, common)
+		if tc.flag != "" {
+			args = append(args, tc.flag)
+		}
+		if err := runCount(ctx, args, io.Discard); !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), tc.reason) {
+			t.Fatalf("%v: %v, want refusal mentioning %q", args, err, tc.reason)
+		}
+	}
+	if got := lists.Load(); got != 0 {
+		t.Fatalf("%d requests on unsupported configurations", got)
+	}
+
+	ds, report := filepath.Join(t.TempDir(), "ds"), filepath.Join(t.TempDir(), "run.json")
+	args := slices.Concat([]string{"az://acct/c/d/", "--include", "sub/", "--include", "sub/**", "-o", ds, "--report", report}, common)
+	if err := run(ctx, args, io.Discard, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := datasetKeys(t, ds), []string{"d/sub/", "d/sub/match"}; !slices.Equal(got, want) {
+		t.Fatalf("keys %q, want %q", got, want)
+	}
+	var rep narrowReport
+	readJSON(t, report, &rep)
+	if rep.Invocation.Source != "az://acct/c/d/" || rep.Invocation.Narrowing != filter.NarrowDeclined || rep.Output.RowsEmitted != 2 {
+		t.Fatalf("narrowed HNS report %+v", rep)
 	}
 }

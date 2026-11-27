@@ -121,6 +121,8 @@ func (cfg *Config) finalize(r *Report, err error) {
 // SourceConfig is what to list.
 type SourceConfig struct {
 	URI string // a local directory, or scheme://...; the registered provider for the scheme lists it
+	// OriginalURI is the source before include narrowing, when narrowed.
+	OriginalURI string
 	// Options is the provider's options value (registry.Factory.Flags or
 	// Defaults); opaque here. nil takes the provider's defaults.
 	Options any
@@ -778,7 +780,7 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	if cfg.Output.Dir != "" && (cfg.Output.Resume || cfg.Output.Replace) {
 		seen = journal.Witness(cfg.Output.Dir)
 	}
-	src, err := f.Open(ctx, registry.Request{Root: cfg.Source.URI, Options: opts, Workers: cfg.Limits.Workers, Warn: warn})
+	src, err := f.Open(ctx, registry.Request{Root: cfg.Source.URI, OriginalRoot: cfg.Source.OriginalURI, Options: opts, Workers: cfg.Limits.Workers, Warn: warn})
 	if err != nil {
 		// Before ownership (credentials, say): the outcome of the run this
 		// invocation would have continued or replaced is recorded too, so
@@ -790,6 +792,13 @@ func run(ctx context.Context, cfg Config) (Report, error) {
 	}
 	s, loc := src.Schema(), src.Locator()
 	sum.Invocation.Source, sum.Invocation.SchemaID = loc.Root, s.ID
+	if cfg.Source.OriginalURI != "" && f.KeyPrefix != nil {
+		before, err := f.KeyPrefix(cfg.Source.OriginalURI)
+		listed, lerr := f.KeyPrefix(loc.Root)
+		if err == nil && lerr == nil && listed == before {
+			sum.Invocation.Narrowing = filter.NarrowDeclined
+		}
+	}
 	if cfg.Source.SeedFrom != "" {
 		pr, err := seedFrom(cfg, src)
 		switch {
@@ -883,7 +892,7 @@ func owned(ctx context.Context, cfg Config, sum Report, src registry.Source, s s
 	if cfg.Trace != nil {
 		t, ok := src.(source.Traced)
 		if !ok {
-			return sum.failed(&ConfigError{Reason: "--trace: this source is not listed by the range engine (S3, GCS and Azure Blob are)"})
+			return sum.failed(&ConfigError{Reason: "--trace: this source listing mode does not support range traces"})
 		}
 		t.TraceTo(cfg.Trace)
 	}

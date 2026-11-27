@@ -34,6 +34,7 @@ import (
 
 // Query is one listing request in the engine's terms.
 type Query struct {
+	scoped    bool        // a caller-defined scope (Within), outside flat end checks
 	chain     *chainState // raw group ordering/progress, owned by this request chain
 	Prefix    string
 	Delimiter string // "" or "/"
@@ -388,7 +389,7 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 	if p.d.Groups && in.chain == nil {
 		in.chain = &chainState{last: strings.Clone(in.After)}
 	}
-	var seen *tokenWindow // the recent tokens of a run of empty continuing pages
+	var seen *TokenWindow // the recent tokens of a run of empty continuing pages
 	empties := 0          // the run's length
 	// chainStart: no page of this chain has held an entry yet, so its first
 	// row may be the key at an inclusive start bound (also after empty
@@ -439,7 +440,7 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 				if !p.d.Groups {
 					p.frontier.Add(1)
 				}
-				if p.endChecks() {
+				if !in.scoped && p.endChecks() {
 					p.witness(out)
 				}
 				return out, nil
@@ -448,9 +449,9 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 				return nil, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
 			}
 			if seen == nil {
-				seen = newTokenWindow(in.Token)
+				seen = NewTokenWindow(in.Token)
 			}
-			if !seen.add(out.Token) {
+			if !seen.Add(out.Token) {
 				return nil, fmt.Errorf("%w: an empty page's continuation token makes no progress", p.d.invalid())
 			}
 			if ctx.Err() != nil {
@@ -725,21 +726,22 @@ func (p *Engine[P]) Frontier() (advanced, emptyChained int64) {
 	return p.frontier.Load(), p.c.Load(cEmptyChainPages)
 }
 
-// tokenWindow holds the latest emptyTokenWindow tokens of a run.
-type tokenWindow struct {
+// TokenWindow holds the latest emptyTokenWindow tokens of a run.
+type TokenWindow struct {
 	set  map[string]bool
 	ring []string
 	next int
 }
 
-func newTokenWindow(first string) *tokenWindow {
-	w := &tokenWindow{set: map[string]bool{}, ring: make([]string, 0, 16)}
-	w.add(first)
+// NewTokenWindow starts a bounded recent-token history at first.
+func NewTokenWindow(first string) *TokenWindow {
+	w := &TokenWindow{set: map[string]bool{}, ring: make([]string, 0, 16)}
+	w.Add(first)
 	return w
 }
 
-// add records tok and reports whether it is not among the kept tokens.
-func (w *tokenWindow) add(tok string) bool {
+// Add records tok and reports whether it is not among the kept tokens.
+func (w *TokenWindow) Add(tok string) bool {
 	if w.set[tok] {
 		return false
 	}

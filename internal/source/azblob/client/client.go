@@ -101,13 +101,20 @@ type ListInput struct {
 	// orders them itself: a hierarchical namespace lists in its own order,
 	// which is not UTF-16 code-unit order. It is never sent.
 	AnyOrder bool
+	// Tree reads a hierarchical namespace's delimiter listing by name.
+	// Directory prefixes carry properties and become directory items with
+	// the trailing delimiter removed.
+	Tree bool
 }
 
 // Item is one listed entry: a blob, or with Prefix a BlobPrefix (a
 // delimiter roll-up, of which only Name is set).
 type Item struct {
-	Name         string
-	Prefix       bool
+	Name   string
+	Prefix bool
+	Dir    bool
+	// Hierarchical reports a file or directory resource type on the wire.
+	Hierarchical bool
 	Size         int64
 	LastModified int64 // Unix microseconds; 0 when absent
 	CreationTime int64 // Unix microseconds; 0 when absent

@@ -27,6 +27,7 @@ import (
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/longpath"
 	"github.com/varveio/swath/internal/source"
+	"github.com/varveio/swath/internal/source/tree"
 	"github.com/varveio/swath/reader/listing"
 )
 
@@ -603,78 +604,45 @@ func (p *Provider) statFailed(key, path string, st *Stats, err error) {
 	p.unread(st, key, unreadReason(err))
 }
 
-// emit hands a directory's sorted rows to e, splicing each subdirectory in
-// as a child range right after its DIR row, opened from d, the directory
-// read (dirFD.child). The run's own output (Skip) and an entry whose key
-// passes maxKeyBytes are dropped, a directory with its subtree. A
-// directory on another device (OneFilesystem) or pruned by the filters is
-// listed and not walked.
+// emit classifies rows for the shared tree walker and prepares child ranges
+// relative to d, the directory read. Only a child handed to the emitter
+// takes its own reference to the directory descriptor.
 func (p *Provider) emit(r Range, d *dirFD, rows []Row, e source.Emitter[Range, Entry], st *Stats) error {
-	start := 0
-	for i := range rows {
-		row := &rows[i]
-		output, long := len(p.opt.Skip) > 0 && p.opt.Skip[row.Key], len(row.Key) > maxKeyBytes
-		if output || long {
-			if long {
-				name := strings.TrimSuffix(row.Key[len(r.prefix):], "/")
-				st.note(&st.KeyTooLong, r.path+string(os.PathSeparator)+name, fmt.Errorf("its key of %d bytes passes the limit of %d", len(row.Key), maxKeyBytes))
-				p.unread(st, row.Key, errKeyTooLong)
-			} else {
-				st.Skipped++
-			}
-			if err := e.Rows(rows[start:i]); err != nil {
-				return err
-			}
-			start = i + 1
-			continue
+	return tree.EmitRows(e, rows, p.opt.NoDirs, func(row *Row) (Range, tree.Walk) {
+		if len(row.Key) > maxKeyBytes {
+			name := strings.TrimSuffix(row.Key[len(r.prefix):], "/")
+			st.note(&st.KeyTooLong, r.path+string(os.PathSeparator)+name, fmt.Errorf("its key of %d bytes passes the limit of %d", len(row.Key), maxKeyBytes))
+			p.unread(st, row.Key, errKeyTooLong)
+			return Range{}, tree.Omit
+		}
+		if len(p.opt.Skip) > 0 && p.opt.Skip[row.Key] {
+			st.Skipped++
+			return Range{}, tree.Omit
 		}
 		if row.Data.Kind != KindDir {
 			st.Files++
 			st.Bytes += row.Data.Size
-			continue
+			return Range{}, tree.Leaf
 		}
 		st.Dirs++
-		stop := p.otherDevice(row)
-		switch {
-		case stop:
+		if p.otherDevice(row) {
 			st.OtherDevice++
 			p.unread(st, row.Key, unreadReason(errOtherDevice))
-		case p.prune != nil && p.prune(row.Key):
+			return Range{}, tree.Prune
+		}
+		if p.prune != nil && p.prune(row.Key) {
 			st.PrunedDirs++
-			stop = true
+			return Range{}, tree.Prune
 		}
-		if stop {
-			if !p.opt.NoDirs {
-				continue // listed with the rows after it; its subtree is not walked
-			}
-			if err := e.Rows(rows[start:i]); err != nil {
-				return err
-			}
-			start = i + 1
-			continue
-		}
-		end := i + 1
-		if p.opt.NoDirs {
-			end = i
-		}
-		// The child is taken from the row before the rows are handed over:
-		// the emitter owns them then, and a filter may clear the DIR row.
-		// The key is a view of the directory's key arena: the child's
-		// prefix is a copy, so a queued subdirectory does not keep its
-		// parent's names alive. Its reference on d is taken as it is handed
-		// on: Child owns it then, even when it fails.
+		// The key may be a view of the directory's key arena. Copy it
+		// before Rows transfers ownership so a queued child keeps only
+		// its own key, even if a filter clears the directory row.
 		key := row.Key
-		child := Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}
-		if err := e.Rows(rows[start:end]); err != nil {
-			return err
-		}
-		start = i + 1
+		return Range{path: r.path + string(os.PathSeparator) + key[len(r.prefix):len(key)-1], prefix: strings.Clone(key)}, tree.Descend
+	}, func(child Range) Range {
 		child.at, child.below = d.child()
-		if err := e.Child(child); err != nil {
-			return err
-		}
-	}
-	return e.Rows(rows[start:])
+		return child
+	})
 }
 
 // expandFile lists a root that is not a directory: its one row, keyed by
@@ -721,10 +689,6 @@ func (p *Provider) expandFile(e source.Emitter[Range, Entry], st *Stats) error {
 	return e.Rows([]Row{row})
 }
 
-func sortRows(rows []Row) {
-	slices.SortFunc(rows, func(a, b Row) int { return strings.Compare(a.Key, b.Key) })
-}
-
 // expandPortable lists a directory with os.File.ReadDir (readDir: on
 // Windows its own read, which keeps what the enumeration says of each
 // entry) and a stat per entry (statEntry).
@@ -746,7 +710,7 @@ func (p *Provider) expandPortable(ctx context.Context, r Range, e source.Emitter
 	if p.unsorted {
 		st.Unsorted++
 	} else {
-		sortRows(rows)
+		tree.SortRows(rows)
 	}
 	return p.emit(r, d, rows, e, st)
 }

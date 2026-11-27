@@ -64,6 +64,36 @@ flock /tmp/swath-gates.lock env GOMEMLIMIT=2GiB go test -race -count=1 -p 1 -run
 `BenchmarkList` (`internal/source/azblob/client`, sub-benchmarks `flat` and `hierarchy`) one Azure `List` call
 ([measurements](measurements.md#sdk-backed-clients-2026-11-09)).
 
+`TestOutRowsOwnership` (`internal/source/tree`) and `TestEmitDescriptorOwnership`
+(`internal/source/localfs`, Linux/macOS) exercise destructive row consumers and rejected row/child
+handoffs, with and without directory rows. They run in the ordinary Go suites. The existing localfs
+sorted oracle and descriptor-release tests cover complete walks, chunking, cancellation and failures.
+
+For localfs performance changes, `BenchmarkProviderEmit` measures the shared emitter through the
+real localfs provider on pre-sorted file and mixed batches, including descriptor handoff and
+allocations. Run the **same benchmark source** on both revisions:
+
+```bash
+flock /tmp/swath-gates.lock env GOMEMLIMIT=2GiB GOMAXPROCS=4 go test -run '^$' -bench '^BenchmarkProviderEmit$' -benchmem ./internal/source/localfs
+```
+
+The opt-in Linux harness [`bench/localfs_ab.py`](../../bench/localfs_ab.py) runs two built binaries
+on identical generated wide and many-small-directory trees, native and portable readers, `list`
+and apparent-size `du`. It checks listing order and selected metadata against a filesystem oracle,
+checks apparent totals, and requires byte-identical output across both arms. After validating one
+warmup per arm, it alternates measured runs and records wall time, process peak RSS, binary hashes
+and reports. Wall time includes process startup, pipe draining and report writes. Use a fresh output
+directory outside the repository; the default four repetitions balance run order:
+
+```bash
+python3 -B bench/localfs_ab.py --self-test
+flock /tmp/swath-gates.lock python3 -B bench/localfs_ab.py --base /tmp/swath-base --candidate /tmp/swath-pr --out /tmp/swath-localfs-ab
+```
+
+These benchmarks are manual evidence, without timing thresholds in CI. The
+[tree-extraction measurements](measurements.md#localfs-tree-extraction-2026-11-27) record a comparison
+and its limits.
+
 What a `go-race` leg runs, from the repository root (runner instructions: a whole shard belongs on a runner or `go-stress.yml`, not a development host):
 
 ```bash
@@ -1189,3 +1219,13 @@ their dated results remain in
 
 The measurements, their configurations and the commands that reproduce them are in
 [measurements.md](measurements.md); scripts are in `../bench/`.
+
+### Tree-source regression checks
+
+The tree core checks exact global order and child placement (`TestWalkerGlobalOrder`), held directories
+and candidate lookups (`TestOrderedHeldAndCandidates`), and bounded empty-page token cycles
+(`TestOrderedEmptyTokenCycle`). `TestWithin` and `TestWithinIgnoresFlatScope` hold directory-local ranges
+to their explicit scopes. localfs tests rejected-row descriptor ownership
+(`TestRejectedDirectoryRowsDoNotKeepDescriptor`). Azure checks HNS listing, scoped roots, retries,
+pruning, optional columns and reports; CLI integration checks dataset keys and totals, unreadable roots,
+trace refusal and safe include narrowing. These builder tests do not alter the acceptance suite.

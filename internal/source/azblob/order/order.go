@@ -441,6 +441,16 @@ func (a *Adapter) read(ctx context.Context, c *chain, i, limit int) error {
 	a.add(CResponses, 1)
 	if len(out.Items) == 0 && out.NextMarker != "" {
 		a.add(CEmptyPages, 1)
+		// The adapter consumes empty wire pages before its caller can
+		// see them. Guard their markers here, at the wire chain.
+		if sp.sk.empty == nil {
+			sp.sk.empty = keyrange.NewTokenWindow(sp.sk.marker)
+		}
+		if !sp.sk.empty.Add(out.NextMarker) {
+			return invariant("an empty page repeats a continuation marker")
+		}
+	} else {
+		sp.sk.empty = nil
 	}
 	a.consume(c, i, out.Items, out.NextMarker)
 	rows := 0
