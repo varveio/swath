@@ -85,8 +85,9 @@ type Options struct {
 	// tree.DefaultStagingBytes).
 	TreeFolderBytes, TreeStagingBytes int64
 	// TreeHeadroomBytes bounds what the folder walk's pages in flight
-	// reserve until they are decoded and charged (0:
-	// tree.DefaultHeadroomBytes); each reserves 4 KiB an entry asked for.
+	// reserve until they are decoded and charged; each reserves 4 KiB an
+	// entry asked for. 0 is one page for each of Workers and one for the
+	// order stage's drainer, the most the walk has in flight.
 	TreeHeadroomBytes int64
 	Client            API // optional; built from the options above when nil
 	// Policy is the range engine's (the shared engine flags).

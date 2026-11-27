@@ -57,10 +57,13 @@ func newTree(p *Provider, own bool, reason string) (*Tree, error) {
 		// S3's 1,024) and metadata.
 		PageHeadroom:  int64(pageKeys(p.opt.Policy.PageSize)) * pageEntryHeadroom,
 		HeadroomBytes: p.opt.TreeHeadroomBytes,
-		Bytes:         objectBytes,
-		Requeue:       objhttp.Requeue,
-		Counters:      t.set,
-		Base:          counters.ID(len(clientCounters)),
+		// The order stage's workers and its drainer, which lists a queued
+		// folder itself: a page each at most.
+		InFlight: p.opt.Workers + 1,
+		Bytes:    objectBytes,
+		Requeue:  objhttp.Requeue,
+		Counters: t.set,
+		Base:     counters.ID(len(clientCounters)),
 	})
 	t.Walker = tree.NewWalker[struct{}, struct{}, Object](t.d.Root(), t.d, tree.Options[Object]{Size: func(o *Object) int64 { return o.Size }})
 	return t, nil

@@ -497,7 +497,7 @@ the run (`protocol`), so a report shows at most one of them; `tree.limit.*` are 
 | `tree.empty_segments` | count | folders |  | child folders whose last segment is empty (a//), walked as any other |
 | `tree.non_nfc_names` | count | entries |  | entries whose name below the folder is not in Unicode NFC: where a store that matches names in NFC can merge two spellings of one folder |
 | `tree.out_of_scope` | count | entries |  | entries of the start folder whose keys do not start with the source prefix: left out, not walked |
-| `tree.probes` | count | folders |  | folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: below an out-of-scope child of the start folder whose name or the scope's remainder is not ASCII (an NFC-matching store can merge spellings), and below each of their folders |
+| `tree.probes` | count | folders |  | folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: an out-of-scope child of the start folder whose name, decomposed (NFD), begins with the scope's remainder up to its last starter (a store that groups names in NFC can merge spellings there), and each folder below it |
 | `tree.headroom_waits` | count | pages |  | pages that waited for their response headroom (every page in flight at once reserves at most tree.limit.headroom_bytes) |
 | `tree.headroom_wait_ns` | count | ns |  | time those pages waited, summed |
 | `tree.max_folder_entries` | max | entries |  | the most entries (objects and child folders) of one folder |

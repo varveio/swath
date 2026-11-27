@@ -280,6 +280,7 @@ func TestTreeScopeAlias(t *testing.T) {
 	}{
 		{"nfd under nfc", "e", []string{"e\u0301/x", "\u00e9/!", "f"}},
 		{"kelvin", "d/K", []string{"d/\u212a/a", "d/K/b", "d/L"}},
+		{"reordered marks", "\u00e9", []string{"\u1eb9\u0301/!", "\u00e9\u0323/x", "\u00e9z"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, u := r2Bucket(t, tc.keys)
@@ -644,5 +645,51 @@ func TestLiveWalkRefusedOnR2(t *testing.T) {
 	marked := &Live{bucket: "bkt", client: c, r2: true}
 	if err := marked.Walk(context.Background(), live.Walk{Prefix: []byte("a/")}, nil); !errors.Is(err, listing.ErrUnsupported) {
 		t.Fatalf("walk: %v", err)
+	}
+}
+
+// TestTreeScopeNoProbe: a folder R2 merged from two spellings is not
+// listed for a scope none of its spellings can start: s3://bkt/a beside
+// \u00e9/ (holding e\u0301/x and \u00e9/!) lists exactly, and never asks
+// for \u00e9/.
+func TestTreeScopeNoProbe(t *testing.T) {
+	keys := []string{"a/1", "ab", "e\u0301/x", "\u00e9/!"}
+	f, u := r2Bucket(t, keys)
+	opt := r2Options(u)
+	opt.Listing = source.ListingTree
+	rows, o, err := treeList(t, "s3://bkt/a", opt, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRows(t, "scope a", rows, r2Rows(keys)[:2])
+	if n := o.t.Stats().Counters.Value("tree.probes"); n != 0 {
+		t.Fatalf("%d probes", n)
+	}
+	for _, q := range f.Log() {
+		if p := q.Get("prefix"); p != "" && !strings.HasPrefix(p, "a") {
+			t.Fatalf("listed %+q, outside the scope a in every spelling", p)
+		}
+	}
+}
+
+// TestTreeHeadroomCoversWorkers: the default headroom is one page for each
+// worker and one for the order stage's drainer, which lists a queued
+// folder itself: the most the walk has in flight, so a run at many workers
+// never waits for it.
+func TestTreeHeadroomCoversWorkers(t *testing.T) {
+	var keys []string
+	for i := range 300 {
+		keys = append(keys, fmt.Sprintf("f%03d/x", i))
+	}
+	_, u := r2Bucket(t, keys)
+	opt := r2Options(u)
+	opt.Listing = source.ListingTree
+	_, o, err := treeList(t, "s3://bkt", opt, 96)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := o.t.Stats().Counters.Value
+	if v("tree.limit.headroom_bytes") != (96+1)*maxListKeys*pageEntryHeadroom || v("tree.headroom_waits") != 0 {
+		t.Fatalf("headroom %d bytes, %d waits", v("tree.limit.headroom_bytes"), v("tree.headroom_waits"))
 	}
 }

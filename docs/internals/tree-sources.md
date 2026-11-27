@@ -109,19 +109,23 @@ elsewhere is caught only when they arrive, under the folder that does not hold t
 duplicate check included, covers every returned entry before the scope is applied. Leaving a child prefix out
 is not safe by its spelling alone on a store that groups names in Unicode NFC: R2 merges `e\u0301/` and
 `\u00e9/` into one common prefix spelled as one of them, so `\u00e9/` can hold `e\u0301/x`, a key of the scope
-`e`. So a child `F` outside the scope is left out without a request only when the scope's remainder `r`
-(`Select` after the start folder's prefix) and `F`'s segment are both ASCII. Then a key `m` that starts with
-`Select` and that NFC grouping placed under `F` has an NFC segment equal to `F`'s ASCII segment; `m`'s segment
-starts with `r`, and NFC changes an ASCII `r` only by composing its last character into one that is not ASCII,
-so `F` would start with `Select`. Every other `F` is probed (`tree.probes`): its subtree is listed folder by
-folder, checked as any folder is, emitting nothing, and not kept in memory beyond each folder's listing and
-its children's prefixes. A key of the scope hidden in it reaches, at some depth, a listing whose raw prefix it
-does not start with, and stops the run (`protocol`); listing only `F`'s own folder would not do, since a
-deeper common prefix can be spelled as the other spelling's key. The argument needs two things this reader
-has: every folder prefix ends in `/`, and NFC is segmentable at `/` (no canonical decomposition holds `/`,
-and `/` composes with nothing). With them a scope that does not end in `/` (`logs`, covering `logs/` and
-`logs-old/`) and an `--include` narrowing are exact in raw bytes, or the run stops; a probe costs a request per
-folder of the probed subtree, and is taken only for names that are not ASCII.
+`e`. So a child `F` outside the scope is probed (`tree.probes`) only when the NFD form of `F`'s segment begins
+with the stem of the scope's remainder `r` (`Select` after the start folder's prefix): `NFD(r)` up to and
+including its last starter (canonical combining class 0), or "" when `r` has none. Any other `F` is left out
+without a request. A key `m` of the scope placed under `F` has a segment `s` that starts with `r` and is
+canonically equivalent to `F`'s (`NFC(s) == NFC(seg F)`, so `NFD(s) == NFD(seg F)`); `NFD(s)` is the canonical
+reordering of `NFD(r) + NFD(rest)`, and reordering only permutes runs of non-starters, so the stem is a prefix
+of `NFD(s)`, hence of `NFD(seg F)`. So scope `a` never lists `\u00e9/` (`e\u0301`), scope `e` does, scope
+`\u00e9` lists `\u1eb9\u0301/` (NFD e, dot below, acute: where `\u00e9\u0323` belongs), scope `K` lists
+`\u212a/` (NFD `K`), and a remainder of combining marks alone lists every folder outside it. A probe lists the
+subtree folder by folder, checked as any folder is, emitting nothing, and holds no more than each folder's
+listing and its children's prefixes. A key of the scope hidden in it reaches, at some depth, a listing whose
+raw prefix it does not start with, and stops the run (`protocol`); listing only `F`'s own folder would not do,
+since a deeper common prefix can be spelled as the other spelling's key. The argument needs two things this
+reader has: every folder prefix ends in `/`, and NFC and NFD are segmentable at `/` (no canonical
+decomposition holds `/`, and `/` composes and reorders with nothing). With them a scope that does not end in
+`/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing are exact in raw bytes, or the run
+stops. A probe costs a request per folder of the probed subtree.
 
 **Memory.** A folder is held whole while it is read. Each page is charged what its strings retain
 (`FolderPage.Retained`: S3's decoded page keeps one arena at its URL-encoded size, so a key of decomposed
@@ -135,12 +139,17 @@ the order stage's, under its own budget. A folder is not spilled: one larger tha
 this way.
 
 A page in flight is a second, separate bound: from its request until it is decoded and charged it reserves
-`PageHeadroom` from `HeadroomBytes` (256 MiB by default), waiting while other pages hold the rest
-(`tree.headroom_waits`, `tree.headroom_wait_ns`). S3 reserves 4 KiB an entry asked for (a URL-encoded
-1,024-byte key and its metadata), about 4 MiB a page of 1,000, so about 64 pages are in flight at once. It
-cannot deadlock: the headroom is the only thing anyone waits for; a holder takes one reservation at a time and
-releases it once its page is charged or has failed, waiting on nothing but its own request; and staging, which
-a waiter may hold, is never waited for. One reservation never exceeds the bound, and a cancelled wait returns.
+`PageHeadroom` from `HeadroomBytes`, waiting while other pages hold the rest (`tree.headroom_waits`,
+`tree.headroom_wait_ns`). S3 reserves 4 KiB an entry asked for (a URL-encoded 1,024-byte key and its
+metadata): 4,000 KiB a page of 1,000. By default `HeadroomBytes` is one page for each page the walk can have in
+flight (`InFlight`: the order stage's workers and its drainer, which lists a queued folder itself, each reading
+one folder a page at a time), so the bound states the memory rather than limiting the walk: at `--workers 64`,
+254 MiB; at 256, 1,004 MiB. The worst case of a walk is then the staging bound plus that: 510 MiB at 64
+workers, 1.23 GiB at 256, beside the order stage's own budgets. The range engine holds the same response memory, a body of up to 16 MiB for each request in flight
+(`--workers`, plus seed listings and probes beside them), under no bound. It cannot deadlock: the headroom is
+the only thing anyone waits for; a holder takes one reservation at a time and releases it once its page is
+charged or has failed, waiting on nothing but its own request; and staging, which a waiter may hold, is never
+waited for. One reservation never exceeds the bound, and a cancelled wait returns.
 
 **Coverage.** A walk's report claims its scope only when every folder it handed out was read whole (the start
 folder and each child spliced in); a walk that stopped says it is not complete.

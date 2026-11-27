@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sync/semaphore"
@@ -74,9 +73,14 @@ type DelimitedOptions[P any] struct {
 	// PageHeadroom is reserved for each page in flight, from its request
 	// until it is decoded and charged to staging (the response body and
 	// its decoding); every page in flight at once reserves at most
-	// HeadroomBytes (0: DefaultHeadroomBytes), and a page waits for its
-	// reservation. PageHeadroom 0 reserves nothing.
+	// HeadroomBytes, and a page waits for its reservation. PageHeadroom 0
+	// reserves nothing. HeadroomBytes 0 is InFlight pages' headroom, where
+	// InFlight is the most pages the walk can have in flight (the order
+	// stage's expanding goroutines: each reads one folder, a page at a
+	// time), so that the bound is never what limits it; with neither,
+	// DefaultHeadroomBytes.
 	PageHeadroom, HeadroomBytes int64
+	InFlight                    int
 	// Bytes is a row's payload bytes held beyond its key and the row
 	// itself (its strings), for the staging account of a page that does
 	// not say what it retains (FolderPage.Retained); nil counts none.
@@ -103,7 +107,7 @@ var DelimitedCounters = []counters.Def{
 	{Key: "tree.empty_segments", Kind: counters.Count, Unit: "folders", Help: "child folders whose last segment is empty (a//), walked as any other"},
 	{Key: "tree.non_nfc_names", Kind: counters.Count, Unit: "entries", Help: "entries whose name below the folder is not in Unicode NFC: where a store that matches names in NFC can merge two spellings of one folder"},
 	{Key: "tree.out_of_scope", Kind: counters.Count, Unit: "entries", Help: "entries of the start folder whose keys do not start with the source prefix: left out, not walked"},
-	{Key: "tree.probes", Kind: counters.Count, Unit: "folders", Help: "folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: below an out-of-scope child of the start folder whose name or the scope's remainder is not ASCII (an NFC-matching store can merge spellings), and below each of their folders"},
+	{Key: "tree.probes", Kind: counters.Count, Unit: "folders", Help: "folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: an out-of-scope child of the start folder whose name, decomposed (NFD), begins with the scope's remainder up to its last starter (a store that groups names in NFC can merge spellings there), and each folder below it"},
 	{Key: "tree.headroom_waits", Kind: counters.Count, Unit: "pages", Help: "pages that waited for their response headroom (every page in flight at once reserves at most tree.limit.headroom_bytes)"},
 	{Key: "tree.headroom_wait_ns", Kind: counters.Count, Unit: "ns", Help: "time those pages waited, summed"},
 	{Key: "tree.max_folder_entries", Kind: counters.Max, Unit: "entries", Help: "the most entries (objects and child folders) of one folder"},
@@ -207,7 +211,11 @@ func NewDelimited[P any](l FolderLister[P], opt DelimitedOptions[P]) *Delimited[
 		opt.Counters = counters.New(DelimitedCounters)
 		opt.Base = 0
 	}
-	if opt.HeadroomBytes <= 0 {
+	switch {
+	case opt.HeadroomBytes > 0:
+	case opt.InFlight > 0 && opt.PageHeadroom > 0:
+		opt.HeadroomBytes = int64(opt.InFlight) * opt.PageHeadroom
+	default:
 		opt.HeadroomBytes = DefaultHeadroomBytes
 	}
 	// One page's reservation never exceeds the bound, so it is granted
@@ -481,22 +489,28 @@ func (d *Delimited[P]) reserve(ctx context.Context) (release func(), err error) 
 
 // scope keeps the entries of the start folder prefix whose raw bytes
 // start with the scope (Select). An object outside it is left out. A
-// child folder F outside it is left out without listing only when both
-// the scope's remainder r (Select after prefix) and F's segment are
-// ASCII: a key m that starts with Select and that a store grouping names
-// in NFC placed under F has NFC(segment of m) equal to F's segment; m's
-// segment starts with r, and NFC leaves an ASCII r in place unless it
-// composes r's last character into a character that is not ASCII, so an
-// ASCII NFC(segment) starts with r, and F would start with Select. This
-// needs folder prefixes ending in '/' (true of every folder here) and NFC
-// that is segmentable at '/' (no canonical decomposition holds '/', and
-// '/' composes with nothing). Any other F is probed: its subtree is
-// listed, emitting nothing, so that a key of the scope spelled under it
-// another way reaches a listing whose raw prefix it does not start with
-// and stops the run (protocol).
+// child folder F outside it is probed (its subtree listed and checked,
+// emitting nothing) only when NFD of F's segment starts with stem(r), r
+// being the scope's remainder (Select after prefix); any other F is left
+// out unlisted.
+//
+// Why that is enough: a store that groups names by their NFC form (R2)
+// places a key m under F when m's segment s and F's segment are
+// canonically equivalent: NFC(s) == NFC(seg F), so NFD(s) == NFD(seg F).
+// If m is in the scope, s starts with r (r holds no '/'). NFD(s) is the
+// canonical reordering of NFD(r)+NFD(rest), and reordering only permutes
+// runs of non-starters, so NFD(r) up to and including its last starter,
+// stem(r), is a prefix of NFD(s), hence of NFD(seg F). A folder whose
+// NFD segment does not start with stem(r) holds no key of the scope under
+// any spelling. This needs folder prefixes ending in '/' (true of every
+// folder here) and NFC and NFD segmentable at '/' (no canonical
+// decomposition holds '/', and '/' composes and reorders with nothing). A
+// probed folder that hides a key of the scope stops the run (protocol):
+// the key reaches, at some depth, a listing whose raw prefix it does not
+// start with.
 func (d *Delimited[P]) scope(ctx context.Context, prefix string, entries []entry[P]) ([]entry[P], error) {
 	sel := d.opt.Select
-	r := sel[len(prefix):]
+	r0 := stem(sel[len(prefix):])
 	kept := entries[:0]
 	for _, e := range entries {
 		if strings.HasPrefix(e.row.Key, sel) {
@@ -504,7 +518,7 @@ func (d *Delimited[P]) scope(ctx context.Context, prefix string, entries []entry
 			continue
 		}
 		d.inc(cOutOfScope)
-		if e.folder && !(ascii(r) && ascii(e.row.Key[len(prefix):])) {
+		if e.folder && strings.HasPrefix(norm.NFD.String(e.row.Key[len(prefix):]), r0) {
 			if err := d.probe(ctx, strings.Clone(e.row.Key)); err != nil {
 				return nil, err
 			}
@@ -512,6 +526,23 @@ func (d *Delimited[P]) scope(ctx context.Context, prefix string, entries []entry
 	}
 	clear(entries[len(kept):]) // dropped rows release their strings
 	return kept, nil
+}
+
+// stem is NFD(r) up to and including its last starter (canonical
+// combining class 0): the part canonical reordering cannot move when more
+// text follows r. "" when r has no starter.
+func stem(r string) string {
+	n := norm.NFD.String(r)
+	end := 0
+	for i := 0; i < len(n); {
+		p := norm.NFD.PropertiesString(n[i:])
+		size := max(p.Size(), 1)
+		if p.CCC() == 0 {
+			end = i + size
+		}
+		i += size
+	}
+	return n[:end]
 }
 
 // probe lists folder f and every folder below it, checked as list checks
@@ -546,16 +577,6 @@ func (d *Delimited[P]) probe(ctx context.Context, f string) error {
 		}
 	}
 	return nil
-}
-
-// ascii reports whether s is ASCII, which NFC leaves as it is.
-func ascii(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
 }
 
 // emit hands a sorted folder on: runs of objects as Leaf rows, each child

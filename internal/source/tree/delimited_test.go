@@ -593,3 +593,55 @@ func TestDelimitedHeadroom(t *testing.T) {
 	}
 	close(g2.release)
 }
+
+// TestDelimitedProbeStem: a folder outside the scope is probed only when
+// its decomposed segment begins with the scope's remainder decomposed up
+// to its last starter (stem); no spelling of any other folder can hold a
+// key of the scope.
+func TestDelimitedProbeStem(t *testing.T) {
+	// a: \u00e9/ (NFD e\u0301) cannot hold a key starting with a: never
+	// listed, though it holds another spelling's key.
+	l := &aliasLister{folders: map[string]*FolderPage[int64]{
+		"":        {Objects: objects("ab"), Folders: []string{"\u00e9/", "a/"}},
+		"a/":      {Objects: objects("a/1")},
+		"\u00e9/": {Objects: objects("\u00e9/!", "e\u0301/x")},
+	}}
+	got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "a"})
+	if err != nil || !slices.Equal(got, []string{"a/1", "ab"}) || d.opt.Counters.Snapshot().Value("tree.probes") != 0 || slices.Contains(l.prefixes, "\u00e9/") {
+		t.Fatalf("%q, %v, requests %+q", got, err, l.prefixes)
+	}
+	// Reordering: \u00e9\u0323 (e, acute, dot below) decomposes to e, dot
+	// below, acute; its NFC is \u1eb9\u0301, which does not start with the
+	// scope \u00e9 in any form but its stem e. Probed, the hidden key stops
+	// the run.
+	l = &aliasLister{folders: map[string]*FolderPage[int64]{
+		"":              {Folders: []string{"\u1eb9\u0301/"}},
+		"\u1eb9\u0301/": {Objects: objects("\u1eb9\u0301/!", "\u00e9\u0323/x")},
+	}}
+	if got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "\u00e9"}); !errors.Is(err, source.ErrProtocol) || d.opt.Counters.Snapshot().Value("tree.probes") != 1 {
+		t.Fatalf("reordering: %q, %v", got, err)
+	}
+	// A remainder with no starter has an empty stem: every folder outside
+	// the scope is probed.
+	l = &aliasLister{folders: map[string]*FolderPage[int64]{
+		"": {Folders: []string{"a/", "b/"}},
+	}}
+	if got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "\u0301"}); err != nil || len(got) != 0 || d.opt.Counters.Snapshot().Value("tree.probes") != 2 {
+		t.Fatalf("no starter: %q, %v, %s", got, err, mustJSON(d.opt.Counters.Snapshot()))
+	}
+	for r, want := range map[string]string{"": "", "a": "a", "\u00e9": "e", "e\u0301\u0323": "e", "\u0301": "", "ab\u0301c\u0323": "ab\u0301c", "\u212a": "K"} {
+		if got := stem(r); got != want {
+			t.Errorf("stem(%+q) = %+q, want %+q", r, got, want)
+		}
+	}
+}
+
+// TestDelimitedHeadroomCoversInFlight: without a bound of its own, the
+// headroom is one page for each page the walk can have in flight, so it
+// never waits.
+func TestDelimitedHeadroomCoversInFlight(t *testing.T) {
+	d := NewDelimited[int64](&memLister{}, DelimitedOptions[int64]{PageHeadroom: 4 << 20, InFlight: 256})
+	if v := d.opt.Counters.Snapshot().Value("tree.limit.headroom_bytes"); v != 256*4<<20 {
+		t.Fatalf("headroom %d, want 256 pages of 4 MiB", v)
+	}
+}
