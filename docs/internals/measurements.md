@@ -42,21 +42,28 @@ its keys stay 1,024 bytes): 102,061 keys. `bench/s3fill -region auto -create=fal
 them at about 320 PUTs/s with 64 workers and 600 with 128; R2 refused none, at 1,024 bytes included, and no
 request was retried.
 
-**Listing order.** R2 lists in byte order except in two cases, seen through ListObjectsV2 from `bench/s3walk`
-(sequential, continuation tokens, `encoding-type=url`) as well as from swath:
+**Listing order.** Every sequential walk taken (`bench/s3walk`: continuation tokens, `encoding-type=url`), 208,426
+keys in 12 listings with the whole bucket and a random corpus of 2,500 keys built to break it, is in byte order of
+the key's NFC form followed by `:7d` and then something above every valid UTF-8 sequence (`NFC(key) + ":7e"` is an
+equivalent boundary). The key is returned as uploaded. Bisection found the suffix (`q` sorts between `q:7` and `q:8`,
+between `q:7d` and `q:7e`, after `q:7d` followed by two U+10FFFF), the same for seven different keys. So R2 lists in
+byte order except in two cases:
 
-- A key that is a proper prefix of another sorts as if its end were a byte between `0x39` (`9`) and `0x3a` (`:`).
-  Of `k` and `k` followed by each byte `0x01`–`0x7f`, all came back in byte order except `k`, between `k9` and `k:`.
-  So a folder marker `site/0000/00/` comes before `site/0000/00/p00` but `site/0002/` after `site/0002/19/p49`, and
-  `IMG_0000000.jpg` after `IMG_0000000.jpg.orig`.
-- Order follows the key's NFC form while the key is returned as uploaded: a decomposed `éx` comes after `~`,
-  beside `éy`. An NFD and an NFC upload of the same name are one object.
+- A key that is a proper prefix of another sorts among its extensions: after those whose next bytes are below
+  `:7e`, before the rest. A folder marker `site/0000/00/` comes before `site/0000/00/p00` but `site/0002/` after
+  `site/0002/19/p49`; `IMG_0000000.jpg` after `IMG_0000000.jpg.orig`; `q` after `q:7` and before `q:8`.
+- A key not in NFC sorts by its NFC form: a decomposed `e\u0301x` comes after `~`, beside `\u00e9y`. `prefix`
+  matches the NFC form too: `prefix=e` does not return `e\u0301x`, `prefix=\u00e9` does. An NFD and an NFC upload of
+  the same name are one object.
 
-`start-after` seeks in that order and drops the start key only from the first page: `start-after=k5` returned
-`k6`…`k9` and then `k`; `start-after=k9` returned `k`, `k:`, `k;`; `start-after=k` returned the 136 other keys,
-`k` not among them. The prefix-key order has been reported by others
+`start-after=S` returned the keys whose sort form is above the raw bytes of S, without a key equal to S on the first
+page only: `start-after=k5` returned `k6`…`k9` and then `k`; `start-after=k9` returned `k`, `k:`, `k;`; with
+`start-after=site/0000/` over 1,020 keys R2 returned `site/0000/` on the second page. The rule is fitted to these
+listings; Cloudflare documents none of it. The prefix-key order has been reported by others
 ([Cloudflare Community](https://community.cloudflare.com/t/r2-listobjectsv2-returns-keys-in-non-standard-lexicographical-order/941399),
 [litestream-rs #342](https://github.com/emschwartz/litestream-rs/issues/342)); no answer from Cloudflare was found.
+A delimited listing whose prefix is the NFC form of an NFD-named folder timed out twice (20 and 60 s); the same
+request without `delimiter` answered in 0.4 s.
 
 **Per shape**, 64 workers. Pass: the keys listed are the key file's, byte for byte, in order; `du -d 0` counts the same.
 

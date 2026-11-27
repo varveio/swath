@@ -102,3 +102,37 @@ func TestWalkDecodes(t *testing.T) {
 		t.Fatalf("stats %v, requests %q: want 2 URL-encoded pages, the second after token t1", st, asked)
 	}
 }
+
+// A truncated page whose continuation token is empty, or the one the
+// request carried, ends the walk with an error instead of a loop or a
+// silent stop.
+func TestWalkRefusesBadTokens(t *testing.T) {
+	for name, next := range map[string]string{"empty": "", "repeated": "t1"} {
+		t.Run(name, func(t *testing.T) {
+			s3test.NoCredentials(t)
+			t.Setenv("AWS_ACCESS_KEY_ID", "AKIDTEST")
+			t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+			t.Setenv("AWS_ENDPOINT_URL", "")
+			t.Setenv("AWS_ENDPOINT_URL_S3", "")
+			calls := 0
+			url := s3test.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				tok := "t1"
+				if r.URL.Query().Get("continuation-token") != "" {
+					tok = next
+				}
+				// The fake ends the listing on its fourth page, so a walk that
+				// follows a bad token stops instead of looping, and fails below.
+				fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bkt</Name><IsTruncated>%t</IsTruncated><NextContinuationToken>%s</NextContinuationToken><Contents><Key>p/%d</Key><Size>0</Size></Contents></ListBucketResult>`, calls < 4, tok, calls)
+			}))
+			c, _, err := client(context.Background(), url, "us-east-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = walker{c: c, bucket: "bkt", prefix: "p/", maxKeys: 1}.walk(context.Background(), &bytes.Buffer{})
+			if err == nil || calls != 2 {
+				t.Fatalf("err %v after %d requests: want an error on the second page", err, calls)
+			}
+		})
+	}
+}

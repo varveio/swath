@@ -147,8 +147,12 @@ func (w walker) walk(ctx context.Context, out io.Writer) (stats, error) {
 		if !aws.ToBool(p.IsTruncated) {
 			return st, b.Flush()
 		}
-		if p.NextContinuationToken == nil {
+		next := aws.ToString(p.NextContinuationToken)
+		if next == "" {
 			return st, errors.New("a truncated page without a continuation token")
+		}
+		if next == aws.ToString(in.ContinuationToken) {
+			return st, fmt.Errorf("page %d repeats the continuation token it was asked with", st.pages)
 		}
 		st.sizes = append(st.sizes, len(p.Contents))
 		in.ContinuationToken = p.NextContinuationToken
