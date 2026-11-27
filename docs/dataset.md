@@ -195,7 +195,12 @@ name in every schema that has it: `last_modified`, `created_at`, `deleted_at`, `
 `metadata_changed_at` and `storage_class_changed_at` for times, `storage_class` for the storage class (Azure's
 access tier) and `md5` for the base64 MD5 a store lists.
 
-**`swath/vercel-objects/v1`**: `key`, `size` int64 (required), `created_at` timestamp (required; Vercel's `uploadedAt`), and `etag` STRING (null if absent or empty). This is the current blob's reported upload time, not a modification time or the first-ever creation of its pathname; the ETag is opaque, not a promised content checksum. Virtual folders are not rows; real slash-suffixed blobs are.
+**`swath/vercel-objects/v1`**: `key`, `size` int64 (required), `last_modified` timestamp (required;
+Vercel's `uploadedAt`), and `etag` STRING (null if absent or empty). This is the list API's reported upload
+time, normalized to the modification-time column because the vendor SDK exposes HTTP `Last-Modified`
+under the same `uploadedAt` name ([source semantics](sources/vercel.md#dataset-and-metadata)). No creation
+time or stronger metadata-update guarantee is inferred. The ETag is opaque, not a promised content
+checksum. Virtual folders are not rows; real slash-suffixed blobs are.
 
 **`swath/s3-objects/v1`**: `key`, `size` int64, `last_modified` timestamp, `etag` STRING (one pair of surrounding
 quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STRING (null unless the run used

@@ -67,10 +67,7 @@ func (o *vercelFlagged) options() (vercel.Options, error) {
 }
 
 func checkVercelFilter(_ any, f *filter.Spec) error {
-	_, modified, class := f.Reads()
-	if modified {
-		return errors.New("--modified-since and --modified-until require modification times; Vercel Blob supplies upload times only")
-	}
+	_, _, class := f.Reads()
 	if class {
 		return errors.New("--storage-class: Vercel Blob has no storage classes")
 	}

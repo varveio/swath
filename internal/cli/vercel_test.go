@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -100,13 +101,13 @@ func TestVercelDatasetTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	var keys []string
-	var sizes, uploaded []int64
+	var sizes, modified []int64
 	var etags []string
 	if err := plan.Scan(ctx, nil, func(batch *seekparquet.Batch) error {
 		for i := range batch.Len() {
 			keys = append(keys, string(batch.Key(i)))
 			sizes = append(sizes, batch.Column(0).Value(i).Int64())
-			uploaded = append(uploaded, batch.Column(1).Value(i).Int64())
+			modified = append(modified, batch.Column(1).Value(i).Int64())
 			etags = append(etags, string(batch.Column(2).Value(i).Bytes()))
 		}
 		return nil
@@ -114,34 +115,55 @@ func TestVercelDatasetTotals(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(keys, []string{"a", "b"}) || !reflect.DeepEqual(sizes, []int64{3, 7}) ||
-		!reflect.DeepEqual(uploaded, []int64{1767225601000000, 1767225600000000}) || !reflect.DeepEqual(etags, []string{"e1", "e2"}) {
-		t.Fatalf("rows keys=%q sizes=%v uploaded=%v etags=%q", keys, sizes, uploaded, etags)
+		!reflect.DeepEqual(modified, []int64{1767225601000000, 1767225600000000}) || !reflect.DeepEqual(etags, []string{"e1", "e2"}) {
+		t.Fatalf("rows keys=%q sizes=%v modified=%v etags=%q", keys, sizes, modified, etags)
 	}
-	live, saved := totals.New(totals.Options{}), totals.New(totals.Options{})
-	src, err := openVercel(ctx, registry.Request{Root: "vercel://store_test", Options: opt, Workers: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := src.Run(ctx, registry.Env{Count: true, Totals: live, Filter: &filter.Spec{}, Order: order.Options{Workers: 2}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registry.DatasetTotals(ctx, d, "", false, nil, saved, 2); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := saved.Result(), live.Result(); !reflect.DeepEqual(got, want) || len(got) == 0 || got[0].Objects != 2 || got[0].Size != 10 {
-		t.Fatalf("saved %+v live %+v", got, want)
+	for _, tc := range []struct {
+		name                  string
+		filter                filter.Spec
+		objects, size, newest int64
+	}{
+		{name: "all", objects: 2, size: 10, newest: 1767225601000000},
+		{name: "since", filter: filter.Spec{Since: "2026-01-01T00:00:01Z"}, objects: 1, size: 3, newest: 1767225601000000},
+		{name: "until", filter: filter.Spec{Until: "2026-01-01T00:00:00Z"}, objects: 1, size: 7, newest: 1767225600000000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			live, saved := totals.New(totals.Options{}), totals.New(totals.Options{})
+			src, err := openVercel(ctx, registry.Request{Root: "vercel://store_test", Options: opt, Workers: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var filtered atomic.Int64
+			if _, _, err := src.Run(ctx, registry.Env{Count: true, Totals: live, Filter: &tc.filter, Filtered: &filtered, Order: order.Options{Workers: 2}}); err != nil {
+				t.Fatal(err)
+			}
+			read, err := registry.DatasetTotals(ctx, d, "", false, &tc.filter, saved, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := 2 - tc.objects; filtered.Load() != want || read.Filtered != want {
+				t.Fatalf("live filtered %d saved filtered %d, want %d", filtered.Load(), read.Filtered, want)
+			}
+			got, want := saved.Result(), live.Result()
+			if !reflect.DeepEqual(got, want) || len(got) != 1 || got[0].Objects != tc.objects ||
+				got[0].Size != tc.size || !got[0].HasNewest || got[0].Newest != tc.newest {
+				t.Fatalf("saved %+v live %+v, want %d objects, %d bytes, newest %d", got, want, tc.objects, tc.size, tc.newest)
+			}
+		})
 	}
 }
 
 func TestVercelFilterAndTLS(t *testing.T) {
 	f := factory(t, "vercel://store_test")
-	for _, spec := range []*filter.Spec{{Since: "2026-01-01"}, {Until: "2026-01-01"}, {StorageClasses: []string{"STANDARD"}}} {
-		if err := f.CheckFilter(nil, spec); err == nil {
-			t.Fatalf("accepted unavailable fields: %+v", spec)
-		}
+	if err := f.CheckFilter(nil, &filter.Spec{StorageClasses: []string{"STANDARD"}}); err == nil {
+		t.Fatal("accepted unavailable storage class")
 	}
-	if err := f.CheckFilter(nil, &filter.Spec{MinSize: "1", Include: []string{"a*"}}); err != nil {
-		t.Fatal(err)
+	for _, spec := range []*filter.Spec{
+		{Since: "2026-01-01"}, {Until: "2026-01-01"}, {MinSize: "1", Include: []string{"a*"}},
+	} {
+		if err := f.CheckFilter(nil, spec); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv(vercel.TokenEnv, "vercel_blob_rw_test_secret")
 	var codes []string

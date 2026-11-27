@@ -157,12 +157,12 @@ func TestDecodeAzureVersion(t *testing.T) {
 }
 
 func TestDecodeVercelObject(t *testing.T) {
-	values := map[string]seekparquet.Value{"size": seekparquet.Int64Value(42), "created_at": seekparquet.Int64Value(1234567), "etag": seekparquet.ByteArrayValue([]byte("opaque"))}
+	values := map[string]seekparquet.Value{"size": seekparquet.Int64Value(42), "last_modified": seekparquet.Int64Value(1234567), "etag": seekparquet.ByteArrayValue([]byte("opaque"))}
 	v, err := DecodeVercelObject(row(t, VercelObjectsV1, "a/", 0, values))
-	if err != nil || string(v.Key) != "a/" || v.Size != 42 || v.CreatedAt.UnixMicro() != 1234567 || v.ETag == nil || *v.ETag != "opaque" {
+	if err != nil || string(v.Key) != "a/" || v.Size != 42 || v.LastModified.UnixMicro() != 1234567 || v.ETag == nil || *v.ETag != "opaque" {
 		t.Fatalf("decoded %+v, %v", v, err)
 	}
-	for _, name := range []string{"size", "created_at"} {
+	for _, name := range []string{"size", "last_modified"} {
 		saved := values[name]
 		values[name] = seekparquet.NullValue()
 		if _, err := DecodeVercelObject(row(t, VercelObjectsV1, "a/", 0, values)); !errors.Is(err, ErrRow) {

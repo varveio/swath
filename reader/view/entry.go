@@ -21,8 +21,8 @@ type rowShape struct {
 	local   bool
 	columns []string
 	// Optional metadata slots are -1 when the schema has no such column.
-	modified, class int
-	sizeRequired    bool
+	modified, class                int
+	sizeRequired, modifiedRequired bool
 }
 
 var localColumns = []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes", "link_target"}
@@ -44,7 +44,8 @@ func shapeOf(spec reader.SchemaSpec) rowShape {
 	}
 	size, _ := spec.Column("size")
 	shape := rowShape{columns: []string{"size"}, modified: -1, class: -1, sizeRequired: size.Required}
-	if _, ok := spec.Column("last_modified"); ok {
+	if modified, ok := spec.Column("last_modified"); ok {
+		shape.modifiedRequired = modified.Required
 		shape.modified = len(shape.columns)
 		shape.columns = append(shape.columns, "last_modified")
 	}
@@ -113,7 +114,7 @@ func (d *decoder) entry(r row) (listing.Entry, error) {
 		return listing.Entry{}, err
 	}
 	if d.rows.modified >= 0 {
-		if e.LastModified, err = d.time(r, d.rows.modified); err != nil {
+		if e.LastModified, err = d.modified(r); err != nil {
 			return listing.Entry{}, err
 		}
 	}
@@ -182,9 +183,9 @@ func (d *decoder) size(r row, slot int) (*int64, error) {
 	return d.slab.int64(v.Int64()), nil
 }
 
-// time reads a timestamp.
-func (d *decoder) time(r row, slot int) (*time.Time, error) {
-	v, ok, err := d.value(r, slot, seekparquet.KindInt64, false)
+// modified reads the projected modification time.
+func (d *decoder) modified(r row) (*time.Time, error) {
+	v, ok, err := d.value(r, d.rows.modified, seekparquet.KindInt64, d.rows.modifiedRequired)
 	if !ok {
 		return nil, err
 	}

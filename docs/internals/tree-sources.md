@@ -80,7 +80,7 @@ supplies a `FolderLister`: one delimited list call from a prefix and a token (""
 to the objects directly in the folder, as rows of its own payload, its child prefixes as the service spelled
 them, and the next token. S3's is `ListObjectsV2` with `Delimiter: "/"`, never `StartAfter`, its objects
 mapped by the range listing's `rows`. Vercel uses folded list responses and maps `pathname` to the
-key and `uploadedAt` to `created_at`, the current blob's reported upload time.
+key and `uploadedAt` to `last_modified`, the current blob's reported upload time.
 
 A range is a folder (`FolderRange`). `Read` lists it whole, follows tokens only, and checks every page before
 anything is emitted; a violation stops the run (`protocol`) rather than drop a row:

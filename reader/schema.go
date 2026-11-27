@@ -188,7 +188,7 @@ var (
 var schemas = map[SchemaID]SchemaSpec{
 	VercelObjectsV1: {ID: VercelObjectsV1, Key: textKey, UniqueKeys: true, Columns: []ColumnSpec{
 		{Name: "size", Type: TypeInt64, Required: true},
-		{Name: "created_at", Type: TypeTimestampMicros, Required: true},
+		{Name: "last_modified", Type: TypeTimestampMicros, Required: true},
 		{Name: "etag", Type: TypeString},
 	}},
 	S3ObjectsV1: {ID: S3ObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxObjectKeyBytes, Columns: s3Columns},

@@ -13,11 +13,12 @@ import (
 // Object is the metadata of one current Vercel Blob object.
 type Object struct {
 	Size       int64
-	UploadedAt int64  // UTC epoch microseconds from the list API, persisted as created_at
+	UploadedAt int64  // UTC epoch microseconds from the list API, persisted as last_modified
 	ETag       string // opaque service tag, including its quotes if present
 }
 
-// Schema records the upload time of the current blob as created_at.
+// Schema maps the current blob's upload time to last_modified, as in the
+// Vercel SDK get() method, which exposes Last-Modified as uploadedAt.
 var Schema = schema.Bind(reader.VercelObjectsV1, schema.Schema[Object]{
 	Info: schema.Info{Name: "swath_listing"},
 	Columns: []schema.Column[Object]{

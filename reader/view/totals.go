@@ -122,6 +122,9 @@ func objectFold(rows rowShape, split listing.Split) seekparquet.Fold[tallies] {
 				it := item{size: int64Of(size, i)}
 				if rows.modified >= 0 {
 					it.modified = int64Of(modified, i)
+					if rows.modifiedRequired && !it.modified.ok {
+						return &reader.SemanticError{Kind: reader.KindRow, Column: "last_modified", Err: errors.New("null in a required column")}
+					}
 				}
 				if classSlot >= 0 && !class.IsNull(i) {
 					it.class, it.classed = class.Bytes(i), true

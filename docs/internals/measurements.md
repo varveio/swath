@@ -49,9 +49,12 @@ shapes. The fake also exercises such names without depending on upload policy.
 
 The two live 29-row Parquet files used the draft `uploaded_at` column; they were
 byte-identical and passed all 28 checks of `verify.py` each. After normalization
-to `created_at`, new datasets were generated offline from the recorded service
+to `last_modified`, new datasets were generated offline from the recorded service
 rows: both again passed all 28 checks and were byte-identical. The historical
 live files were preserved unchanged. Live and saved `du` reported 29 objects and 411 bytes.
+The final 24-case offline replay also verified newest-time reporting and exact inclusive
+modification-time filters against the captured timestamps; the newest value was
+`2026-11-27T19:49:32Z`. This did not establish overwrite behavior on the service.
 A rate-limited deadline stopped after one HTTP request with exit 124 and no
 manifest; resume returned exit 2. Dataset reports recorded:
 

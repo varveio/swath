@@ -48,16 +48,21 @@ bounded responses, retries, cancellation and credential redaction.
 ## Dataset and metadata
 
 The schema is [`swath/vercel-objects/v1`](../dataset.md#schema-registry): `key`,
-`size`, `created_at` and `etag`. `created_at` normalizes Vercel's `uploadedAt`: the
-service-reported upload time of the current blob. It is neither a modification
-time nor a promise of the first creation time of that pathname. The ETag is opaque. URLs and synthetic folder rows are omitted.
-Modification-time and storage-class filters are refused because these fields
-are not supplied. Size and pathname filters work normally.
+`size`, `last_modified` and `etag`. `last_modified` preserves the list API's
+`uploadedAt` value, normalized to UTC microseconds. This mapping follows Vercel's
+[SDK `get()` implementation](https://github.com/vercel/storage/blob/main/packages/blob/src/get.ts#L227-L248),
+which exposes the HTTP `Last-Modified` header as `uploadedAt`. It does not establish
+a separate creation time, nor a guarantee that metadata-only operations advance
+this value. Overwrite behavior has not been independently qualified live.
+
+Size, pathname and modification-time filters work on the reported values;
+`--storage-class` is refused because Vercel supplies no storage class. The ETag
+is opaque. URLs and synthetic folder rows are omitted.
 
 Datasets can be written to a local directory or an existing supported object-store
 destination. Vercel Blob itself is not an output destination. `du` works both on
-the live source and on a saved dataset; modification times and storage classes
-remain unavailable in the saved inventory view.
+the live source and on a saved dataset; its newest time uses `last_modified`.
+Storage class remains unavailable in the saved inventory view.
 
 ## Limits and known differences
 

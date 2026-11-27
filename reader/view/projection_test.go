@@ -79,6 +79,30 @@ func TestRequiredObjectSize(t *testing.T) {
 	}
 }
 
+func TestRequiredObjectModified(t *testing.T) {
+	ctx := t.Context()
+	key := []byte("missing-time")
+	inv := open(t, write(t, fixture{id: reader.S3ObjectsV1, rows: []rec{{key: string(key), size: ptr[int64](1)}}}))
+	spec, _ := reader.Schema(reader.S3ObjectsV1)
+	for i := range spec.Columns {
+		if spec.Columns[i].Name == "last_modified" {
+			spec.Columns[i].Required = true
+		}
+	}
+	inv.rows = shapeOf(spec)
+	_, lookupErr := inv.Lookup(ctx, key)
+	_, _, summaryErr := inv.Summarize(ctx, []listing.Target{{Subtree: true}}, listing.SummaryOptions{})
+	for _, check := range []struct {
+		op  string
+		err error
+	}{{"lookup", lookupErr}, {"summary", summaryErr}} {
+		var fault *reader.SemanticError
+		if !errors.Is(check.err, reader.ErrRow) || !errors.As(check.err, &fault) || fault.Column != "last_modified" {
+			t.Errorf("%s returned %v for a null required last_modified", check.op, check.err)
+		}
+	}
+}
+
 // Pin the common view's projection for each public schema: schema changes
 // must not silently remove metadata from existing inventories.
 func TestRegisteredObjectProjections(t *testing.T) {
@@ -87,7 +111,7 @@ func TestRegisteredObjectProjections(t *testing.T) {
 		reader.S3ObjectsV1: object, reader.S3VersionsV1: object,
 		reader.GCSObjectsV1: object, reader.GCSGenerationsV1: object,
 		reader.AzureObjectsV1: object, reader.AzureVersionsV1: object,
-		reader.VercelObjectsV1: {columns: []string{"size"}, modified: -1, class: -1, sizeRequired: true},
+		reader.VercelObjectsV1: {columns: []string{"size", "last_modified"}, modified: 1, class: -1, sizeRequired: true, modifiedRequired: true},
 		reader.LocalV1:         {local: true, columns: []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes", "link_target"}, modified: 1, class: -1},
 	}
 	for _, id := range reader.SchemaIDs() {

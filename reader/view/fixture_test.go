@@ -462,12 +462,14 @@ func sameEntry(e listing.Entry, r rec, isLocal bool) bool {
 		(e.Inode == nil) == (r.inode == nil)
 }
 
-// vercelObjects keeps upload times separate from the view's modification times.
+// vercelObjects carries modification times with no storage classes.
 func vercelObjects() []rec {
 	rs := objects()
 	for i := range rs {
-		rs[i].extra = map[string]any{"created_at": base}
-		rs[i].modified, rs[i].class = nil, nil
+		rs[i].class = nil
+		if rs[i].modified == nil {
+			rs[i].modified = &base
+		}
 	}
 	return rs
 }
