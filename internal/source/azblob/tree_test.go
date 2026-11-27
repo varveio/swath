@@ -657,17 +657,56 @@ func TestTreeLookupContinues(t *testing.T) {
 	}
 }
 
-type rejectedCredentialInfo struct{ API }
+type rejectedCredentialInfo struct {
+	API
+	dfsCalls int
+}
 
 func (rejectedCredentialInfo) AccountInfo(context.Context, string) (bool, error) {
 	return false, &client.Error{Status: 403, Code: "AuthenticationFailed"}
 }
 
+func (r *rejectedCredentialInfo) NamespaceInfo(context.Context, string) (bool, error) {
+	r.dfsCalls++
+	return true, nil
+}
+
 func TestTreeAdmissionDoesNotProbeRejectedCredential(t *testing.T) {
 	store := azblobtest.NewTreeStore([]string{"a/b"})
-	opt := Options{Client: rejectedCredentialInfo{store}, Flat: true, Workers: 1}
+	api := &rejectedCredentialInfo{API: store}
+	opt := Options{Client: api, Flat: true, Workers: 1}
 	_, err := Open(context.Background(), "az://acct/c", opt)
-	if objhttp.Classify(err) != objhttp.ClassAuth || len(store.Log()) != 0 {
-		t.Fatalf("admission: %v, %d probe requests; want the original authentication failure", err, len(store.Log()))
+	if objhttp.Classify(err) != objhttp.ClassAuth || len(store.Log()) != 0 || api.dfsCalls != 0 {
+		t.Fatalf("inventory admission: %v, %d listing probes, %d Data Lake calls; want the original authentication failure", err, len(store.Log()), api.dfsCalls)
+	}
+	opt.Account, opt.Container = "acct", "c"
+	_, err = New(context.Background(), opt)
+	if objhttp.Classify(err) != objhttp.ClassAuth || len(store.Log()) != 0 || api.dfsCalls != 0 {
+		t.Fatalf("flat admission: %v, %d listing probes, %d Data Lake calls; want the original authentication failure", err, len(store.Log()), api.dfsCalls)
+	}
+}
+
+type refusedDataLake struct {
+	silentInfo
+	dfsCalls int
+}
+
+func (r *refusedDataLake) NamespaceInfo(context.Context, string) (bool, error) {
+	r.dfsCalls++
+	return false, &client.Error{Status: 403, Code: "AuthenticationFailed"}
+}
+
+// The endpoints can have different permissions. A silent Blob header and
+// a Data Lake auth failure still allow a Blob list to prove HNS.
+func TestTreeAdmissionProbeAfterDataLakeAuthFailure(t *testing.T) {
+	store := azblobtest.NewTreeStore([]string{"a/b"})
+	api := &refusedDataLake{silentInfo: silentInfo{store}}
+	opened, err := Open(context.Background(), "az://acct/c", Options{Client: api, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := opened.(*OpenedTree); !ok || opened.Report().Stats.(*Stats).Namespace != "listing" || api.dfsCalls != 1 || len(store.Log()) != 1 {
+		t.Fatalf("opened %T, %d Data Lake calls, %d listing probes; want HNS proved by listing after Data Lake refusal",
+			opened, api.dfsCalls, len(store.Log()))
 	}
 }

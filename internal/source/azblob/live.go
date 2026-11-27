@@ -54,7 +54,7 @@ type Live struct {
 
 	// namespace is one round of admission's calls (provider.namespaceOf),
 	// and unsigned says requests go anonymous.
-	namespace func(context.Context) (hns bool, how string, busy bool, err error)
+	namespace func(context.Context) (hns bool, how string, busy, rejected bool, err error)
 	unsigned  bool
 	// ns is the namespace once answered: nsUnknown, nsFlat or
 	// nsHierarchical.
@@ -103,7 +103,7 @@ func (l *Live) hierarchical(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 
-	hns, _, busy, err := l.namespace(ctx)
+	hns, _, busy, _, err := l.namespace(ctx)
 	if err == nil {
 		ns := nsFlat
 		if hns {

@@ -378,17 +378,17 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 // Flat asserts a namespace only when the reads offered no answer.
 func (p *provider[P]) admit(ctx context.Context, probeTree bool) (bool, error) {
 	var wait time.Duration
-	hns, how, busy, err := p.namespaceOf(ctx)
+	hns, how, busy, rejected, err := p.namespaceOf(ctx)
 	for busy && ctx.Err() == nil {
 		if werr := keyrange.RequeueBackoff(ctx, &wait); werr != nil {
 			return false, werr
 		}
-		hns, how, busy, err = p.namespaceOf(ctx)
+		hns, how, busy, rejected, err = p.namespaceOf(ctx)
 	}
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
 		return false, fmt.Errorf("Azure Blob client: %w", err)
 	}
-	if probeTree && ctx.Err() == nil && !p.unsigned() && class(err) == objhttp.ClassAuth {
+	if ctx.Err() == nil && rejected {
 		return false, fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	}
 	if probeTree && ctx.Err() == nil && fallback(err) {
@@ -456,28 +456,30 @@ func (p *provider[P]) probeNamespace(ctx context.Context) (bool, error) {
 // namespaceOf is one round of admit's calls: whether the namespace is
 // hierarchical, which call told (how), or why none did (err). busy
 // reports that the call deciding it spent its retries on transient
-// failures (objhttp.Requeue), so asking again may answer.
-func (p *provider[P]) namespaceOf(ctx context.Context) (hns bool, how string, busy bool, err error) {
+// failures (objhttp.Requeue), so asking again may answer. rejected means
+// the Blob endpoint rejected a signed credential. A Data Lake-only
+// authentication failure does not establish that about the Blob endpoint.
+func (p *provider[P]) namespaceOf(ctx context.Context) (hns bool, how string, busy, rejected bool, err error) {
 	hns, err = p.client.AccountInfo(ctx, p.opt.Container)
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
-		return false, "", false, err
+		return false, "", false, false, err
 	}
 	how = "account information"
+	if !p.unsigned() && class(err) == objhttp.ClassAuth {
+		return false, how, false, true, err
+	}
 	if err != nil && ctx.Err() == nil && fallback(err) {
 		if n, ok := p.client.(namespaced); ok {
 			if h, nerr := n.NamespaceInfo(ctx, p.opt.Container); nerr == nil {
-				return h, "filesystem properties", false, nil
-			} else if flatFeatures(nerr) && (p.unsigned() || class(err) != objhttp.ClassAuth) {
-				// The Data Lake host answers this 409 before it checks
-				// credentials, so a signed caller's rejected credential
-				// (Get Account Information's auth failure) stays that failure.
-				return false, "filesystem endpoint blocked", false, nil
+				return h, "filesystem properties", false, false, nil
+			} else if flatFeatures(nerr) {
+				return false, "filesystem endpoint blocked", false, false, nil
 			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
-				return hns, how, objhttp.Requeue(nerr), fmt.Errorf("%w; filesystem properties: %w", err, nerr)
+				return hns, how, objhttp.Requeue(nerr), false, fmt.Errorf("%w; filesystem properties: %w", err, nerr)
 			}
 		}
 	}
-	return hns, how, objhttp.Requeue(err), err
+	return hns, how, objhttp.Requeue(err), false, err
 }
 
 // unsigned says requests go anonymous, which Get Account Information

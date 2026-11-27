@@ -37,7 +37,7 @@ a list request of the prefix or a metadata request of the name; the command puts
 SDK's service and container clients (`sdk/storage/azblob` v1.8.3), with the SDK's retries off: swath's retry loop
 (`objhttp.Do`) repeats an attempt, `objhttp.Guard` bounds every body and checks a listing's envelope before the SDK
 decodes it, in the format its `Content-Type` names. A per-call policy pins `x-ms-version` to `2026-06-06`, the oldest version with the Arrow format, which the live service, swath-replay and Azurite all answer. Every
-listing asks for the Arrow response format, then XML (`Accept: application/vnd.apache.arrow.stream,application/xml`),
+listing outside HNS inventory mode asks for the Arrow response format, then XML (`Accept: application/vnd.apache.arrow.stream,application/xml`),
 and the service picks: an account or endpoint without Arrow listings (a hierarchical namespace, Azurite, the replay
 server) answers XML, and so may an account whose eligibility changes mid-run. There is no option: XML is the
 service's fallback, not swath's. An XML page must have an `EnumerationResults` root, nothing after it and no `Error`
@@ -139,7 +139,9 @@ A reported hierarchical namespace always selects tree listing, even beside that 
 requeues transient failures with the admission backoff and preserves cancellation;
 `namespace_probe_requests` counts probe attempts and `namespace_probe_requeues` reports outer retries
 when nonzero. An assertion still permits probing an unknown namespace; an affirmative HNS answer
-always wins. Signed authentication failures retain their class without fallback listing.
+always wins. Signed authentication failures on the Blob endpoint retain their class without a Data Lake fallback
+or listing probe. A Data Lake authentication failure after a silent Blob header does not preclude
+probing the Blob endpoint.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
 `filesystem properties`, `filesystem endpoint blocked`, `listing`, or `asserted`, with a warning for the assertion), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
