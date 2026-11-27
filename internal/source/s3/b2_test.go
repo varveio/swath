@@ -228,3 +228,62 @@ func TestB2ContinueDrops(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type routedStub struct{ pagedVersions }
+
+func (routedStub) Route(bucket string) string {
+	return "https://s3.us-west-004.backblazeb2.com/" + bucket
+}
+
+// TestCompat: auto decides by the endpoint given, else a supplied client's
+// route; s3 and b2 decide whatever the endpoint.
+func TestCompat(t *testing.T) {
+	const b2Host, other = "https://s3.us-east-005.backblazeb2.com", "https://store.example.com"
+	for _, c := range []struct {
+		opt  Options
+		want bool
+	}{
+		{Options{Endpoint: b2Host}, true},
+		{Options{Endpoint: b2Host, Compat: CompatAuto}, true},
+		{Options{Endpoint: other}, false},
+		{Options{}, false},
+		{Options{Bucket: "b", Client: &routedStub{}}, true},
+		{Options{Endpoint: b2Host, Compat: CompatS3}, false},
+		{Options{Endpoint: other, Compat: CompatB2}, true},
+		{Options{Compat: CompatB2}, true},
+	} {
+		if got, err := c.opt.b2(); err != nil || got != c.want {
+			t.Errorf("%+v: %v %v, want %v", c.opt, got, err, c.want)
+		}
+	}
+	if _, err := (&Options{Compat: "minio"}).b2(); err == nil {
+		t.Error("an unknown store was accepted")
+	}
+	if _, err := ParseCompat("minio"); err == nil {
+		t.Error("ParseCompat accepted minio")
+	}
+}
+
+// TestCompatOverridesEndpoint: --s3-compat b2 repairs B2's pages behind
+// another host name, and s3 refuses them on B2's own.
+func TestCompatOverridesEndpoint(t *testing.T) {
+	f := &pagedVersions{t: t, pages: b2Pages()}
+	p, err := NewVersions(t.Context(), Options{Bucket: "b", Workers: 1, Client: f, Endpoint: "https://b2.example.com", Compat: CompatB2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := runVersions(t, p); err != nil || len(rows) != 10 {
+		t.Fatalf("b2 behind another host: %v, %d rows", err, len(rows))
+	}
+	f = &pagedVersions{t: t, pages: b2Pages()}
+	p, err = NewVersions(t.Context(), Options{Bucket: "b", Workers: 1, Client: f, Endpoint: "https://s3.us-east-005.backblazeb2.com", Compat: CompatS3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runVersions(t, p); !errors.Is(err, objhttp.ErrInvalidPage) {
+		t.Fatalf("s3 on B2: %v", err)
+	}
+	if _, err := New(t.Context(), Options{Bucket: "b", Client: f, Compat: "minio"}); err == nil {
+		t.Fatal("an unknown store opened")
+	}
+}

@@ -44,6 +44,7 @@ type Options struct {
 	Bucket    string
 	Prefix    string
 	Endpoint  string // custom endpoint URL (S3-compatible stores, tests)
+	Compat    Compat // which store's differences to allow for (b2.go); "" is CompatAuto
 	Region    string // else AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1
 	PathStyle bool
 	FIPS      bool   // FIPS endpoint
@@ -150,11 +151,10 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.b2 = source.Backblaze(opt.Endpoint)
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
-		AcceptBound: acceptBound(opt.Endpoint),
+		AcceptBound: acceptBound(p.b2),
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
@@ -182,11 +182,10 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	if !ok {
 		return nil, fmt.Errorf("s3: the client (%T) cannot list versions", p.client)
 	}
-	p.b2 = source.Backblaze(opt.Endpoint)
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Version]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
-		AcceptBound: acceptBound(opt.Endpoint),
+		AcceptBound: acceptBound(p.b2),
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Groups:      VersionsSchema.Groups,
@@ -219,7 +218,11 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		return nil, false, source.Unsupported(fmt.Errorf("S3 directory bucket %q (Express One Zone) is not supported: swath requires the "+
 			"lexicographic listing order of a general-purpose S3 bucket; use a general-purpose bucket", opt.Bucket))
 	}
-	p := &provider[P]{opt: opt, client: opt.Client}
+	b2, err := opt.b2()
+	if err != nil {
+		return nil, false, err
+	}
+	p := &provider[P]{opt: opt, client: opt.Client, b2: b2}
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)

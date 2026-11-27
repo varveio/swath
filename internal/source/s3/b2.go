@@ -5,6 +5,7 @@ package s3
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -40,12 +41,62 @@ import (
 // more than 1024 bytes"). Prefixes of 1,024 bytes are accepted.
 const b2MaxBound = 1023
 
-// acceptBound is the start bounds the endpoint takes (Description.AcceptBound):
+// Compat is which S3-compatible store's differences a listing allows for
+// (Options.Compat, --s3-compat).
+type Compat string
+
+// The stores.
+const (
+	// CompatAuto decides by the endpoint (Options.endpoint): B2's host,
+	// *.backblazeb2.com, is CompatB2, and any other is CompatS3.
+	CompatAuto Compat = "auto"
+	// CompatS3 allows for none: the store must answer as S3 does.
+	CompatS3 Compat = "s3"
+	// CompatB2 allows for Backblaze B2's (this file), for B2 behind
+	// another host name.
+	CompatB2 Compat = "b2"
+)
+
+// ParseCompat is the store s names: auto, s3 or b2.
+func ParseCompat(s string) (Compat, error) {
+	switch c := Compat(s); c {
+	case CompatAuto, CompatS3, CompatB2:
+		return c, nil
+	}
+	return "", errors.New("want auto, s3 or b2")
+}
+
+// b2 reports whether the listing allows for B2's differences.
+func (o *Options) b2() (bool, error) {
+	switch o.Compat {
+	case CompatAuto, "":
+		return source.Backblaze(o.endpoint()), nil
+	case CompatS3:
+		return false, nil
+	case CompatB2:
+		return true, nil
+	}
+	return false, fmt.Errorf("s3: unknown store %q (auto, s3 or b2)", o.Compat)
+}
+
+// endpoint is where requests go, for CompatAuto: the endpoint given, else
+// a supplied Routed client's route for the bucket.
+func (o *Options) endpoint() string {
+	if o.Endpoint != "" {
+		return o.Endpoint
+	}
+	if r, ok := o.Client.(Routed); ok {
+		return r.Route(o.Bucket)
+	}
+	return ""
+}
+
+// acceptBound is the start bounds the store takes (Description.AcceptBound):
 // on B2 none over b2MaxBound, so the engine sends the longest prefix of a
 // key that fits (keyrange's safeStart) and drops the keys at or below the
 // key itself, and never splits at such a key.
-func acceptBound(endpoint string) func(string) bool {
-	if !source.Backblaze(endpoint) {
+func acceptBound(b2 bool) func(string) bool {
+	if !b2 {
 		return AcceptBound
 	}
 	return func(s string) bool { return len(s) <= b2MaxBound && AcceptBound(s) }

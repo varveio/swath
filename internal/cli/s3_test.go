@@ -306,3 +306,36 @@ func TestS3EngineFlagsShared(t *testing.T) {
 		t.Fatalf("defaults: %v", err)
 	}
 }
+
+// TestS3CompatFlag: --s3-compat takes auto, s3 or b2, and refuses others.
+func TestS3CompatFlag(t *testing.T) {
+	s3test.NoCredentials(t)
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("AWS_ENDPOINT_URL", "")
+	t.Setenv("AWS_ENDPOINT_URL_S3", "")
+	for _, v := range []string{"auto", "s3", "b2"} {
+		if _, err := openS3Args(t, nil, "--anonymous", "--endpoint-url", "http://127.0.0.1:1", "--s3-compat", v); err != nil {
+			t.Errorf("--s3-compat %s: %v", v, err)
+		}
+	}
+	parsed := func(args ...string) (s3.Options, error) {
+		fs := pflag.NewFlagSet("t", pflag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		o := factory(t, "s3://bkt").RegisterFlags(fs, false).(*s3Flagged)
+		if err := fs.Parse(args); err != nil {
+			return s3.Options{}, err
+		}
+		return o.options()
+	}
+	for v, want := range map[string]s3.Compat{"auto": s3.CompatAuto, "s3": s3.CompatS3, "b2": s3.CompatB2} {
+		if opt, err := parsed("--s3-compat", v); err != nil || opt.Compat != want {
+			t.Errorf("--s3-compat %s: %q, %v", v, opt.Compat, err)
+		}
+	}
+	if opt, err := parsed(); err != nil || (opt.Compat != "" && opt.Compat != s3.CompatAuto) {
+		t.Errorf("no --s3-compat: %q, %v", opt.Compat, err)
+	}
+	if _, err := parsed("--s3-compat", "minio"); err == nil || !strings.Contains(err.Error(), "want auto, s3 or b2") {
+		t.Errorf("--s3-compat minio: %v", err)
+	}
+}
