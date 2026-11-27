@@ -104,10 +104,8 @@ var (
 
 var reportCounters = append(objhttp.CounterDefs("429 or rate_limited"), tree.DelimitedCounters...)
 
-// Admission reservation per response, before retained strings transfer to
-// folder staging. This limits concurrent page work, not exact heap or RSS:
-// decoder buffers, temporary strings and garbage collection can add memory.
-const pageHeadroom = 4 * client.MaxBodyBytes
+// DefaultWorkers starts the folder walk with modest request concurrency.
+func DefaultWorkers() int { return 4 }
 
 // Open validates the root and binds its store's current objects to Schema.
 // The token selects the store on the wire, so its store ID must match root.
@@ -126,7 +124,10 @@ func Open(_ context.Context, root string, opt Options) (*Opened, error) {
 	if opt.PageSize == 0 {
 		opt.PageSize = client.MaxPageSize
 	}
-	workers := max(opt.Workers, 1)
+	workers := opt.Workers
+	if workers <= 0 {
+		workers = DefaultWorkers()
+	}
 	lim, rate := opt.Admission.New(workers)
 	c, err := client.New(client.Config{Token: token, Workers: workers, Trust: opt.Trust,
 		HTTPClient: opt.HTTPClient, RequestTimeout: opt.Timeout, Retry: objhttp.Retry{Limiter: lim, Rate: rate}})
@@ -135,8 +136,8 @@ func Open(_ context.Context, root string, opt Options) (*Opened, error) {
 	}
 	set := counters.New(reportCounters)
 	folders := tree.NewDelimited(folderLister{c, opt.PageSize}, tree.DelimitedOptions[Object]{
-		Select: prefix, Bytes: objectHeap, FolderBytes: opt.FolderBytes, StagingBytes: opt.StagingBytes,
-		PageHeadroom: pageHeadroom,
+		Select: prefix, ExactPrefixes: true, Bytes: objectHeap,
+		FolderBytes: opt.FolderBytes, StagingBytes: opt.StagingBytes,
 		// HTTP retries cover cut or malformed JSON; do not replay a persistently
 		// bad body again at the folder level after those retries are exhausted.
 		Requeue: func(err error) bool {

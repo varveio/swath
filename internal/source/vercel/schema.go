@@ -13,7 +13,7 @@ import (
 // Object is the metadata of one current Vercel Blob object.
 type Object struct {
 	Size       int64
-	UploadedAt int64  // UTC epoch microseconds, as reported by the list API
+	UploadedAt int64  // UTC epoch microseconds from the list API, persisted as created_at
 	ETag       string // opaque service tag, including its quotes if present
 }
 

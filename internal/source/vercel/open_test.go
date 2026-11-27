@@ -139,6 +139,13 @@ func TestFoldedWalk(t *testing.T) {
 					}
 					report := o.Report()
 					counts := report.Stats.(*Stats).Counters
+					var exactScopes int64
+					if scope != "" && !strings.HasSuffix(scope, "/") {
+						exactScopes = 1
+					}
+					if got := counts.Value("tree.scope_exact_prefixes"); got != exactScopes {
+						t.Fatalf("exact-prefix scopes = %d, want %d", got, exactScopes)
+					}
 					if o.Listed() != int64(len(expected)) || !report.Coverage.Complete || report.Coverage.Prefix != scope ||
 						counts.Value("tree.pages") < 1 || counts.Value("attempts") != o.Requests().Attempts || o.folders.Staged() != 0 {
 						t.Fatalf("listed %d, coverage %+v, counts %+v", o.Listed(), report.Coverage, counts)

@@ -17,8 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/text/unicode/norm"
-
 	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/source"
@@ -129,16 +127,16 @@ func TestTreeListsR2Exact(t *testing.T) {
 	for _, page := range []int{1, 2, 1000} {
 		for _, workers := range []int{1, 3, 16} {
 			opt := r2Options(u)
-			opt.Listing, opt.Policy.PageSize = source.ListingTree, page
+			opt.Listing, opt.Policy.PageSize = ListingTree, page
 			rows, o, err := treeList(t, "s3://bkt", opt, workers)
 			if err != nil {
 				t.Fatalf("page %d, workers %d: %v", page, workers, err)
 			}
 			sameRows(t, fmt.Sprintf("page %d, workers %d", page, workers), rows, want)
 			st := o.t.Stats()
-			if st.Listing != "tree" || st.ListingReason != ReasonExplicitTree || st.Counters.Value("tree.objects") != int64(len(keys)) ||
-				st.Counters.Value("tree.markers") == 0 || o.Staged() != 0 || o.Listed() != int64(len(keys)) || !o.Report().Coverage.Complete {
-				t.Fatalf("stats %+v, staged %d", st, o.Staged())
+			if st.Listing != "tree" || st.ListingReason != reasonExplicitTree || st.Counters.Value("tree.objects") != int64(len(keys)) ||
+				st.Counters.Value("tree.markers") == 0 || o.t.d.Staged() != 0 || o.Listed() != int64(len(keys)) || !o.Report().Coverage.Complete {
+				t.Fatalf("stats %+v, staged %d", st, o.t.d.Staged())
 			}
 		}
 	}
@@ -159,7 +157,7 @@ func markerKeys() []string {
 }
 
 // TestTreeMarkersOnR2 lists the 1,240 keys exactly at 32 workers, as asked
-// (--listing tree) and as the default on an R2 endpoint chooses, which
+// (--s3-listing tree) and as the default on an R2 endpoint chooses, which
 // tells Warn why. The R2 endpoint is named in Options.Endpoint; the
 // requests go to the fake through a supplied client.
 func TestTreeMarkersOnR2(t *testing.T) {
@@ -167,12 +165,12 @@ func TestTreeMarkersOnR2(t *testing.T) {
 	want := r2Rows(keys)
 	f, u := r2Bucket(t, keys)
 	opt := r2Options(u)
-	opt.Listing = source.ListingTree
+	opt.Listing = ListingTree
 	rows, _, err := treeList(t, "s3://bkt", opt, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sameRows(t, "--listing tree", rows, want)
+	sameRows(t, "--s3-listing tree", rows, want)
 	noSeek(t, f)
 
 	c, err := client.New(context.Background(), client.Config{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1"})
@@ -187,7 +185,7 @@ func TestTreeMarkersOnR2(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameRows(t, "auto on R2", rows, want)
-	if st := o.t.Stats(); st.ListingReason != ReasonR2Endpoint || !st.R2Endpoint {
+	if st := o.t.Stats(); st.ListingReason != reasonR2Endpoint || !st.R2Endpoint {
 		t.Fatalf("stats %+v", st)
 	}
 	if len(warned) != 1 || !strings.HasPrefix(warned[0], source.WarnTreeListing+": Cloudflare R2 does not list keys in byte order") {
@@ -245,7 +243,7 @@ func TestTreeAliasFolders(t *testing.T) {
 	keys := []string{"é/!", "é/x", "f"}
 	f, u := r2Bucket(t, keys)
 	opt := r2Options(u)
-	opt.Listing = source.ListingTree
+	opt.Listing = ListingTree
 	_, o, err := treeList(t, "s3://bkt", opt, 2)
 	if !errors.Is(err, source.ErrProtocol) {
 		t.Fatalf("err %v", err)
@@ -265,34 +263,39 @@ func TestTreeAliasFolders(t *testing.T) {
 }
 
 // TestTreeScopeAlias: a source prefix that does not end in '/' starts at
-// its folder and keeps by raw bytes; a common prefix outside it whose name
-// is not ASCII may be R2's merge of another spelling, holding keys of the
-// scope, and is probed: listing it finds them, and the run stops
-// (protocol) instead of ending without them. R2 spells the merged folder
-// as its first key in its order: e\u0301/x and \u00e9/! group under
-// \u00e9/ (from \u00e9/!), which does not start with e; the Kelvin sign
-// K\u212a groups with K. An ASCII folder outside the scope is never
+// its folder and keeps by raw bytes. R2 merges the spellings of a folder
+// into one common prefix spelled as its first key in R2's order
+// (e\u0301/x and \u00e9/! group under \u00e9/; the Kelvin sign \u212a
+// groups with K; \u00e9\u0323 with \u1eb9\u0301), which may then hold
+// keys of the prefix: such a folder outside the prefix stops the run
+// (protocol) before any request to it, naming it, and the run says to
+// give a prefix ending in '/'. An ASCII folder outside the scope is never
 // listed.
 func TestTreeScopeAlias(t *testing.T) {
 	for _, tc := range []struct {
-		name, prefix string
-		keys         []string
+		name, prefix, folder string
+		keys                 []string
 	}{
-		{"nfd under nfc", "e", []string{"e\u0301/x", "\u00e9/!", "f"}},
-		{"kelvin", "d/K", []string{"d/\u212a/a", "d/K/b", "d/L"}},
-		{"reordered marks", "\u00e9", []string{"\u1eb9\u0301/!", "\u00e9\u0323/x", "\u00e9z"}},
+		{"nfd under nfc", "e", "\u00e9/", []string{"e\u0301/x", "\u00e9/!", "f"}},
+		{"deep", "e", "\u00e9/", []string{"e\u0301/a/2", "\u00e9/a/1", "f"}},
+		{"kelvin", "d/K", "d/\u212a/", []string{"d/\u212a/a", "d/K/b", "d/L"}},
+		{"reordered marks", "\u00e9", "\u1eb9\u0301/", []string{"\u1eb9\u0301/!", "\u00e9\u0323/x", "\u00e9z"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, u := r2Bucket(t, tc.keys)
 			opt := r2Options(u)
-			opt.Listing = source.ListingTree
+			opt.Listing = ListingTree
 			rows, o, err := treeList(t, "s3://bkt/"+tc.prefix, opt, 2)
-			if !errors.Is(err, source.ErrProtocol) {
+			if !errors.Is(err, source.ErrProtocol) || !strings.Contains(err.Error(), fmt.Sprintf("%+q", tc.folder)) {
 				t.Fatalf("err %v, rows %q", err, keysOf(rows))
 			}
-			st := o.t.Stats().Counters
-			if st.Value("tree.probes") != 1 || st.Value("tree.violations.raw_prefix") != 1 {
-				t.Fatalf("probes %d, violations %d (%v)", st.Value("tree.probes"), st.Value("tree.violations.raw_prefix"), err)
+			if v := o.t.Stats().Counters.Value("tree.violations.scope_alias"); v != 1 {
+				t.Fatalf("scope_alias violations %d (%v)", v, err)
+			}
+			for _, q := range f.Log() {
+				if q.Get("prefix") == tc.folder {
+					t.Fatalf("listed %+q before refusing it", tc.folder)
+				}
 			}
 			noSeek(t, f)
 		})
@@ -300,9 +303,9 @@ func TestTreeScopeAlias(t *testing.T) {
 	keys := []string{"lo/x", "logs", "logs-old/a", "logs/b", "lz/q", "m/1"}
 	f, u := r2Bucket(t, keys)
 	opt := r2Options(u)
-	opt.Listing = source.ListingTree
-	rows, o, err := treeList(t, "s3://bkt/logs", opt, 2)
-	if err != nil || !slices.Equal(keysOf(rows), []string{"logs", "logs-old/a", "logs/b"}) || o.t.Stats().Counters.Value("tree.probes") != 0 {
+	opt.Listing = ListingTree
+	rows, _, err := treeList(t, "s3://bkt/logs", opt, 2)
+	if err != nil || !slices.Equal(keysOf(rows), []string{"logs", "logs-old/a", "logs/b"}) {
 		t.Fatalf("%q, %v", keysOf(rows), err)
 	}
 	for _, q := range f.Log() {
@@ -326,7 +329,7 @@ func TestTreeRetainedBytes(t *testing.T) {
 	}
 	_, u := r2Bucket(t, keys)
 	opt := r2Options(u)
-	opt.Listing = source.ListingTree
+	opt.Listing = ListingTree
 	rows, o, err := treeList(t, "s3://bkt/p/", opt, 1)
 	if err != nil || len(rows) != len(keys) {
 		t.Fatalf("%d rows, %v", len(rows), err)
@@ -361,7 +364,7 @@ func TestListingFromRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameRows(t, "routed to R2", rows, r2Rows(keys))
-	if st := o.t.Stats(); st.ListingReason != ReasonR2Endpoint || !st.R2Endpoint {
+	if st := o.t.Stats(); st.ListingReason != reasonR2Endpoint || !st.R2Endpoint {
 		t.Fatalf("stats %+v", st)
 	}
 	inv, err := Open(context.Background(), "s3://bkt", Options{Client: c})
@@ -374,7 +377,9 @@ func TestListingFromRoute(t *testing.T) {
 }
 
 // TestTreeMalformed: an S3 answer that breaks a folder's structure stops
-// the walk with protocol, counted by its kind.
+// the walk with protocol through the S3 adapter, counted by its kind: one
+// case per class (the delimiter's structure, raw-prefix membership, the
+// token chain); the tree core's TestDelimitedValidation covers every kind.
 func TestTreeMalformed(t *testing.T) {
 	keys := []string{"a/b", "a/c", "a/d/x", "e"}
 	for _, tc := range []struct {
@@ -386,24 +391,9 @@ func TestTreeMalformed(t *testing.T) {
 				p.CommonPrefixes = append(p.CommonPrefixes, "a/d/")
 			}
 		}},
-		{"self reference", "tree.violations.self_reference", func(q url.Values, p *s3test.R2Page) {
-			if q.Get("prefix") == "a/" {
-				p.CommonPrefixes = append(p.CommonPrefixes, "a/")
-			}
-		}},
-		{"duplicate", "tree.violations.duplicate", func(q url.Values, p *s3test.R2Page) {
-			if q.Get("prefix") == "a/" && len(p.Contents) > 0 {
-				p.Contents = append(p.Contents, p.Contents[0])
-			}
-		}},
 		{"raw prefix", "tree.violations.raw_prefix", func(q url.Values, p *s3test.R2Page) {
 			if q.Get("prefix") == "a/" {
 				p.Contents = append(p.Contents, s3test.R2Entry{Key: "b"})
-			}
-		}},
-		{"empty token", "tree.violations.token", func(q url.Values, p *s3test.R2Page) {
-			if q.Get("prefix") == "a/" {
-				p.Token = ""
 			}
 		}},
 		{"token cycle", "tree.violations.token", func(q url.Values, p *s3test.R2Page) {
@@ -416,7 +406,7 @@ func TestTreeMalformed(t *testing.T) {
 			f, u := r2Bucket(t, keys)
 			f.Edit = tc.edit
 			opt := r2Options(u)
-			opt.Listing, opt.Policy.PageSize = source.ListingTree, 1
+			opt.Listing, opt.Policy.PageSize = ListingTree, 1
 			rows, o, err := treeList(t, "s3://bkt", opt, 2)
 			if !errors.Is(err, source.ErrProtocol) {
 				t.Fatalf("err %v, rows %q", err, keysOf(rows))
@@ -437,9 +427,9 @@ func TestTreeMalformed(t *testing.T) {
 func TestTreeSourcePrefix(t *testing.T) {
 	keys := []string{"lo/x", "log", "logs", "logs-old/a", "logs/", "logs/a", "logs/b/c", "logsx", "m", "d/", "d/éx", "d/éy", "d/ex", "d/f", "d/e/"}
 	f, u := r2Bucket(t, keys)
-	for _, prefix := range []string{"", "logs", "logs/", "logs/b", "d/e", "d/", "d/é", "nope", "日"} {
+	for _, prefix := range []string{"", "logs", "logs/", "logs/b", "d/e", "d/", "nope", "日"} {
 		opt := r2Options(u)
-		opt.Listing, opt.Policy.PageSize = source.ListingTree, 2
+		opt.Listing, opt.Policy.PageSize = ListingTree, 2
 		rows, o, err := treeList(t, "s3://bkt/"+prefix, opt, 4)
 		if err != nil {
 			t.Fatalf("prefix %q: %v", prefix, err)
@@ -462,8 +452,13 @@ func TestTreeSourcePrefix(t *testing.T) {
 		}
 	}
 	noSeek(t, f)
-	if !norm.NFC.IsNormalString("d/é") {
-		t.Fatal("fixture")
+	// The refusal is conservative: d/\u00e9 stops at d/e/, which R2 could
+	// have merged with a d/e\u0301… folder of the prefix, though this
+	// bucket has none.
+	opt := r2Options(u)
+	opt.Listing = ListingTree
+	if _, _, err := treeList(t, "s3://bkt/d/\u00e9", opt, 2); !errors.Is(err, source.ErrProtocol) || !strings.Contains(err.Error(), `"d/e/"`) {
+		t.Fatalf("prefix d/\u00e9: %v", err)
 	}
 }
 
@@ -476,14 +471,14 @@ func TestTreeFolderLimit(t *testing.T) {
 	}
 	_, u := r2Bucket(t, append(keys, "small/a"))
 	opt := r2Options(u)
-	opt.Listing, opt.TreeFolderBytes = source.ListingTree, 8<<10
+	opt.Listing, opt.TreeFolderBytes = ListingTree, 8<<10
 	_, o, err := treeList(t, "s3://bkt", opt, 4)
 	var le *tree.FolderLimitError
 	if !errors.As(err, &le) || le.Folder != "big/" || le.Class() != "folder_limit" {
 		t.Fatalf("err %v", err)
 	}
-	if o.Staged() != 0 || o.t.Stats().Counters.Value("tree.budget_refusals") != 1 {
-		t.Fatalf("staged %d, counters %+v", o.Staged(), o.t.Stats().Counters)
+	if o.t.d.Staged() != 0 || o.t.Stats().Counters.Value("tree.budget_refusals") != 1 {
+		t.Fatalf("staged %d, counters %+v", o.t.d.Staged(), o.t.Stats().Counters)
 	}
 }
 
@@ -503,7 +498,7 @@ func TestTreeCancel(t *testing.T) {
 	}
 	s3test.NoCredentials(t)
 	opt := r2Options(u)
-	opt.Listing, opt.Workers, opt.Policy.PageSize = source.ListingTree, 2, 1
+	opt.Listing, opt.Workers, opt.Policy.PageSize = ListingTree, 2, 1
 	inv, err := Open(context.Background(), "s3://bkt", opt)
 	if err != nil {
 		t.Fatal(err)
@@ -516,15 +511,15 @@ func TestTreeCancel(t *testing.T) {
 		done <- err
 	}()
 	<-held
-	if o.Staged() == 0 {
+	if o.t.d.Staged() == 0 {
 		t.Fatal("the held folder stages nothing: the barrier tests no release")
 	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err %v", err)
 	}
-	if o.Staged() != 0 {
-		t.Fatalf("staged %d after the cancellation", o.Staged())
+	if o.t.d.Staged() != 0 {
+		t.Fatalf("staged %d after the cancellation", o.t.d.Staged())
 	}
 }
 
@@ -545,23 +540,23 @@ func TestTreeRefusals(t *testing.T) {
 		{"tiles", func(o *Options) { o.Policy.TilePages = 3 }, "--seed-from-tile-pages"},
 	} {
 		opt := r2Options(u)
-		opt.Listing = source.ListingTree
+		opt.Listing = ListingTree
 		tc.edit(&opt)
 		if _, err := Open(context.Background(), "s3://bkt", opt); !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), tc.want) ||
-			!strings.Contains(err.Error(), "--listing range") {
+			!strings.Contains(err.Error(), "--s3-listing range") {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
 	}
 	for _, endpoint := range []string{u, "https://acct.r2.cloudflarestorage.com"} {
 		opt := r2Options(endpoint)
 		if endpoint == u {
-			opt.Listing = source.ListingTree
+			opt.Listing = ListingTree
 		}
 		if _, err := OpenVersions(context.Background(), "s3://bkt", opt); !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), "--all-versions") {
 			t.Fatalf("versions at %s: %v", endpoint, err)
 		}
 	}
-	if _, err := New(context.Background(), Options{Bucket: "bkt", Listing: source.ListingTree}); !errors.Is(err, errTreeOpen) {
+	if _, err := New(context.Background(), Options{Bucket: "bkt", Listing: ListingTree}); !errors.Is(err, errTreeOpen) {
 		t.Fatalf("New of a folder walk: %v", err)
 	}
 	if n := len(f.Log()); n != 0 {
@@ -576,18 +571,18 @@ func TestListingSelection(t *testing.T) {
 	const r2 = "https://0123abcd.r2.cloudflarestorage.com"
 	for _, tc := range []struct {
 		endpoint string
-		listing  source.Listing
+		listing  Listing
 		tree     bool
 		reason   string
 		warn     string
 	}{
-		{"", "", false, ReasonDefault, ""},
-		{"http://127.0.0.1:1", source.ListingAuto, false, ReasonDefault, ""},
-		{r2, "", true, ReasonR2Endpoint, source.WarnTreeListing},
-		{r2, source.ListingRange, false, ReasonExplicitRange, source.WarnUnorderedRange},
-		{"http://127.0.0.1:1", source.ListingRange, false, ReasonExplicitRange, ""},
-		{"http://127.0.0.1:1", source.ListingTree, true, ReasonExplicitTree, ""},
-		{r2, source.ListingTree, true, ReasonExplicitTree, ""},
+		{"", "", false, reasonDefault, ""},
+		{"http://127.0.0.1:1", ListingAuto, false, reasonDefault, ""},
+		{r2, "", true, reasonR2Endpoint, source.WarnTreeListing},
+		{r2, ListingRange, false, reasonExplicitRange, source.WarnUnorderedRange},
+		{"http://127.0.0.1:1", ListingRange, false, reasonExplicitRange, ""},
+		{"http://127.0.0.1:1", ListingTree, true, reasonExplicitTree, ""},
+		{r2, ListingTree, true, reasonExplicitTree, ""},
 	} {
 		var warned []string
 		opt := Options{Endpoint: tc.endpoint, Listing: tc.listing, Anonymous: true, Region: "us-east-1", PathStyle: true,
@@ -613,8 +608,8 @@ func TestListingSelection(t *testing.T) {
 		"http://acct.r2.cloudflarestorage.com:8080": true, "https://r2.cloudflarestorage.com.example.com": false, "https://acctr2.cloudflarestorage.com": false,
 		"https://s3.amazonaws.com": false, "": false, "::": false,
 	} {
-		if R2Endpoint(host) != want {
-			t.Errorf("R2Endpoint(%q) = %v", host, !want)
+		if r2Endpoint(host) != want {
+			t.Errorf("r2Endpoint(%q) = %v", host, !want)
 		}
 	}
 }
@@ -656,40 +651,18 @@ func TestTreeScopeNoProbe(t *testing.T) {
 	keys := []string{"a/1", "ab", "e\u0301/x", "\u00e9/!"}
 	f, u := r2Bucket(t, keys)
 	opt := r2Options(u)
-	opt.Listing = source.ListingTree
+	opt.Listing = ListingTree
 	rows, o, err := treeList(t, "s3://bkt/a", opt, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sameRows(t, "scope a", rows, r2Rows(keys)[:2])
-	if n := o.t.Stats().Counters.Value("tree.probes"); n != 0 {
-		t.Fatalf("%d probes", n)
+	if n := o.t.Stats().Counters.Value("tree.violations.scope_alias"); n != 0 {
+		t.Fatalf("%d refusals", n)
 	}
 	for _, q := range f.Log() {
 		if p := q.Get("prefix"); p != "" && !strings.HasPrefix(p, "a") {
 			t.Fatalf("listed %+q, outside the scope a in every spelling", p)
 		}
-	}
-}
-
-// TestTreeHeadroomCoversWorkers: the default headroom is one page for each
-// worker and one for the order stage's drainer, which lists a queued
-// folder itself: the most the walk has in flight, so a run at many workers
-// never waits for it.
-func TestTreeHeadroomCoversWorkers(t *testing.T) {
-	var keys []string
-	for i := range 300 {
-		keys = append(keys, fmt.Sprintf("f%03d/x", i))
-	}
-	_, u := r2Bucket(t, keys)
-	opt := r2Options(u)
-	opt.Listing = source.ListingTree
-	_, o, err := treeList(t, "s3://bkt", opt, 96)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v := o.t.Stats().Counters.Value
-	if v("tree.limit.headroom_bytes") != (96+1)*maxListKeys*pageEntryHeadroom || v("tree.headroom_waits") != 0 {
-		t.Fatalf("headroom %d bytes, %d waits", v("tree.limit.headroom_bytes"), v("tree.headroom_waits"))
 	}
 }

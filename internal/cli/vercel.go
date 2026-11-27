@@ -27,7 +27,7 @@ func init() {
 		EncoderBytes: parquetout.EncoderBytes(&vercel.Schema), Schemas: []schema.Info{vercel.Schema.Info},
 		Classify: objhttp.Label, KeyPrefix: vercel.KeyPrefix, WithPrefix: vercel.WithPrefix,
 		Shared: []*registry.FlagGroup{StoreGroup, EngineGroup}, Flags: vercelFlags,
-		Defaults: func() any { return &vercelFlagged{} }, Open: openVercel, CheckFilter: checkVercelFilter,
+		Defaults: func() any { return &vercelFlagged{} }, Workers: vercel.DefaultWorkers, Open: openVercel, CheckFilter: checkVercelFilter,
 	})
 }
 
@@ -51,8 +51,6 @@ func (o *vercelFlagged) options() (vercel.Options, error) {
 			return opt, source.Unsupported(fmt.Errorf("Vercel Blob inventory requires %s; --anonymous is unsupported", vercel.TokenEnv))
 		case o.store.Endpoint != "":
 			return opt, source.Unsupported(errors.New("Vercel Blob uses its fixed service endpoint; --endpoint-url is unsupported"))
-		case o.store.Listing == source.ListingRange:
-			return opt, source.Unsupported(errors.New("Vercel Blob has no arbitrary-key seek; --listing range is unsupported"))
 		}
 	}
 	if o.common != nil {

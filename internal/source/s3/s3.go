@@ -75,21 +75,16 @@ type Options struct {
 	// violation (a library walk's); otherwise its size is taken as 0.
 	NeedSize bool
 	Workers  int // parallel: the order stage's worker count (split demand)
-	// Listing is how the bucket is listed (--listing): the range engine,
+	// Listing is how the bucket is listed (--s3-listing): the range engine,
 	// or a folder walk (Tree), which the default chooses for a
-	// Cloudflare R2 endpoint (R2Endpoint).
-	Listing source.Listing
+	// Cloudflare R2 endpoint (r2Endpoint).
+	Listing Listing // "" is ListingAuto
 	// TreeFolderBytes and TreeStagingBytes bound what the folder walk
 	// holds while it reads folders whole: one folder, and every folder
 	// being read at once (0: tree.DefaultFolderBytes,
 	// tree.DefaultStagingBytes).
 	TreeFolderBytes, TreeStagingBytes int64
-	// TreeHeadroomBytes bounds what the folder walk's pages in flight
-	// reserve until they are decoded and charged; each reserves 4 KiB an
-	// entry asked for. 0 is one page for each of Workers and one for the
-	// order stage's drainer, the most the walk has in flight.
-	TreeHeadroomBytes int64
-	Client            API // optional; built from the options above when nil
+	Client                            API // optional; built from the options above when nil
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -119,10 +114,10 @@ type Stats struct {
 	Region      string `json:"region,omitempty"`
 	NoVerifySSL bool   `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
 	// Listing is how the bucket was listed: "range" (the range engine)
-	// or "tree" (the folder walk), and ListingReason why (Reason*).
+	// or "tree" (the folder walk), and ListingReason why (reason*).
 	Listing       string `json:"listing"`
 	ListingReason string `json:"listing_reason"`
-	// R2Endpoint: the endpoint is Cloudflare R2's (R2Endpoint).
+	// R2Endpoint: the endpoint is Cloudflare R2's (r2Endpoint).
 	R2Endpoint bool `json:"r2_endpoint,omitempty"`
 	// MeanActive is the time-weighted mean of ranges in Expand.
 	MeanActive float64           `json:"mean_active"`
@@ -148,7 +143,7 @@ type provider[P any] struct {
 	creds            string
 	region           string // the resolved signing region ("" with a supplied Client)
 	route            string // a supplied Routed client's Route ("" otherwise)
-	reason           string // why the listing is the range engine (Reason*)
+	reason           string // why the listing is the range engine (reason*)
 }
 
 // Range is the engine's unit of listing work.
@@ -310,7 +305,7 @@ func (p *provider[P]) Stats() Stats {
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
-		Listing: "range", ListingReason: p.reason, R2Endpoint: R2Endpoint(p.opt.endpoint()), MeanActive: e.MeanActive, Counters: e.Counters}
+		Listing: "range", ListingReason: p.reason, R2Endpoint: r2Endpoint(p.opt.endpoint()), MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is

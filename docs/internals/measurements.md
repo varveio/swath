@@ -47,8 +47,11 @@ The service rejected the setup attempts to upload nonempty trailing-slash blobs
 and a zero-byte name ending in two slashes; these are not claimed as live-listed
 shapes. The fake also exercises such names without depending on upload policy.
 
-The two 29-row Parquet files were byte-identical and passed all 28 checks of
-`verify.py` each; live and saved `du` both reported 29 objects and 411 bytes.
+The two live 29-row Parquet files used the draft `uploaded_at` column; they were
+byte-identical and passed all 28 checks of `verify.py` each. After normalization
+to `created_at`, new datasets were generated offline from the recorded service
+rows: both again passed all 28 checks and were byte-identical. The historical
+live files were preserved unchanged. Live and saved `du` reported 29 objects and 411 bytes.
 A rate-limited deadline stopped after one HTTP request with exit 124 and no
 manifest; resume returned exit 2. Dataset reports recorded:
 
@@ -57,8 +60,15 @@ manifest; resume returned exit 2. Dataset reports recorded:
 | 1 | 20 | 1 | 0 | 2,655 |
 | 8 | 20 | 4 | 13 | 2,655 |
 
-The four-page response reservation engaged at eight workers. These small
-inventories do not establish memory usage or speed on large flat stores.
+Those initial reports used a four-page response reservation. The updated shared
+walker removed that reservation. Vercel now defaults to four workers and accepts
+higher explicit worker counts. A deterministic eight-way HTTP barrier and a
+21-case captured-service-row CLI replay both reached eight simultaneous requests
+at `-j 8`, with exact output and matching totals. An attempted live recheck could
+list the dedicated store but its first fixture upload returned HTTP 403; no
+objects were created, and the final listing verified the prefix empty. Higher
+post-update concurrency against the live service therefore remains unmeasured.
+These small inventories do not establish memory usage or speed on large flat stores.
 
 Public stores, concurrent service-side writes, long-lived cursors, live folders
 with over 1,000 child prefixes, and process-kill recovery remain unqualified.
@@ -81,8 +91,8 @@ construction and network input were excluded. Medians on this shared host:
 
 A cap-sized escaped unknown member name incurred about 64 MiB of decoder
 allocations. B/op is cumulative allocation, not peak heap or RSS, and excludes
-the retained encoded input. The per-page reservation remains an admission
-estimate. These synthetic extremes are not representative service responses or
+the retained encoded input. There is no separate response-memory reservation.
+These synthetic extremes are not representative service responses or
 throughput measurements. The maintainers retain the benchmark fixtures and full
 measurements; [PR #715](https://github.com/varveio/swath/pull/715) records the
 comparison that informed the choice of decoder.

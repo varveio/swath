@@ -53,6 +53,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 		flag string
 	}{
 		{[]string{"gs://bucket", "--s3-region", "eu-west-1"}, "--s3-region"},
+		{[]string{"vercel://store_test", "--s3-listing", "tree"}, "--s3-listing"},
 		{[]string{"az://acct/c", "--s3-path-style"}, "--s3-path-style"},
 		{[]string{"s3://bucket", "--gcs-billing-project", "p"}, "--gcs-billing-project"},
 		{[]string{src, "--endpoint-url", "http://127.0.0.1:1"}, "--endpoint-url"},

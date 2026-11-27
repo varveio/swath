@@ -38,7 +38,7 @@ func TestTreeRunInterruptedNotResumable(t *testing.T) {
 	stderr := captureStderr(t)
 	var out bytes.Buffer
 	err := run(context.Background(), []string{"s3://" + s3test.Name, "--endpoint-url", u, "--anonymous", "--s3-region", "us-east-1",
-		"--listing", "tree", "-o", dir, "--max-duration", "2s"}, &out, false)
+		"--s3-listing", "tree", "-o", dir, "--max-duration", "2s"}, &out, false)
 	select {
 	case <-held:
 	default:

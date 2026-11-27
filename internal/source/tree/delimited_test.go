@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/varveio/swath/internal/counters"
@@ -420,65 +419,90 @@ func objects(keys ...string) []schema.Row[int64] {
 	return rows
 }
 
-// TestDelimitedScopeProbe: a child folder of the start folder outside the
-// scope whose name (or the scope's remainder) is not ASCII may hold a key
-// of the scope under another spelling (R2 merges e\u0301/ and \u00e9/ into
-// one common prefix, spelled as one of them): it is probed, its subtree
-// listed and checked, emitting nothing, so that such a key stops the run
-// (protocol), however deep it is. ASCII folders outside the scope are left
-// out without a request.
-func TestDelimitedScopeProbe(t *testing.T) {
+func TestDelimitedExactPrefixes(t *testing.T) {
+	const decomposed, composed = "e\u0301/", "\u00e9/"
 	for _, tc := range []struct {
-		name, sel string
-		folders   map[string]*FolderPage[int64]
-		probes    int64
+		name  string
+		exact bool
 	}{
-		{"alias in the folder", "e", map[string]*FolderPage[int64]{
-			"":        {Folders: []string{"\u00e9/"}},
-			"\u00e9/": {Objects: objects("\u00e9/!", "e\u0301/x")},
-		}, 1},
-		{"alias below the folder", "e", map[string]*FolderPage[int64]{
-			"":          {Folders: []string{"\u00e9/"}},
-			"\u00e9/":   {Folders: []string{"\u00e9/a/"}},
-			"\u00e9/a/": {Objects: objects("\u00e9/a/1", "e\u0301/a/2")},
-		}, 2},
-		{"kelvin", "d/K", map[string]*FolderPage[int64]{
-			"d/":        {Folders: []string{"d/\u212a/"}},
-			"d/\u212a/": {Objects: objects("d/\u212a/a", "d/K/b")},
-		}, 1},
+		{"byte-exact", true},
+		{"default", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			l := &aliasLister{folders: tc.folders}
-			got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: tc.sel})
-			if !errors.Is(err, source.ErrProtocol) || !strings.Contains(err.Error(), "by its raw bytes") {
-				t.Fatalf("err %v, keys %q", err, got)
-			}
-			s := d.opt.Counters.Snapshot()
-			if s.Value("tree.probes") != tc.probes || s.Value("tree.violations.raw_prefix") != 1 || d.Staged() != 0 {
-				t.Fatalf("counters %s, staged %d", mustJSON(s), d.Staged())
-			}
-			if len(got) != 0 {
-				t.Fatalf("a probe emitted %q", got)
+			l := &aliasLister{folders: map[string]*FolderPage[int64]{
+				"":         {Folders: []string{decomposed, composed}},
+				decomposed: {Objects: objects(decomposed + "x")},
+				composed:   {Objects: objects(composed + "y")},
+			}}
+			got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "e", ExactPrefixes: tc.exact})
+			stats := d.opt.Counters.Snapshot()
+			exact := stats.Value("tree.scope_exact_prefixes")
+			aliases := stats.Value("tree.violations.scope_alias")
+			if tc.exact {
+				if err != nil || !slices.Equal(got, []string{decomposed + "x"}) ||
+					!slices.Equal(l.prefixes, []string{"", decomposed}) || exact != 1 || aliases != 0 {
+					t.Fatalf("keys %q, requests %q, exact %d, aliases %d, err %v", got, l.prefixes, exact, aliases, err)
+				}
+			} else if !errors.Is(err, source.ErrProtocol) || len(got) != 0 ||
+				!slices.Equal(l.prefixes, []string{""}) || exact != 0 || aliases != 1 {
+				t.Fatalf("keys %q, requests %q, exact %d, aliases %d, err %v", got, l.prefixes, exact, aliases, err)
 			}
 		})
 	}
-	// Probed folders that hold nothing of the scope emit nothing, and the
-	// walk goes on.
-	l := &aliasLister{folders: map[string]*FolderPage[int64]{
-		"":          {Objects: objects("e1"), Folders: []string{"\u00e9/", "e/"}},
-		"\u00e9/":   {Objects: objects("\u00e9/x"), Folders: []string{"\u00e9/y/"}},
-		"\u00e9/y/": {Objects: objects("\u00e9/y/z")},
-		"e/":        {Objects: objects("e/a")},
-	}}
-	got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "e"})
-	if err != nil || !slices.Equal(got, []string{"e/a", "e1"}) || d.opt.Counters.Snapshot().Value("tree.probes") != 2 {
-		t.Fatalf("%q, %v, %s", got, err, mustJSON(d.opt.Counters.Snapshot()))
+}
+
+// TestDelimitedScopeAlias: a child folder of the start folder outside the
+// scope that could hold a key of the scope under another spelling (R2
+// merges e\u0301/ and \u00e9/ into one common prefix, spelled as one of
+// them) stops the run (protocol) before any request to it, naming it and
+// the scope; one that cannot is left out unlisted. The rule is NFD of the
+// folder's segment beginning with stem(r).
+func TestDelimitedScopeAlias(t *testing.T) {
+	for _, tc := range []struct {
+		name, sel, folder string
+	}{
+		{"nfc folder, scope e", "e", "\u00e9/"},
+		{"kelvin", "d/K", "d/\u212a/"},
+		// \u00e9\u0323 decomposes to e, dot below, acute; its NFC is
+		// \u1eb9\u0301, which no form of the scope \u00e9 begins but its
+		// stem e.
+		{"reordered marks", "\u00e9", "\u1eb9\u0301/"},
+		// A remainder with no starter has an empty stem: any folder.
+		{"no starter", "\u0301", "a/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := tc.sel[:strings.LastIndexByte(tc.sel, '/')+1]
+			l := &aliasLister{folders: map[string]*FolderPage[int64]{start: {Folders: []string{tc.folder}}}}
+			got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: tc.sel})
+			if !errors.Is(err, source.ErrProtocol) || !strings.Contains(err.Error(), fmt.Sprintf("%+q", tc.folder)) ||
+				!strings.Contains(err.Error(), fmt.Sprintf("%+q", tc.sel)) || !strings.Contains(err.Error(), "ends in '/'") {
+				t.Fatalf("err %v, keys %q", err, got)
+			}
+			if v := d.opt.Counters.Snapshot().Value("tree.violations.scope_alias"); v != 1 || slices.Contains(l.prefixes, tc.folder) {
+				t.Fatalf("violations %d, requests %+q", v, l.prefixes)
+			}
+		})
 	}
-	// ASCII: no request for a folder outside the scope.
+	// a: \u00e9/ (NFD e\u0301) cannot hold a key starting with a: never
+	// listed, the walk exact; ASCII folders outside logs likewise.
+	l := &aliasLister{folders: map[string]*FolderPage[int64]{
+		"":        {Objects: objects("ab"), Folders: []string{"\u00e9/", "a/"}},
+		"a/":      {Objects: objects("a/1")},
+		"\u00e9/": {Objects: objects("\u00e9/!", "e\u0301/x")},
+	}}
+	got, _, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "a"})
+	if err != nil || !slices.Equal(got, []string{"a/1", "ab"}) || slices.Contains(l.prefixes, "\u00e9/") {
+		t.Fatalf("%q, %v, requests %+q", got, err, l.prefixes)
+	}
 	m := &memLister{keys: []string{"lo/x", "logs/a", "lz/y", "m/1"}, size: 10}
-	if got, d, _, err := walkDelimited(t, m, DelimitedOptions[int64]{Select: "logs"}); err != nil || !slices.Equal(got, []string{"logs/a"}) ||
-		d.opt.Counters.Snapshot().Value("tree.probes") != 0 || !slices.Equal(m.prefixes, []string{"", "logs/"}) {
+	if got, _, _, err := walkDelimited(t, m, DelimitedOptions[int64]{Select: "logs"}); err != nil || !slices.Equal(got, []string{"logs/a"}) ||
+		!slices.Equal(m.prefixes, []string{"", "logs/"}) {
 		t.Fatalf("%q, %v, requests %q", got, err, m.prefixes)
+	}
+	for r, want := range map[string]string{"": "", "a": "a", "\u00e9": "e", "e\u0301\u0323": "e", "\u0301": "", "ab\u0301c\u0323": "ab\u0301c", "\u212a": "K"} {
+		if got := stem(r); got != want {
+			t.Errorf("stem(%+q) = %+q, want %+q", r, got, want)
+		}
 	}
 }
 
@@ -498,150 +522,5 @@ func TestDelimitedRetained(t *testing.T) {
 	_, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{})
 	if v := d.opt.Counters.Snapshot().Value("tree.max_folder_bytes"); err != nil || v < 20_000 {
 		t.Fatalf("charged %d for two pages retaining 10,000 bytes each (%v)", v, err)
-	}
-}
-
-// gatedLister holds the first request for folder held until release, and
-// records each folder's requests.
-type gatedLister struct {
-	mu      sync.Mutex
-	held    string
-	entered chan struct{}
-	release chan struct{}
-	calls   map[string]int
-}
-
-func (g *gatedLister) ListFolder(_ context.Context, prefix, _ string) (*FolderPage[int64], error) {
-	g.mu.Lock()
-	g.calls[prefix]++
-	g.mu.Unlock()
-	if prefix == g.held {
-		close(g.entered)
-		<-g.release
-	}
-	return &FolderPage[int64]{Objects: objects(prefix + "x")}, nil
-}
-
-func (g *gatedLister) count(prefix string) int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.calls[prefix]
-}
-
-// TestDelimitedHeadroom: with room for one page in flight, a second
-// folder's page waits until the first is decoded and charged; then both
-// complete. The wait is observed by the reader's hook, not by time.
-func TestDelimitedHeadroom(t *testing.T) {
-	g := &gatedLister{held: "a/", entered: make(chan struct{}), release: make(chan struct{}), calls: map[string]int{}}
-	d := NewDelimited[int64](g, DelimitedOptions[int64]{PageHeadroom: 100, HeadroomBytes: 150})
-	waiting := make(chan struct{})
-	d.waiting = func() { close(waiting) }
-	read := func(prefix string, done chan<- error) {
-		var items []any
-		out := &Out[struct{}, struct{}, int64]{e: &recorder[struct{}, struct{}, int64]{items: &items}, r: FolderRange{Prefix: prefix}}
-		done <- d.Read(context.Background(), FolderRange{Prefix: prefix}, out)
-	}
-	a, b := make(chan error, 1), make(chan error, 1)
-	go read("a/", a)
-	<-g.entered
-	go read("b/", b)
-	select {
-	case <-waiting:
-	case err := <-b:
-		t.Fatalf("folder b/ did not wait for the headroom a/'s page held (%v)", err)
-	}
-	if n := g.count("b/"); n != 0 {
-		t.Fatalf("folder b/ sent %d requests while a/'s page held the headroom", n)
-	}
-	close(g.release)
-	if err := <-a; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-b; err != nil {
-		t.Fatal(err)
-	}
-	s := d.opt.Counters.Snapshot()
-	if s.Value("tree.headroom_waits") != 1 || g.count("b/") != 1 || d.Staged() != 0 {
-		t.Fatalf("counters %s", mustJSON(s))
-	}
-	// A cancelled wait returns.
-	g2 := &gatedLister{held: "a/", entered: make(chan struct{}), release: make(chan struct{}), calls: map[string]int{}}
-	d2 := NewDelimited[int64](g2, DelimitedOptions[int64]{PageHeadroom: 100, HeadroomBytes: 100})
-	waiting2 := make(chan struct{})
-	d2.waiting = func() { close(waiting2) }
-	go func() {
-		var items []any
-		out := &Out[struct{}, struct{}, int64]{e: &recorder[struct{}, struct{}, int64]{items: &items}, r: FolderRange{Prefix: "a/"}}
-		d2.Read(context.Background(), FolderRange{Prefix: "a/"}, out)
-	}()
-	<-g2.entered
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		var items []any
-		out := &Out[struct{}, struct{}, int64]{e: &recorder[struct{}, struct{}, int64]{items: &items}, r: FolderRange{Prefix: "b/"}}
-		done <- d2.Read(ctx, FolderRange{Prefix: "b/"}, out)
-	}()
-	select {
-	case <-waiting2:
-	case err := <-done:
-		t.Fatalf("folder b/ did not wait for the headroom (%v)", err)
-	}
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled wait: %v", err)
-	}
-	close(g2.release)
-}
-
-// TestDelimitedProbeStem: a folder outside the scope is probed only when
-// its decomposed segment begins with the scope's remainder decomposed up
-// to its last starter (stem); no spelling of any other folder can hold a
-// key of the scope.
-func TestDelimitedProbeStem(t *testing.T) {
-	// a: \u00e9/ (NFD e\u0301) cannot hold a key starting with a: never
-	// listed, though it holds another spelling's key.
-	l := &aliasLister{folders: map[string]*FolderPage[int64]{
-		"":        {Objects: objects("ab"), Folders: []string{"\u00e9/", "a/"}},
-		"a/":      {Objects: objects("a/1")},
-		"\u00e9/": {Objects: objects("\u00e9/!", "e\u0301/x")},
-	}}
-	got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "a"})
-	if err != nil || !slices.Equal(got, []string{"a/1", "ab"}) || d.opt.Counters.Snapshot().Value("tree.probes") != 0 || slices.Contains(l.prefixes, "\u00e9/") {
-		t.Fatalf("%q, %v, requests %+q", got, err, l.prefixes)
-	}
-	// Reordering: \u00e9\u0323 (e, acute, dot below) decomposes to e, dot
-	// below, acute; its NFC is \u1eb9\u0301, which does not start with the
-	// scope \u00e9 in any form but its stem e. Probed, the hidden key stops
-	// the run.
-	l = &aliasLister{folders: map[string]*FolderPage[int64]{
-		"":              {Folders: []string{"\u1eb9\u0301/"}},
-		"\u1eb9\u0301/": {Objects: objects("\u1eb9\u0301/!", "\u00e9\u0323/x")},
-	}}
-	if got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "\u00e9"}); !errors.Is(err, source.ErrProtocol) || d.opt.Counters.Snapshot().Value("tree.probes") != 1 {
-		t.Fatalf("reordering: %q, %v", got, err)
-	}
-	// A remainder with no starter has an empty stem: every folder outside
-	// the scope is probed.
-	l = &aliasLister{folders: map[string]*FolderPage[int64]{
-		"": {Folders: []string{"a/", "b/"}},
-	}}
-	if got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "\u0301"}); err != nil || len(got) != 0 || d.opt.Counters.Snapshot().Value("tree.probes") != 2 {
-		t.Fatalf("no starter: %q, %v, %s", got, err, mustJSON(d.opt.Counters.Snapshot()))
-	}
-	for r, want := range map[string]string{"": "", "a": "a", "\u00e9": "e", "e\u0301\u0323": "e", "\u0301": "", "ab\u0301c\u0323": "ab\u0301c", "\u212a": "K"} {
-		if got := stem(r); got != want {
-			t.Errorf("stem(%+q) = %+q, want %+q", r, got, want)
-		}
-	}
-}
-
-// TestDelimitedHeadroomCoversInFlight: without a bound of its own, the
-// headroom is one page for each page the walk can have in flight, so it
-// never waits.
-func TestDelimitedHeadroomCoversInFlight(t *testing.T) {
-	d := NewDelimited[int64](&memLister{}, DelimitedOptions[int64]{PageHeadroom: 4 << 20, InFlight: 256})
-	if v := d.opt.Counters.Snapshot().Value("tree.limit.headroom_bytes"); v != 256*4<<20 {
-		t.Fatalf("headroom %d, want 256 pages of 4 MiB", v)
 	}
 }

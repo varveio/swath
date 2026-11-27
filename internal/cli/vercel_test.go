@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
 	seekparquet "github.com/varveio/seekparquet/go"
 	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/inventory"
@@ -27,7 +28,7 @@ import (
 func TestVercelFlags(t *testing.T) {
 	t.Setenv(vercel.TokenEnv, "vercel_blob_rw_test_secret")
 	for _, args := range [][]string{
-		{"--anonymous"}, {"--endpoint-url=http://example.com"}, {"--listing=range"}, {"--all-versions"},
+		{"--anonymous"}, {"--endpoint-url=http://example.com"}, {"--all-versions"},
 		{"--sequential"}, {"--no-seed"}, {"--structure=off"}, {"--slow-split"}, {"--max-keys=1"},
 		{"--seed-from-tile-pages=1"}, {"--seed-from-window-rows=1"}, {"--trace=/tmp/unused"},
 	} {
@@ -36,10 +37,26 @@ func TestVercelFlags(t *testing.T) {
 			t.Errorf("%v: source %T error %v", args, src, err)
 		}
 	}
-	for _, mode := range []string{"auto", "tree"} {
-		src, err := openArgs(t, "vercel://store_test", true, nil, "--listing="+mode, "--page-size=2", "--request-rate=5")
+	root := "vercel://store_test"
+	f := factory(t, root)
+	fs := pflag.NewFlagSet("vercel", pflag.ContinueOnError)
+	options := f.RegisterFlags(fs, true)
+	if fs.Lookup("s3-listing") != nil || fs.Lookup("listing") != nil {
+		t.Fatal("Vercel registers a listing mode flag")
+	}
+	if err := fs.Parse([]string{"--page-size=2", "--request-rate=5"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.Workers == nil || f.Workers() != 4 {
+		t.Fatal("Vercel factory should default to four workers")
+	}
+	for _, tc := range []struct{ workers, limit int }{{0, 4}, {f.Workers(), 4}, {8, 8}} {
+		src, err := f.Open(t.Context(), registry.Request{Root: root, Options: options, Workers: tc.workers})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if got := src.(source.Requested).Requests().Limit; got != int64(tc.limit) {
+			t.Fatalf("requested %d workers, limiter = %d, want %d", tc.workers, got, tc.limit)
 		}
 		if cp := src.(source.Capable).Capabilities(); cp.Resume || cp.Seek != source.SeekTokenOnly {
 			t.Fatalf("capabilities %+v", cp)

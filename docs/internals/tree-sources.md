@@ -1,10 +1,9 @@
 # Tree sources (`internal/source/tree`)
 
 The tree core shares ordered child splicing between local filesystems, Azure hierarchical namespaces
-(HNS), S3's folder walk and Vercel Blob. Azure uses `Walker` and its seekable-directory reader, `Ordered`.
-S3's `--listing tree` and Vercel use `Walker` and the token-only reader, `Delimited`. localfs uses
-`EmitRows` with its own ranges, retaining descriptor ownership, unread-entry reporting, platform readers
-and count paths.
+(HNS), S3's folder walk and Vercel Blob. Azure uses `Walker` and its seekable-directory reader, `Ordered`. S3's
+`--s3-listing tree` and Vercel Blob use `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
+own ranges, retaining descriptor ownership, unread-entry reporting, platform readers and count paths.
 
 ## Ordering and ownership
 
@@ -76,13 +75,12 @@ or resume support. Tree resume and unordered-directory spill are not implemented
 ## Token-only delimited folders
 
 `Delimited` reads a store that lists one folder at a time with delimiter `/` and continuation tokens only, and
-whose pages can arrive in any order. A provider supplies a `FolderLister`, which takes the folder prefix
-and cursor. It returns the direct objects as rows, the child prefixes as spelled by the service, and the
-next cursor. The first call for a folder uses an empty cursor. S3 uses `ListObjectsV2` with delimiter `/`, never `StartAfter`,
-and maps objects with the range listing's `rows`. Vercel uses folded mode and maps `pathname` to the row key
-and `uploadedAt` to `created_at`, the current blob's reported upload time. The same validation and sorting serve Vercel and Cloudflare R2.
-See [Vercel Blob](../sources/vercel.md) and [S3](../sources/s3.md#cloudflare-r2).
-GCS (`delimiter` and `pageToken`) and flat Azure (`delimiter` and `marker`) adapters are not wired.
+whose pages need not be in byte order (Cloudflare R2; [S3](../sources/s3.md#cloudflare-r2)). A provider
+supplies a `FolderLister`: one delimited list call from a prefix and a token ("" for the folder's first page)
+to the objects directly in the folder, as rows of its own payload, its child prefixes as the service spelled
+them, and the next token. S3's is `ListObjectsV2` with `Delimiter: "/"`, never `StartAfter`, its objects
+mapped by the range listing's `rows`. Vercel uses folded list responses and maps `pathname` to the
+key and `uploadedAt` to `created_at`, the current blob's reported upload time.
 
 A range is a folder (`FolderRange`). `Read` lists it whole, follows tokens only, and checks every page before
 anything is emitted; a violation stops the run (`protocol`) rather than drop a row:
@@ -111,23 +109,28 @@ elsewhere is caught only when they arrive, under the folder that does not hold t
 duplicate check included, covers every returned entry before the scope is applied. Leaving a child prefix out
 is not safe by its spelling alone on a store that groups names in Unicode NFC: R2 merges `e\u0301/` and
 `\u00e9/` into one common prefix spelled as one of them, so `\u00e9/` can hold `e\u0301/x`, a key of the scope
-`e`. So a child `F` outside the scope is probed (`tree.probes`) only when the NFD form of `F`'s segment begins
+`e`. A child `F` outside the scope is left out without a request unless the NFD form of its segment begins
 with the stem of the scope's remainder `r` (`Select` after the start folder's prefix): `NFD(r)` up to and
-including its last starter (canonical combining class 0), or "" when `r` has none. Any other `F` is left out
-without a request. A key `m` of the scope placed under `F` has a segment `s` that starts with `r` and is
-canonically equivalent to `F`'s (`NFC(s) == NFC(seg F)`, so `NFD(s) == NFD(seg F)`); `NFD(s)` is the canonical
-reordering of `NFD(r) + NFD(rest)`, and reordering only permutes runs of non-starters, so the stem is a prefix
-of `NFD(s)`, hence of `NFD(seg F)`. So scope `a` never lists `\u00e9/` (`e\u0301`), scope `e` does, scope
-`\u00e9` lists `\u1eb9\u0301/` (NFD e, dot below, acute: where `\u00e9\u0323` belongs), scope `K` lists
-`\u212a/` (NFD `K`), and a remainder of combining marks alone lists every folder outside it. A probe lists the
-subtree folder by folder, checked as any folder is, emitting nothing, and holds no more than each folder's
-listing and its children's prefixes. A key of the scope hidden in it reaches, at some depth, a listing whose
-raw prefix it does not start with, and stops the run (`protocol`); listing only `F`'s own folder would not do,
-since a deeper common prefix can be spelled as the other spelling's key. The argument needs two things this
-reader has: every folder prefix ends in `/`, and NFC and NFD are segmentable at `/` (no canonical
-decomposition holds `/`, and `/` composes and reorders with nothing). With them a scope that does not end in
-`/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing are exact in raw bytes, or the run
-stops. A probe costs a request per folder of the probed subtree.
+including its last starter (canonical combining class 0), or "" when `r` has none. Then `F` could hold keys of
+the scope, and the run stops (`protocol`, `tree.violations.scope_alias`) before any request to `F`, naming `F`
+and the scope; the user lists a prefix that ends in `/` instead (the folder above, or each folder wanted),
+which has no such sibling. Why the rule is enough: a key `m` of the scope placed under `F` has a segment `s`
+that starts with `r` and is canonically equivalent to `F`'s (`NFC(s) == NFC(seg F)`, so
+`NFD(s) == NFD(seg F)`); `NFD(s)` is the canonical reordering of `NFD(r) + NFD(rest)`, and reordering only
+permutes runs of non-starters, so the stem is a prefix of `NFD(s)`, hence of `NFD(seg F)`. So scope `a` is never
+stopped by `\u00e9/` (`e\u0301`), scope `e` is, scope `\u00e9` is stopped by `\u1eb9\u0301/` (NFD e, dot
+below, acute: where `\u00e9\u0323` belongs), scope `K` by `\u212a/` (NFD `K`), and a remainder of combining
+marks alone by every folder outside it. The refusal is conservative: `F` may hold no key of the scope at all.
+The argument needs two things this reader has: every folder prefix ends in `/`, and NFC and NFD are
+segmentable at `/` (no canonical decomposition holds `/`, and `/` composes and reorders with nothing). With
+them a scope that does not end in `/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing
+are exact in raw bytes, or the run stops.
+
+A provider whose service matches and folds prefixes without normalization sets
+`ExactPrefixes`. Vercel uses this contract: partial scopes apply the same raw-byte
+filter without the normalized-sibling refusal, counted by `tree.scope_exact_prefixes`.
+Raw-prefix, direct-child, duplicate and cursor validation still apply to every page.
+The default remains conservative for stores such as R2 whose folding can merge spellings.
 
 **Memory.** A folder is held whole while it is read. Each page is charged what its strings retain
 (`FolderPage.Retained`: S3's decoded page keeps one arena at its URL-encoded size, so a key of decomposed
@@ -140,21 +143,11 @@ never waits, and is released on every return, cancellation included. Once a fold
 the order stage's, under its own budget. A folder is not spilled: one larger than the bound cannot be listed
 this way.
 
-A page in flight is a second, separate bound: from its request until it is decoded and charged it reserves
-`PageHeadroom` from `HeadroomBytes`, waiting while other pages hold the rest (`tree.headroom_waits`,
-`tree.headroom_wait_ns`). S3 reserves 4 KiB an entry asked for (a URL-encoded 1,024-byte key and its
-metadata), or 4,000 KiB for a page of 1,000. Vercel reserves 64 MiB per response within the shared 256 MiB
-headroom budget, allowing four concurrent page requests. The response body is capped at 16 MiB.
-The reservation is an admission allowance, not a measured heap or RSS bound: decoder buffers,
-temporary strings and garbage collection can add memory. S3's default `HeadroomBytes` is one page for
-each page the walk can have in flight (`InFlight`: the order stage's workers and its drainer, which lists a queued folder itself, each reading
-one folder a page at a time), so the bound states the memory rather than limiting the walk: at `--workers 64`,
-254 MiB; at 256, 1,004 MiB. The worst case of a walk is then the staging bound plus that: 510 MiB at 64
-workers, 1.23 GiB at 256, beside the order stage's own budgets. The range engine holds the same response memory, a body of up to 16 MiB for each request in flight
-(`--workers`, plus seed listings and probes beside them), under no bound. It cannot deadlock: the headroom is
-the only thing anyone waits for; a holder takes one reservation at a time and releases it once its page is
-charged or has failed, waiting on nothing but its own request; and staging, which a waiter may hold, is never
-waited for. One reservation never exceeds the bound, and a cancelled wait returns.
+Responses in flight are not separately bounded, as for the range engine: a walk has at most one page in
+flight for each folder being read (the order stage's workers and its drainer, which lists a queued folder
+itself: `--workers` + 1), each body capped by the client's limit (16 MiB, `objhttp`'s guard) until it is
+decoded and charged. Vercel defaults to four workers; an explicit worker count can raise it.
+Decoder buffers and temporary strings are additional memory, not bounded by the staging allowance.
 
 **Coverage.** A walk's report claims its scope only when every folder it handed out was read whole (the start
 folder and each child spliced in); a walk that stopped says it is not complete.
@@ -165,20 +158,17 @@ pages within `keyrange.EmptyChainLive` of each other, for the watchdog. A page w
 the reader's counters (folders started and completed, pages, empty pages, requeues, objects, prefixes, markers,
 empty segments, non-NFC names, out-of-scope entries, the largest folder's entries and bytes, peak staging,
 the bounds, budget refusals, sort time and each kind of violation), placed in the provider's table
-([Counters](counters.md#the-s3-folder-walk---listing-tree)).
+([Counters](counters.md#the-s3-folder-walk---s3-listing-tree)).
 
-**Resume, not yet.** No delimited listing declares resume. The intended shape, once a published key `K` is
-journaled: skip the objects at or below `K`, and the folders whose whole subtree sorts at or below `K`,
-without listing them; re-list only the folders on `K`'s path (each of `K`'s ancestors), keeping their entries
-above `K`. Since a folder is emitted whole and in order, a sorted folder is the unit a resume re-reads; nothing
-here keeps state that would block it.
+Tree datasets are not resumable yet.
 
 ## Other directory APIs
 
 A token-only ordered API can reuse the walker and continuation segments without `Ordered` or
-`keyrange.Engine`, or `Delimited` and its `Folder` operation, at the cost of sorting what is already in order.
-A reader using native ordering would need a byte-order guarantee across pages, including the merge of direct
-objects and virtual folders. Vercel's folded pages use opaque cursors and swath sorts each folder in full.
+`keyrange.Engine`.
+A streaming reader would have to preserve real markers and validate byte order across pages.
+Vercel instead uses `Delimited` to sort complete folders, so its walk does not depend on native order.
+One large flat folder remains a serial cursor chain; tiny folders can amplify requests.
 
 Cloudflare R2's observed listing order differs from raw key order even within a directory, and normalization
 can change routing and subtree placement, so its pages cannot feed `Ordered`. `Delimited` sorts each whole

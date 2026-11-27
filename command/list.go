@@ -105,9 +105,6 @@ type ListOptions struct {
 	CABundle    string `flag:"ca-bundle"`
 	NoVerifySSL bool   `flag:"no-verify-ssl"`
 	AllVersions bool   `flag:"all-versions"`
-	// Listing is auto, range or tree ("" for auto): tree lists an S3
-	// bucket folder by folder, the default on Cloudflare R2.
-	Listing string `flag:"listing"`
 
 	// A local directory.
 	Metadata      string `flag:"metadata"`
@@ -136,6 +133,9 @@ type ListOptions struct {
 	S3FIPS                       *bool         `flag:"s3-fips"`
 	S3DualStack                  *bool         `flag:"s3-dualstack"`
 	S3FetchOwner                 bool          `flag:"s3-fetch-owner"`
+	// S3Listing is auto, range or tree ("" for auto): tree lists a
+	// bucket folder by folder, the default on Cloudflare R2.
+	S3Listing string `flag:"s3-listing"`
 }
 
 // ListProgress is a run's progress, as its progress file

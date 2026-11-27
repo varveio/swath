@@ -27,7 +27,7 @@ _swath_list() {
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
-        '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
+        '(-j --workers)'{-j+,--workers=}'[listing workers (normally 64; source-specific defaults may differ)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
@@ -52,7 +52,6 @@ _swath_list() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
-        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -77,6 +76,7 @@ _swath_list() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -103,7 +103,7 @@ _swath_du() {
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
-        '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
+        '(-j --workers)'{-j+,--workers=}'[listing workers (normally 64; source-specific defaults may differ)]:N: ' \
         '--seed-from=[object stores: start from a previous listing'\''s key distribution]:PATH:_files' \
         '--max-duration=[stop the run after this long (exit 124); 0: no limit]:DURATION: ' \
         '--stall-timeout=[stop as stuck after this long without progress (exit 75)]:DURATION: ' \
@@ -121,7 +121,6 @@ _swath_du() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
-        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -146,6 +145,7 @@ _swath_du() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -173,7 +173,7 @@ _swath_diag_list() {
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
-        '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
+        '(-j --workers)'{-j+,--workers=}'[listing workers (normally 64; source-specific defaults may differ)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
@@ -203,7 +203,6 @@ _swath_diag_list() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
-        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -238,6 +237,7 @@ _swath_diag_list() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -265,7 +265,7 @@ _swath_diag_count() {
         '--modified-since=[keep objects or entries modified at or after TIME (2026-01-01, 7d)]:TIME: ' \
         '--modified-until=[keep objects or entries modified at or before this time]:TIME: ' \
         '--storage-class=[keep objects in these storage classes (STANDARD,GLACIER; repeatable)]:NAME[,NAME...]: ' \
-        '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
+        '(-j --workers)'{-j+,--workers=}'[listing workers (normally 64; source-specific defaults may differ)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \
@@ -290,7 +290,6 @@ _swath_diag_count() {
         '--endpoint-url=[the service URL in place of the provider'\''s own (emulators, MinIO)]:URL: ' \
         '--ca-bundle=[trust the certificates in this PEM file besides the system'\''s]:FILE:_files' \
         '--no-verify-ssl[do not verify the service'\''s TLS certificate (warns)]' \
-        '--listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--request-timeout=[per-request timeout; a request over it is retried]:DURATION: ' \
         '--all-versions[list every version of every key, not only the current objects]' \
         '--request-rate=[cap every HTTP attempt at N per second (0: no cap)]:N: ' \
@@ -325,6 +324,7 @@ _swath_diag_count() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -335,7 +335,7 @@ _swath_resume() {
         '--output-gcs-credentials-file=[credentials for a GCS -o (default: Application Default Credentials)]:FILE:_files' \
         '--output-s3-profile=[the shared config profile an S3 -o takes credentials (and region) from]:NAME: ' \
         '--output-azure-sas-token=[a shared access signature for an Azure -o; never recorded]:TOKEN: ' \
-        '(-j --workers)'{-j+,--workers=}'[listing workers (default 64; a local tree: 4 per CPU, at most 64)]:N: ' \
+        '(-j --workers)'{-j+,--workers=}'[listing workers (normally 64; source-specific defaults may differ)]:N: ' \
         '--encoders=[Parquet encoders, or a .zst file'\''s compression jobs (default: CPUs)]:N: ' \
         '--sort-buffer=[bytes buffered for sorted output; not a total-memory limit]:SIZE: ' \
         '--spill-budget=[fixed cap on spill (default: follows the spill disk'\''s free space)]:SIZE: ' \

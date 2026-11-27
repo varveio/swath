@@ -31,13 +31,13 @@ sorts by the raw UTF-8 bytes of their pathnames and schedules child folders.
 Virtual folders create no inventory rows. A real blob named `a/` remains a real
 row, emitted when listing that folder.
 
-`--listing auto` and `--listing tree` use this walk. Vercel supplies no arbitrary
-pathname seek, so `--listing range` and range-engine diagnostic controls are
-refused. Independent folders can run concurrently, with at most four page requests in
-flight under the shared response-memory reservation, regardless of a larger
-`--workers` setting. A large flat folder remains one cursor chain. Many tiny folders can require far more listing requests than
-an expanded sequential listing. Listing requests may incur service charges;
-swath does not estimate Vercel charges.
+Vercel always uses the folder walk. It supplies no arbitrary pathname seek, so
+range-engine diagnostic controls are refused. Independent folders can run
+concurrently. The default is four workers; `--workers` can raise or lower it,
+and the adaptive limiter may reduce request concurrency when the service throttles.
+A large flat folder remains one cursor chain. Many tiny folders can require far
+more listing requests than an expanded sequential listing. Requests may incur
+service charges; swath does not estimate Vercel charges.
 
 The shared request timeout, rate cap and adaptive concurrency controls apply.
 For a store that throttles, set `--request-rate` to a suitable rate for its quota.
@@ -67,11 +67,14 @@ remain unavailable in the saved inventory view.
   folder and 256 MiB across active folders. Crossing a limit fails with
   `folder_limit`; it never reports a truncated inventory as complete. The limit
   counts retained entries and names, not object content bytes.
-- Response decoding has a separate shared admission reservation, not a heap or RSS limit. The run report's
-  `tree.*` counters show pages, folders, staging, waits and validation failures.
+- Responses in flight are extra to the staging limits. Each body is capped at
+  16 MiB, with additional decoder buffers and strings. The worker count and
+  adaptive limiter control simultaneous requests; lower `--workers` to reduce
+  response memory. The report shows HTTP activity and `tree.*` staging counters.
 - Prefixes without a trailing slash are preserved exactly. The walk begins at
   the containing folder and selects entries by raw prefix; it may read siblings
-  outside that prefix to establish the selection.
+  outside that prefix, but Vercel's literal prefix matching keeps byte-distinct
+  Unicode spellings separate.
 - swath publishes the complete result of the live listing it performed. It is
   not a point-in-time snapshot of a store that changes during the run.
 

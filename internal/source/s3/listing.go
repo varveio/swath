@@ -18,13 +18,13 @@ import (
 // ACCOUNT.eu.r2.cloudflarestorage.com.
 const r2Host = ".r2.cloudflarestorage.com"
 
-// R2Endpoint reports whether endpoint is a Cloudflare R2 S3 endpoint: its
+// r2Endpoint reports whether endpoint is a Cloudflare R2 S3 endpoint: its
 // parsed host name ends in .r2.cloudflarestorage.com, in any case. R2's
 // ListObjectsV2 does not list keys in byte order (a key that is a proper
 // prefix of others sorts among them, and keys sort by their Unicode NFC
 // form), and its start-after seeks in that order, so the range engine can
 // miss keys there without an error. No request is made.
-func R2Endpoint(endpoint string) bool {
+func r2Endpoint(endpoint string) bool {
 	if endpoint == "" {
 		return false
 	}
@@ -36,18 +36,43 @@ func R2Endpoint(endpoint string) bool {
 	return strings.HasSuffix(host, r2Host)
 }
 
+// Listing is how a bucket is listed (Options.Listing, --s3-listing).
+type Listing string
+
+// The listings.
+const (
+	// ListingAuto is the range engine, except on a Cloudflare R2 endpoint
+	// (r2Endpoint), which does not list in byte order: ListingTree there.
+	ListingAuto Listing = "auto"
+	// ListingRange is the range engine: key ranges listed in parallel
+	// from start keys, which needs pages in byte order.
+	ListingRange Listing = "range"
+	// ListingTree is the folder walk (Tree): each folder listed with
+	// delimiter '/' by continuation tokens only, read whole and sorted.
+	ListingTree Listing = "tree"
+)
+
+// ParseListing is the listing s names: auto, range or tree.
+func ParseListing(s string) (Listing, error) {
+	switch l := Listing(s); l {
+	case ListingAuto, ListingRange, ListingTree:
+		return l, nil
+	}
+	return "", errors.New("want auto, range or tree")
+}
+
 // The listing's engagement reasons (Stats.ListingReason).
 const (
-	ReasonDefault       = "default_range"  // ListingAuto on a store that is not R2: the range engine
-	ReasonR2Endpoint    = "r2_endpoint"    // ListingAuto on an R2 endpoint: the folder walk
-	ReasonExplicitRange = "explicit_range" // ListingRange
-	ReasonExplicitTree  = "explicit_tree"  // ListingTree
+	reasonDefault       = "default_range"  // ListingAuto on a store that is not R2: the range engine
+	reasonR2Endpoint    = "r2_endpoint"    // ListingAuto on an R2 endpoint: the folder walk
+	reasonExplicitRange = "explicit_range" // ListingRange
+	reasonExplicitTree  = "explicit_tree"  // ListingTree
 )
 
 // Notices of the listing's choice (Options.Warn).
 const (
-	r2Notice       = "Cloudflare R2 does not list keys in byte order: listing folder by folder (--listing tree), each folder read whole and sorted; --listing range lists by key ranges, which can miss keys there without an error"
-	r2RangeWarning = "--listing range on Cloudflare R2, which does not list keys in byte order: the range engine can miss keys there without an error (--listing tree lists folder by folder)"
+	r2Notice       = "Cloudflare R2 does not list keys in byte order: listing folder by folder (--s3-listing tree), each folder read whole and sorted; --s3-listing range lists by key ranges, which can miss keys there without an error"
+	r2RangeWarning = "--s3-listing range on Cloudflare R2, which does not list keys in byte order: the range engine can miss keys there without an error (--s3-listing tree lists folder by folder)"
 )
 
 // listing is how opt lists: the folder walk (tree) or the range engine,
@@ -56,16 +81,16 @@ const (
 // none, with no Endpoint, gives nothing to read, and lists by key ranges:
 // ask for ListingTree to walk folders through it.
 func (o *Options) listing() (tree bool, reason string, err error) {
-	switch l := o.Listing.OrAuto(); l {
-	case source.ListingAuto:
-		if R2Endpoint(o.endpoint()) {
-			return true, ReasonR2Endpoint, nil
+	switch l := o.Listing; l {
+	case ListingAuto, "":
+		if r2Endpoint(o.endpoint()) {
+			return true, reasonR2Endpoint, nil
 		}
-		return false, ReasonDefault, nil
-	case source.ListingRange:
-		return false, ReasonExplicitRange, nil
-	case source.ListingTree:
-		return true, ReasonExplicitTree, nil
+		return false, reasonDefault, nil
+	case ListingRange:
+		return false, reasonExplicitRange, nil
+	case ListingTree:
+		return true, reasonExplicitTree, nil
 	default:
 		return false, "", fmt.Errorf("s3: unknown listing %q (auto, range or tree)", l)
 	}
@@ -76,9 +101,9 @@ func (o *Options) listing() (tree bool, reason string, err error) {
 func (o *Options) warnListing(tree bool, reason string) {
 	switch {
 	case o.Warn == nil:
-	case tree && reason == ReasonR2Endpoint:
+	case tree && reason == reasonR2Endpoint:
 		o.Warn(source.WarnTreeListing, r2Notice)
-	case !tree && R2Endpoint(o.endpoint()):
+	case !tree && r2Endpoint(o.endpoint()):
 		o.Warn(source.WarnUnorderedRange, r2RangeWarning)
 	}
 }
@@ -102,14 +127,14 @@ var errTreeOpen = errors.New("s3: this listing is a folder walk (Options.Listing
 // treeRefusal is why the folder walk cannot serve opt: a range-engine
 // control or a versions listing given with it, or nil.
 func treeRefusal(opt *Options, reason string) error {
-	why := "--listing tree walks folders"
-	if reason == ReasonR2Endpoint {
-		why = "on Cloudflare R2 the listing walks folders (--listing tree), since R2 does not list keys in byte order"
+	why := "--s3-listing tree walks folders"
+	if reason == reasonR2Endpoint {
+		why = "on Cloudflare R2 the listing walks folders (--s3-listing tree), since R2 does not list keys in byte order"
 	}
 	control := ""
 	switch p := opt.Policy; {
 	case opt.AllVersions:
-		return source.Unsupported(fmt.Errorf("--all-versions lists with ListObjectVersions on the range engine, and %s, which lists current objects only (--listing range lists versions, at the risk of missing keys where the store does not list in byte order)", why))
+		return source.Unsupported(fmt.Errorf("--all-versions lists with ListObjectVersions on the range engine, and %s, which lists current objects only (--s3-listing range lists versions, at the risk of missing keys where the store does not list in byte order)", why))
 	case p.Sequential:
 		control = "--sequential"
 	case p.MaxKeys != 0:
@@ -125,5 +150,5 @@ func treeRefusal(opt *Options, reason string) error {
 	default:
 		return nil
 	}
-	return source.Unsupported(fmt.Errorf("%s is a control of the range engine, and %s: give --listing range to list by key ranges", control, why))
+	return source.Unsupported(fmt.Errorf("%s is a control of the range engine, and %s: give --s3-listing range to list by key ranges", control, why))
 }
