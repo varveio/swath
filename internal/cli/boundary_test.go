@@ -25,7 +25,7 @@ var composition = []string{
 
 // providers are the provider packages under internal/source. Each is
 // registered here, by this package's init, and imports none of it.
-var providers = []string{"s3", "gcs", "azblob", "localfs"}
+var providers = []string{"s3", "gcs", "azblob", "localfs", "vercel"}
 
 // readerEdge are the packages that may import parquet-go in a provider's
 // closure: SeekParquet's reader, reached through schema → reader, an edge

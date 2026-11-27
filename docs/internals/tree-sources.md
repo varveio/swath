@@ -1,9 +1,10 @@
 # Tree sources (`internal/source/tree`)
 
 The tree core shares ordered child splicing between local filesystems, Azure hierarchical namespaces
-(HNS) and S3's folder walk. Azure uses `Walker` and its seekable-directory reader, `Ordered`. S3's
-`--listing tree` uses `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
-own ranges, retaining descriptor ownership, unread-entry reporting, platform readers and count paths.
+(HNS), S3's folder walk and Vercel Blob. Azure uses `Walker` and its seekable-directory reader, `Ordered`.
+S3's `--listing tree` and Vercel use `Walker` and the token-only reader, `Delimited`. localfs uses
+`EmitRows` with its own ranges, retaining descriptor ownership, unread-entry reporting, platform readers
+and count paths.
 
 ## Ordering and ownership
 
@@ -69,18 +70,18 @@ and split directories, held directories, candidate lookups, retries, and evidenc
 range-engine counters describe segment work. Azure reports requests for the whole walk and shares HTTP
 activity with the watchdog.
 
-Neither the generic walker, Azure HNS nor S3's folder walk declares durable coverage fences or resume
-support. Tree resume, unordered-directory spill and a Vercel Blob provider are not implemented here.
+Neither the generic walker, Azure HNS nor the token-only folder walks declares durable coverage fences or resume support. Tree resume and unordered-directory spill are not implemented here.
 
 ## Token-only delimited folders
 
 `Delimited` reads a store that lists one folder at a time with delimiter `/` and continuation tokens only, and
-whose pages need not be in byte order (Cloudflare R2; [S3](../sources/s3.md#cloudflare-r2)). A provider
-supplies a `FolderLister`: one delimited list call from a prefix and a token ("" for the folder's first page)
-to the objects directly in the folder, as rows of its own payload, its child prefixes as the service spelled
-them, and the next token. S3's is `ListObjectsV2` with `Delimiter: "/"`, never `StartAfter`, its objects
-mapped by the range listing's `rows`. A GCS adapter (`delimiter` and `pageToken`) or an Azure flat one
-(`delimiter` and `marker`) would be the same few lines; neither is wired.
+whose pages can arrive in any order. A provider supplies a `FolderLister`, which takes the folder prefix
+and cursor. It returns the direct objects as rows, the child prefixes as spelled by the service, and the
+next cursor. The first call for a folder uses an empty cursor. S3 uses `ListObjectsV2` with delimiter `/`, never `StartAfter`,
+and maps objects with the range listing's `rows`. Vercel uses folded mode and maps `pathname` to the row key
+and `uploadedAt` to the upload timestamp. The same validation and sorting serve Vercel and Cloudflare R2.
+See [Vercel Blob](../sources/vercel.md) and [S3](../sources/s3.md#cloudflare-r2).
+GCS (`delimiter` and `pageToken`) and flat Azure (`delimiter` and `marker`) adapters are not wired.
 
 A range is a folder (`FolderRange`). `Read` lists it whole, follows tokens only, and checks every page before
 anything is emitted; a violation stops the run (`protocol`) rather than drop a row:
@@ -141,8 +142,10 @@ this way.
 A page in flight is a second, separate bound: from its request until it is decoded and charged it reserves
 `PageHeadroom` from `HeadroomBytes`, waiting while other pages hold the rest (`tree.headroom_waits`,
 `tree.headroom_wait_ns`). S3 reserves 4 KiB an entry asked for (a URL-encoded 1,024-byte key and its
-metadata): 4,000 KiB a page of 1,000. By default `HeadroomBytes` is one page for each page the walk can have in
-flight (`InFlight`: the order stage's workers and its drainer, which lists a queued folder itself, each reading
+metadata), or 4,000 KiB for a page of 1,000. Vercel reserves 64 MiB per response within the shared 256 MiB
+headroom budget, allowing four concurrent page requests. This reservation covers the encoded response,
+capped at 16 MiB, and space for the input buffer and decoding. S3's default `HeadroomBytes` is one page for
+each page the walk can have in flight (`InFlight`: the order stage's workers and its drainer, which lists a queued folder itself, each reading
 one folder a page at a time), so the bound states the memory rather than limiting the walk: at `--workers 64`,
 254 MiB; at 256, 1,004 MiB. The worst case of a walk is then the staging bound plus that: 510 MiB at 64
 workers, 1.23 GiB at 256, beside the order stage's own budgets. The range engine holds the same response memory, a body of up to 16 MiB for each request in flight
@@ -172,10 +175,8 @@ here keeps state that would block it.
 
 A token-only ordered API can reuse the walker and continuation segments without `Ordered` or
 `keyrange.Engine`, or `Delimited` and its `Folder` operation, at the cost of sorting what is already in order.
-The Vercel investigation observed ordered folded pages with separate blobs and virtual folders; an adapter
-would have to merge them, preserve real markers and validate order across pages. One large flat directory
-would remain a serial cursor chain; tiny folders can amplify requests. Those service contracts and a full
-recursive walker need independent validation before a provider is added.
+A reader using native ordering would need a byte-order guarantee across pages, including the merge of direct
+objects and virtual folders. Vercel's folded pages use opaque cursors and swath sorts each folder in full.
 
 Cloudflare R2's observed listing order differs from raw key order even within a directory, and normalization
 can change routing and subtree placement, so its pages cannot feed `Ordered`. `Delimited` sorts each whole

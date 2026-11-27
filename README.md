@@ -73,7 +73,7 @@ The documentation is at [swath.varve.io](https://swath.varve.io/):
 - [Run large listings](https://swath.varve.io/docs/running.html): a bucket of your own, start to finish,
   with stopping and resuming.
 - [Sources](https://swath.varve.io/docs/sources/): Amazon S3 and S3-compatible stores, Google Cloud Storage,
-  Azure Blob Storage, and local or mounted filesystems, with what each supports.
+  Azure Blob Storage, Vercel Blob, and local or mounted filesystems, with what each supports.
 - [Use swath from Go](https://swath.varve.io/docs/library.html) (experimental): package
   `github.com/varveio/swath/source` opens a bucket or container from its address (`source.Open`, with the
   providers the program imports) or a directory, and pages, looks up and walks it live, with no swath process.

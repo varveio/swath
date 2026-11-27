@@ -9,7 +9,7 @@ import (
 )
 
 func TestSchema(t *testing.T) {
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzureObjectsV1, AzureVersionsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzureObjectsV1, AzureVersionsV1, VercelObjectsV1, LocalV1} {
 		s, ok := Schema(id)
 		if !ok || s.ID != id || s.Key.Name != "key" || !s.Key.Required || len(s.Columns) == 0 {
 			t.Fatalf("%s: %+v, %v", id, s, ok)
@@ -18,7 +18,7 @@ func TestSchema(t *testing.T) {
 		if s.UniqueKeys == grouped {
 			t.Errorf("%s: UniqueKeys %v", id, s.UniqueKeys)
 		}
-		if c, ok := s.Column("size"); !ok || c.Type != TypeInt64 || c.Required {
+		if c, ok := s.Column("size"); !ok || c.Type != TypeInt64 || c.Required != (id == VercelObjectsV1) {
 			t.Errorf("%s: size %+v", id, c)
 		}
 		s.Columns[0].Name = "changed"
@@ -65,7 +65,7 @@ func TestSchema(t *testing.T) {
 // content hash is md5.
 func TestColumnNames(t *testing.T) {
 	times := []string{"last_modified", "created_at", "deleted_at", "accessed_at", "metadata_changed_at", "storage_class_changed_at",
-		"immutability_policy_until"}
+		"immutability_policy_until", "uploaded_at"}
 	for _, id := range SchemaIDs() {
 		s, _ := Schema(id)
 		for _, c := range s.Columns {
@@ -91,7 +91,7 @@ func TestVersionSpecs(t *testing.T) {
 		GCSGenerationsV1: {ID: "generation", Latest: "is_latest"},
 		AzureVersionsV1:  {ID: "version_id", Latest: "is_latest"},
 	}
-	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzureObjectsV1, AzureVersionsV1, LocalV1} {
+	for _, id := range []SchemaID{S3ObjectsV1, S3VersionsV1, GCSObjectsV1, GCSGenerationsV1, AzureObjectsV1, AzureVersionsV1, VercelObjectsV1, LocalV1} {
 		s, _ := Schema(id)
 		if s.Versions != want[id] {
 			t.Errorf("%s: versions %+v, want %+v", id, s.Versions, want[id])

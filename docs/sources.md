@@ -8,3 +8,4 @@ The sources have a page each:
 - [Amazon S3 and S3-compatible stores](sources/s3.md)
 - [Google Cloud Storage](sources/gcs.md)
 - [Azure Blob Storage](sources/azure.md)
+- [Vercel Blob](sources/vercel.md)

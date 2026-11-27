@@ -9,6 +9,7 @@ GCS_CURRENT = "swath/gcs-objects/v1"
 GCS_VERSIONS = "swath/gcs-generations/v1"
 AZURE_CURRENT = "swath/azure-objects/v1"
 AZURE_VERSIONS = "swath/azure-versions/v1"
+VERCEL_CURRENT = "swath/vercel-objects/v1"
 LOCAL = "swath/local-entries/v1"
 S3_COLUMNS = ["key", "size", "last_modified", "etag", "storage_class", "owner_id",
               "owner_display_name", "checksum_algorithm", "checksum_type"]
@@ -20,6 +21,7 @@ AZURE_COLUMNS = ["key", "size", "last_modified", "etag", "md5", "content_type", 
                  "encryption_scope", "customer_provided_key_sha256", "lease_state", "tag_count", "metadata", "tags",
                  "immutability_policy_until", "immutability_policy_mode", "legal_hold"]
 COLUMNS = {
+    VERCEL_CURRENT: ["key", "size", "uploaded_at", "etag"],
     S3_CURRENT: S3_COLUMNS,
     S3_VERSIONS: S3_COLUMNS + ["version_id", "is_latest", "is_delete_marker"],
     GCS_CURRENT: GCS_COLUMNS,

@@ -160,6 +160,8 @@ like every run with an output. `swath resume` on it is an error. S3's folder wal
 source: `s3.OpenedTree` is a view of its own, with the live interfaces (`Live`, `Advancing`, `Requested`,
 `Faulted`), `Identified`, `Capable`, `Reporter` and `Priced`, and none of the range engine's.
 
+Vercel Blob uses the same shared reader through its own native HTTP client and schema; it has no range-engine path.
+
 A store that lists folders with a delimiter and continuation tokens, but not in byte order, can reuse the tree
 core's `Delimited` reader: the provider writes one `FolderLister` call over its client and its own row
 mapping; validation, sorting, splicing, the memory bound and the counters are the reader's

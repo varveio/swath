@@ -13,7 +13,7 @@ Parquet inventories. Releases are published on the [releases page](https://githu
 
 **Use**
 
-- [Sources](sources/README.md): Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, and local
+- [Sources](sources/README.md): Amazon S3 and S3-compatible stores, Google Cloud Storage, Azure Blob Storage, Vercel Blob, and local
   and mounted filesystems: URLs, credentials, permissions, endpoints, requests.
 - [Output](output.md): text rows (table, TSV, JSONL), the fields of `swath du`'s rows, reading them in DuckDB,
   when to write a dataset.

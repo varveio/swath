@@ -1,0 +1,8 @@
+schema_id swath/vercel-objects/v1
+message swath_listing
+key_unique true
+max_key_bytes 0
+column key BYTE_ARRAY STRING required delta
+column size INT64 INT(64,true) required max_bytes 0 accessor int
+column uploaded_at INT64 TIMESTAMP(MICROS,UTC) required max_bytes 0 accessor int
+column etag BYTE_ARRAY STRING optional delta max_bytes 0 accessor str

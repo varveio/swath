@@ -76,6 +76,15 @@ type GCSGeneration struct {
 	DeletedAt *time.Time
 }
 
+// VercelObject is a swath/vercel-objects/v1 row. UploadedAt is the service's
+// upload time, not a modification time; ETag is opaque.
+type VercelObject struct {
+	Position
+	Size       int64
+	UploadedAt time.Time
+	ETag       *string
+}
+
 // AzureObject is a swath/azure-objects/v1 row: one current Azure blob.
 type AzureObject struct {
 	Position
@@ -147,6 +156,14 @@ type LocalEntry struct {
 // schema's columns (SchemaSpec.ColumnNames). A column the row does not
 // carry, a part lacking a column, or a value of another type is a SemanticError of KindSchema; a null in a required
 // column is one of KindRow.
+
+// DecodeVercelObject decodes a swath/vercel-objects/v1 row.
+func DecodeVercelObject(row seekparquet.Row) (VercelObject, error) {
+	d := decoder{spec: schemas[VercelObjectsV1], row: &row}
+	o := VercelObject{Position: d.position(), Size: d.required("size").Int64(),
+		UploadedAt: time.UnixMicro(d.required("uploaded_at").Int64()).UTC(), ETag: d.string("etag")}
+	return o, d.err
+}
 
 // DecodeAzureObject decodes a swath/azure-objects/v1 row.
 func DecodeAzureObject(row seekparquet.Row) (AzureObject, error) {

@@ -56,6 +56,7 @@ for its concrete decoder:
 | `swath/s3-versions/v1` | `DecodeS3Version` | `S3Version` |
 | `swath/gcs-objects/v1` | `DecodeGCSObject` | `GCSObject` |
 | `swath/gcs-generations/v1` | `DecodeGCSGeneration` | `GCSGeneration` |
+| `swath/vercel-objects/v1` | `DecodeVercelObject` | `VercelObject` |
 | `swath/azure-objects/v1` | `DecodeAzureObject` | `AzureObject` |
 | `swath/azure-versions/v1` | `DecodeAzureVersion` | `AzureVersion` |
 | `swath/local-entries/v1` | `DecodeLocalEntry` | `LocalEntry` |

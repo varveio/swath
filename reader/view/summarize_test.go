@@ -28,6 +28,7 @@ func TestSummarizeMatchesTheRecords(t *testing.T) {
 	}{
 		{reader.S3ObjectsV1, objects(), [][]listing.Kind{all, {listing.KindObject}, {listing.KindFile}}},
 		{reader.GCSObjectsV1, objects(), [][]listing.Kind{all}},
+		{reader.VercelObjectsV1, vercelObjects(), [][]listing.Kind{all}},
 		{reader.AzureObjectsV1, objects(), [][]listing.Kind{all}},
 		{reader.LocalV1, tree(), [][]listing.Kind{all, {listing.KindFile}, {listing.KindDir, listing.KindSymlink}, {listing.KindOther}, {listing.KindUnknown}, {listing.KindPrefix}}},
 		{reader.LocalV1, namesOnly(tree()), [][]listing.Kind{all, {listing.KindFile}}},

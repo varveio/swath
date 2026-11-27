@@ -72,7 +72,7 @@ func TestForeignProviderFlagsRefused(t *testing.T) {
 	// The flag set knows each provider flag's owners.
 	var o options
 	newFlags(&o, false)
-	for name, want := range map[string]string{"anonymous": "az,gs,s3", "endpoint-url": "az,gs,s3", "request-timeout": "az,gs,s3", "s3-profile": "s3", "gcs-credentials-file": "gs", "azure-sas-token": "az", "request-rate": "az,gs,s3"} {
+	for name, want := range map[string]string{"anonymous": "az,gs,s3,vercel", "endpoint-url": "az,gs,s3,vercel", "request-timeout": "az,gs,s3,vercel", "s3-profile": "s3", "gcs-credentials-file": "gs", "azure-sas-token": "az", "request-rate": "az,gs,s3,vercel"} {
 		if got := strings.Join(o.owners[name], ","); got != want {
 			t.Errorf("owners of --%s: %q, want %q", name, got, want)
 		}
@@ -115,5 +115,14 @@ func TestLocalTextRows(t *testing.T) {
 		if lines := strings.Split(out, "\n"); len(lines) != 3 || !strings.HasPrefix(lines[0], "key\tsize\tlast_modified\tkind\t") || !strings.HasPrefix(lines[1], "a\t2\t") {
 			t.Errorf("%v: %q", args, out)
 		}
+	}
+}
+
+func TestVercelSeedRefused(t *testing.T) {
+	t.Setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_secret")
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"vercel://store_test", "--seed-from", t.TempDir()}, &out, false)
+	if err == nil || exitOf(err) != exitUsage || !strings.Contains(err.Error(), "seed-from") {
+		t.Fatalf("seed-from: %v (exit %d)", err, exitOf(err))
 	}
 }

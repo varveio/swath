@@ -20,6 +20,7 @@ const (
 	GCSGenerationsV1 SchemaID = "swath/gcs-generations/v1" // Cloud Storage generations (--all-versions)
 	AzureObjectsV1   SchemaID = "swath/azure-objects/v1"   // Azure Blob current blobs
 	AzureVersionsV1  SchemaID = "swath/azure-versions/v1"  // Azure Blob versions, snapshots and soft-deleted blobs (--all-versions)
+	VercelObjectsV1  SchemaID = "swath/vercel-objects/v1"  // Vercel Blob current objects
 	LocalV1          SchemaID = "swath/local-entries/v1"   // a filesystem tree
 )
 
@@ -185,6 +186,11 @@ var (
 )
 
 var schemas = map[SchemaID]SchemaSpec{
+	VercelObjectsV1: {ID: VercelObjectsV1, Key: textKey, UniqueKeys: true, Columns: []ColumnSpec{
+		{Name: "size", Type: TypeInt64, Required: true},
+		{Name: "uploaded_at", Type: TypeTimestampMicros, Required: true},
+		{Name: "etag", Type: TypeString},
+	}},
 	S3ObjectsV1: {ID: S3ObjectsV1, Key: textKey, UniqueKeys: true, MaxKeyBytes: maxObjectKeyBytes, Columns: s3Columns},
 	// The s3-objects/v1 columns, size null on delete markers, then the
 	// version's identity.

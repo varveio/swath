@@ -184,6 +184,7 @@ key's encoding and uniqueness, and the meaning of a row.
 | `swath/gcs-generations/v1` | a Cloud Storage generation, live or noncurrent (`--all-versions`) | UTF-8 | no: one row per generation | 1,024 bytes |
 | `swath/azure-objects/v1` | an Azure Blob current blob or hierarchical-namespace directory | UTF-8 | yes | 3,072 bytes (1,024 UTF-16 units) |
 | `swath/azure-versions/v1` | an Azure Blob version, snapshot, soft-deleted blob or current blob (`--all-versions`) | UTF-8 | no: one row per entry | 3,072 bytes |
+| `swath/vercel-objects/v1` | a current Vercel Blob object | UTF-8 | yes | no schema bound |
 | `swath/local-entries/v1` | a filesystem entry below the root, directories included | arbitrary bytes (unannotated `BYTE_ARRAY`) | yes | none |
 
 Every column after the key is nullable unless marked required. Types: `STRING` is `BYTE_ARRAY (STRING)`, UTF-8;
@@ -193,6 +194,8 @@ TIMESTAMP(MICROS, UTC)`; `bool` is `BOOLEAN`. Every part has every column of its
 name in every schema that has it: `last_modified`, `created_at`, `deleted_at`, `accessed_at`,
 `metadata_changed_at` and `storage_class_changed_at` for times, `storage_class` for the storage class (Azure's
 access tier) and `md5` for the base64 MD5 a store lists.
+
+**`swath/vercel-objects/v1`**: `key`, `size` int64 (required), `uploaded_at` timestamp (required), and `etag` STRING (null if absent or empty). Upload time is not a modification time; the ETag is opaque, not a promised content checksum. Virtual folders are not rows; real slash-suffixed blobs are.
 
 **`swath/s3-objects/v1`**: `key`, `size` int64, `last_modified` timestamp, `etag` STRING (one pair of surrounding
 quotes removed), `storage_class` STRING, `owner_id` and `owner_display_name` STRING (null unless the run used

@@ -60,6 +60,9 @@ var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total 
 // order of every key it counts.
 func (inv *Inventory) fold(ctx context.Context, spans []seekparquet.RowSpan, sel selection, split listing.Split) ([]tallies, error) {
 	f := objectFold(split)
+	if inv.rows.sizeOnly {
+		f = sizeOnlyFold(split)
+	}
 	if inv.rows.local {
 		f = localFold(sel, split)
 	}
@@ -130,6 +133,25 @@ func objectFold(split listing.Split) seekparquet.Fold[tallies] {
 		},
 		Merge: merge,
 	}
+}
+
+// sizeOnlyFold counts objects whose schema supplies neither modification
+// times nor storage classes. Splitting by class puts every row in the null group.
+func sizeOnlyFold(split listing.Split) seekparquet.Fold[tallies] {
+	return seekparquet.Fold[tallies]{Columns: []string{"size"},
+		Add: func(acc *tallies, b *seekparquet.ValueBatch) error {
+			size := b.Column(0)
+			if err := sizes(size, "size"); err != nil {
+				return err
+			}
+			for i := range b.Len() {
+				if size.IsNull(i) {
+					return &reader.SemanticError{Kind: reader.KindRow, Column: "size", Err: errors.New("null in a required column")}
+				}
+				acc.add(item{size: int64Of(size, i)}, split.SizeBounds)
+			}
+			return nil
+		}, Merge: merge}
 }
 
 // localFold counts a local inventory's rows of the selection's kinds,

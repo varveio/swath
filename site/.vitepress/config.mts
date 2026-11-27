@@ -331,6 +331,7 @@ export default defineConfig({
             { text: 'Amazon S3 and S3-compatible', link: '/docs/sources/s3' },
             { text: 'Google Cloud Storage', link: '/docs/sources/gcs' },
             { text: 'Azure Blob Storage', link: '/docs/sources/azure' },
+            { text: 'Vercel Blob', link: '/docs/sources/vercel' },
           ],
         },
         {

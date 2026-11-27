@@ -155,3 +155,27 @@ func TestDecodeAzureVersion(t *testing.T) {
 		t.Fatalf("null is_latest: %v", err)
 	}
 }
+
+func TestDecodeVercelObject(t *testing.T) {
+	values := map[string]seekparquet.Value{"size": seekparquet.Int64Value(42), "uploaded_at": seekparquet.Int64Value(1234567), "etag": seekparquet.ByteArrayValue([]byte("opaque"))}
+	v, err := DecodeVercelObject(row(t, VercelObjectsV1, "a/", 0, values))
+	if err != nil || string(v.Key) != "a/" || v.Size != 42 || v.UploadedAt.UnixMicro() != 1234567 || v.ETag == nil || *v.ETag != "opaque" {
+		t.Fatalf("decoded %+v, %v", v, err)
+	}
+	for _, name := range []string{"size", "uploaded_at"} {
+		saved := values[name]
+		values[name] = seekparquet.NullValue()
+		if _, err := DecodeVercelObject(row(t, VercelObjectsV1, "a/", 0, values)); !errors.Is(err, ErrRow) {
+			t.Fatalf("null %s: %v", name, err)
+		}
+		values[name] = seekparquet.ByteArrayValue([]byte("wrong"))
+		if _, err := DecodeVercelObject(row(t, VercelObjectsV1, "a/", 0, values)); !errors.Is(err, ErrSchema) {
+			t.Fatalf("wrong type %s: %v", name, err)
+		}
+		values[name] = saved
+	}
+	values["etag"] = seekparquet.NullValue()
+	if v, err := DecodeVercelObject(row(t, VercelObjectsV1, "a/", 0, values)); err != nil || v.ETag != nil {
+		t.Fatalf("null etag: %+v %v", v, err)
+	}
+}

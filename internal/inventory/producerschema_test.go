@@ -14,6 +14,7 @@ import (
 	"github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/internal/source/vercel"
 )
 
 // typeNames spell each column type with the Parquet types the writer
@@ -49,7 +50,7 @@ func describeSchema[P any](s *schema.Schema[P]) string {
 	return b.String()
 }
 
-// TestProducerSchemasGolden: the five producer schemas are testdata's
+// TestProducerSchemasGolden: the producer schemas are testdata's
 // goldens, recorded from the producers before their specs moved to the
 // reader module; a change to what swath writes shows in review as a diff
 // of those files. Run with UPDATE=1 to rewrite them.
@@ -60,6 +61,7 @@ func TestProducerSchemasGolden(t *testing.T) {
 		"gcs-objects":     describeSchema(&gcs.Schema),
 		"gcs-generations": describeSchema(&gcs.GenerationSchema),
 		"local":           describeSchema(&localfs.Schema),
+		"vercel-objects":  describeSchema(&vercel.Schema),
 	} {
 		golden := filepath.Join("testdata", "producer-schema-"+name+".golden")
 		if os.Getenv("UPDATE") != "" {

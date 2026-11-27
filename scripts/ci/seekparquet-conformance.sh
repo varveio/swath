@@ -5,7 +5,7 @@
 #      (the reader the replay server serves datasets through, and the validator): every target it
 #      claims (the reader and the four validator levels) must qualify;
 #   2. datasets this build's writer produces (internal/inventory TestSeekParquetFixtures: S3 current
-#      objects, S3 versions with repeated keys, filesystem keys over 1,024 bytes) validated by the
+#      objects, S3 versions with repeated keys, Vercel objects, filesystem keys over 1,024 bytes) validated by the
 #      suite's reference adapter and by the Go adapter at the full and digest levels, and read by the
 #      Go adapter exactly as the reference reads them (seekparquet_conformance.py).
 #
@@ -44,4 +44,4 @@ SWATH_SEEKPARQUET_FIXTURES="$work/datasets" go test -count=1 -run '^TestSeekParq
 "$work/venv/bin/python" -I "$(dirname "$0")/seekparquet_conformance.py" \
   --adapter "$work/seekparquet-adapter" \
   --reference "$work/venv/bin/python -I $checkout/conformance/harness/reference_adapter.py" \
-  "$work/datasets/s3-current" "$work/datasets/s3-versions" "$work/datasets/local-long-keys"
+  "$work/datasets/s3-current" "$work/datasets/s3-versions" "$work/datasets/local-long-keys" "$work/datasets/vercel-objects"

@@ -9,11 +9,12 @@ working command, authentication and permissions, its own options, writing a data
 | [Amazon S3 and S3-compatible stores](s3.md) | `s3://BUCKET[/PREFIX]` | current objects of a general-purpose bucket | versions and delete markers | yes | `-o s3://BUCKET/PREFIX` |
 | [Google Cloud Storage](gcs.md) | `gs://BUCKET[/PREFIX]` | current objects | live and noncurrent generations | yes | `-o gs://BUCKET/PREFIX` |
 | [Azure Blob Storage](azure.md) | `az://ACCOUNT/CONTAINER[/PREFIX]` | current blobs; directories on hierarchical namespaces | versions, snapshots and soft-deleted blobs on flat namespaces | flat namespaces | `-o az://ACCOUNT/CONTAINER/PREFIX` |
+| [Vercel Blob](vercel.md) | `vercel://store_ID[/prefix]` | current blobs | no | no | not supported |
 
 A dataset of any source can be written to a local directory (`-o DIR`) or to any of the three object stores
 (`-o` a bucket prefix with `--work-dir DIR`).
 
-swath reads listings only: it needs permission to list, never to read or write objects. Each object-store
+swath reads listings only: it never reads or writes object contents. Vercel Blob requires a read-write token even for listing; other providers can use listing permissions alone. Each object-store
 listing sends requests the provider may charge for; the run report estimates their cost on AWS S3 and GCS
 ([Cost](../size-a-run.md#cost)).
 
@@ -35,6 +36,8 @@ resume is tested against fakes and replays. Credential renewal during a run has 
 service. Each source's other limits are under "Limits and known differences" on its page. Before relying on a
 store other than AWS, compare one prefix's object count with an independent listing
 ([S3-compatible stores](s3.md#s3-compatible-stores)).
+
+Vercel Blob requires store-token authentication and refuses endpoint overrides; see [its source page](vercel.md).
 
 ## Credentials on every object store
 
@@ -75,7 +78,7 @@ may give either again; `--verify-ssl` undoes a recorded `--no-verify-ssl`.
 
 ## Object-store requests
 
-S3, GCS and Azure Blob share the request options:
+S3, GCS, Azure Blob and Vercel Blob share the request options:
 
 | Option | Default | Effect |
 |---|---|---|

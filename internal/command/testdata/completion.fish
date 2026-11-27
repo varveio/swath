@@ -152,13 +152,13 @@ complete -c swath -n '__swath_cmd "resume"' -l adaptive-limit -d 'undo a recorde
 complete -c swath -n '__swath_cmd "resume"' -l no-adaptive-limit-slow-start -d 'undo a recorded --adaptive-limit-slow-start'
 complete -c swath -n '__swath_cmd "show"' -l journal -d 'dump the journal\'s header and records as JSON lines'
 
-complete -c swath -n '__swath_cmd "list"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "list"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "list"' -F
-complete -c swath -n '__swath_cmd "du"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "du"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "du"' -F
-complete -c swath -n '__swath_cmd "diag list"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "diag list"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "diag list"' -F
-complete -c swath -n '__swath_cmd "diag count"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "diag count"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "diag count"' -F
 complete -c swath -n '__swath_cmd "resume"' -a '(__fish_complete_directories)'
 complete -c swath -n '__swath_cmd "show"' -a '(__fish_complete_directories)'

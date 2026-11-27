@@ -46,7 +46,7 @@ var StoreGroup = &registry.FlagGroup{
 			Long: "For a test endpoint only. A resume replays it, and warns again."})
 		Define(fs, Flag{Name: listingFlag, Metavar: "auto|range|tree", Default: string(source.ListingAuto),
 			Usage: "list by key ranges (range) or folder by folder (tree)",
-			Long:  "auto: key ranges, except on Cloudflare R2 (S3), which does not list keys in byte order: folder by folder there. tree is S3's only: each folder listed by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.",
+			Long:  "auto: key ranges, except on Cloudflare R2 (S3), which does not list keys in byte order: folder by folder there. Vercel Blob always walks folders and refuses range. tree is available for S3 and Vercel Blob: each folder listed by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.",
 			Value: Func(func(v string) error {
 				l, err := source.ParseListing(v)
 				s.Listing = l

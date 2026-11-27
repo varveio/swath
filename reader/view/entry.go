@@ -18,12 +18,14 @@ import (
 // rowShape is how the rows of one schema become Entries: the columns the
 // view projects, and whether they are a local tree's.
 type rowShape struct {
-	local   bool
-	columns []string
+	local    bool
+	sizeOnly bool
+	columns  []string
 }
 
-// The projections. Every object schema has size, last_modified and
-// storage_class; a local tree's entries are its own rows.
+// The projections. Most object schemas have size, last_modified and
+// storage_class; Vercel supplies size only to the common view. A local
+// tree's entries are its own rows.
 var (
 	objectColumns = []string{"size", "last_modified", "storage_class"}
 	localColumns  = []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes", "link_target"}
@@ -46,6 +48,9 @@ const (
 )
 
 func shapeOf(id reader.SchemaID) rowShape {
+	if id == reader.VercelObjectsV1 {
+		return rowShape{sizeOnly: true, columns: []string{"size"}}
+	}
 	if id == reader.LocalV1 {
 		return rowShape{local: true, columns: localColumns}
 	}
@@ -109,6 +114,9 @@ func (d *decoder) entry(r row) (listing.Entry, error) {
 	if e.Size, err = d.size(r, slotSize); err != nil {
 		return listing.Entry{}, err
 	}
+	if d.rows.sizeOnly {
+		return e, nil
+	}
 	if e.LastModified, err = d.time(r, slotModified); err != nil {
 		return listing.Entry{}, err
 	}
@@ -165,7 +173,7 @@ func (d *decoder) fault(r row, kind reader.Kind, slot int, reason string) error 
 
 // size reads a byte count, which is never negative.
 func (d *decoder) size(r row, slot int) (*int64, error) {
-	v, ok, err := d.value(r, slot, seekparquet.KindInt64, false)
+	v, ok, err := d.value(r, slot, seekparquet.KindInt64, d.rows.sizeOnly)
 	if !ok {
 		return nil, err
 	}

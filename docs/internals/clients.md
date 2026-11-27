@@ -1,6 +1,6 @@
 # The list clients
 
-Each object-store provider lists through one client, built on the vendor's SDK service client:
+S3, GCS and Azure Blob each list through a client built on the vendor's SDK service client:
 `internal/source/s3/client` over `service/s3` (ListObjectsV2 and ListObjectVersions; HeadObject and HeadBucket for
 the library's lookups, [library.md](../library.md)),
 `internal/source/gcs/client` over Google's generated `google.golang.org/api/storage/v1` (`objects.list`), and
@@ -398,3 +398,16 @@ the file is replaced with the new rendering by hand.
 CPU per object, allocations, binary sizes and whole-process comparisons are recorded in
 [measurements.md](measurements.md#client-cpu-per-object-and-binary-size) and its
 [2026-11-09 section](measurements.md#sdk-backed-clients-2026-11-09).
+
+## Vercel Blob requests
+
+`internal/source/vercel/client` is a native Go listing client: the official Blob SDKs
+are TypeScript and Python. It sends folded list GETs to the fixed Vercel endpoint,
+with API version 13 and store-token authentication, through the shared HTTP guard,
+retry and activity plumbing. The provider checks the token's store identity against
+the requested root before listing. No endpoint override, anonymous listing or OIDC
+is exposed. The [source page](../sources/vercel.md) owns the user contract.
+
+The client validates the JSON envelope and each pathname, size, timestamp and cursor;
+malformed successful responses cannot become empty inventories. The generic delimited
+reader validates folder structure and cursor progress and sorts complete folders.

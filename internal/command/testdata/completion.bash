@@ -132,7 +132,7 @@ _swath() {
     diag) COMPREPLY=($(compgen -W 'list count' -- "$cur"));;
     completion) COMPREPLY=($(compgen -W 'bash zsh fish' -- "$cur"));;
     'list'|'du'|'diag list'|'diag count')
-        COMPREPLY=($(compgen -W 'az:// gs:// s3://' -- "$cur") $(compgen -f -- "$cur"))
+        COMPREPLY=($(compgen -W 'az:// gs:// s3:// vercel://' -- "$cur") $(compgen -f -- "$cur"))
         compopt -o filenames 2>/dev/null
         [[ ${#COMPREPLY[@]} -eq 1 && ${COMPREPLY[0]} == *:// ]] && compopt -o nospace 2>/dev/null;;
     'resume'|'show') COMPREPLY=($(compgen -d -- "$cur")); compopt -o filenames 2>/dev/null;;
