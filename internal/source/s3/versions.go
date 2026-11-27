@@ -265,6 +265,16 @@ func (p *provider[P]) fetchVersions(ctx context.Context, api VersionsAPI, q *key
 	if out.IsTruncated && out.NextKeyMarker == in.KeyMarker && out.NextVersionIDMarker == in.VersionIDMarker {
 		return nil, fmt.Errorf("%w: truncated versions page did not advance continuation markers", objhttp.ErrInvalidPage)
 	}
+	if p.b2 {
+		reordered, cleared, err := b2Versions(in, out)
+		if err != nil {
+			return nil, err
+		}
+		if reordered {
+			p.Set().Inc(p.ID(cB2Reordered))
+		}
+		p.Set().Add(p.ID(cB2LatestCleared), int64(cleared))
+	}
 	return versionsPage(out, p.opt.FetchOwner && !q.Probe)
 }
 

@@ -438,6 +438,8 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `rate.wait_ns` | count | ns | request_rate | time those attempts waited, summed |
 | `credentials.refreshes` | count | refreshes |  | signing credentials fetched after the first: ahead of their expiry (by the smaller of 5 minutes and a quarter of their lifetime), or renewed; 0 for credentials that do not expire, --anonymous, a bearer token or a supplied client |
 | `credentials.expired_refreshes` | count | refreshes |  | renewals fetched after an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to credentials that can expire, its request retried once: one per generation of credentials, however many requests it refused |
+| `b2.versions_reordered` | count | pages |  | Backblaze B2 ListObjectVersions pages whose delete markers came before their versions, put in S3's order (key, then newest first) |
+| `b2.latest_cleared` | count | entries |  | Backblaze B2 entries marked IsLatest on a version-id-marker continuation, of the marker's key, where none can be the latest; cleared |
 <!-- s3:end -->
 
 Every object-store attempt is normalized once into an error carrying transient, throttle and timeout

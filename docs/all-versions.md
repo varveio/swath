@@ -22,7 +22,8 @@ same `last_modified` (to the second), so that time does not rebuild S3's order: 
 In an unfiltered, complete listing, the first row of an S3 key's group is the one with `is_latest`, and a
 delete marker there means the object is deleted. swath checks this: a store that marks a later entry of a key latest
 stops the run (`cause` `protocol`), rather than writing a second `is_latest` row or a key's entries out of order.
-Backblaze B2 does both ([S3-compatible stores](internals/providers/s3.md#s3-compatible-stores)). On GCS, the last row of a name's group is the newest
+Backblaze B2 does both, and swath repairs its pages on a B2 endpoint
+([S3-compatible stores](internals/providers/s3.md#s3-compatible-stores)). On GCS, the last row of a name's group is the newest
 generation; it is live (`is_latest`) only if `deleted_at` is null, and a GCS name may have no live generation. On Azure Blob
 a name's `is_latest` row, when it has one, is its last; a versioned blob that was deleted has only previous
 versions, and a soft-deleted one only `is_deleted` rows. A filter can

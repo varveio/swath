@@ -124,6 +124,7 @@ type provider[P any] struct {
 	creds            string
 	region           string // the resolved signing region ("" with a supplied Client)
 	route            string // a supplied Routed client's Route ("" otherwise)
+	b2               bool   // a versions listing of Backblaze B2 (b2.go)
 }
 
 // Range is the engine's unit of listing work.
@@ -180,6 +181,7 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	if !ok {
 		return nil, fmt.Errorf("s3: the client (%T) cannot list versions", p.client)
 	}
+	p.b2 = b2Endpoint(opt.Endpoint)
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Version]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
@@ -194,7 +196,7 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 		// older time.
 		GroupHead: func(v *Version) bool { return v.IsLatest },
 		Size:      func(v *Version) int64 { return v.Size },
-		Counters:  clientCounters,
+		Counters:  versionsCounters,
 	}, func(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Version], error) {
 		return p.fetchVersions(ctx, api, q)
 	})

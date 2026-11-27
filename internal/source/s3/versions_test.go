@@ -575,8 +575,14 @@ func listVersions(t *testing.T, f *pagedVersions) ([]VersionRow, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return runVersions(t, p)
+}
+
+// runVersions runs p to a collector.
+func runVersions(t *testing.T, p *VersionsProvider) ([]VersionRow, error) {
+	t.Helper()
 	sink := &versionCollector{}
-	_, err = order.Run(context.Background(), p, sink, &VersionsSchema, order.Options{Workers: 1, Budget: 1 << 20, Groups: true})
+	_, err := order.Run(context.Background(), p, sink, &VersionsSchema, order.Options{Workers: 1, Budget: 1 << 20, Groups: true})
 	return sink.rows, err
 }
 

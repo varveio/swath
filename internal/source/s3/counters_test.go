@@ -5,6 +5,7 @@ package s3
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,8 +15,9 @@ import (
 	"github.com/varveio/swath/internal/source/s3/client"
 )
 
-// Counters is the S3 tally in report order, assembled for documentation and ID checks.
-var Counters = append(append([]counters.Def(nil), keyrange.Counters...), clientCounters...)
+// Counters is the S3 tally in report order, assembled for documentation and ID checks:
+// a versions listing's, whose definitions extend a current listing's.
+var Counters = append(append([]counters.Def(nil), keyrange.Counters...), versionsCounters...)
 
 // TestDocsCounters keeps the S3 table in docs/internals/counters.md generated
 // from Counters: run with UPDATE=1 to rewrite it.
@@ -48,6 +50,9 @@ func TestDocsCounters(t *testing.T) {
 func TestCountersMatchIDs(t *testing.T) {
 	if len(clientCounters) != cCredentialExpired+1 {
 		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cCredentialExpired+1)
+	}
+	if len(versionsCounters) != cB2LatestCleared+1 || !slices.Equal(versionsCounters[:len(clientCounters)], clientCounters) {
+		t.Fatalf("%d versions definitions for %d IDs, or not the client's first", len(versionsCounters), cB2LatestCleared+1)
 	}
 	seen := map[string]bool{}
 	for _, d := range Counters {
