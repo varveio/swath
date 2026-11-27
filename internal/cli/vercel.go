@@ -113,7 +113,7 @@ type vercelSource struct {
 
 func (o *vercelSource) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
 	if env.Router != nil && o.warn != nil {
-		o.warn(source.WarnTreeListing, treeDatasetNotice)
+		o.warn(source.WarnTreeListing, "Vercel Blob lists folder by folder and keeps no journal: if this dataset run is interrupted, swath resume cannot continue it; run the command again")
 	}
 	return o.Bound.Run(ctx, env)
 }

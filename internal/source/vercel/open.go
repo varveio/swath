@@ -66,7 +66,9 @@ func WithPrefix(root, prefix string) string {
 // Options configures the folded listing and its HTTP client. A zero page
 // size uses the service's maximum. HTTPClient supplies the transport for tests.
 type Options struct {
-	Token      string
+	Token string
+	// Workers configures the client pool and optional limiter. The caller
+	// configures the ordered listing stage separately; zero uses DefaultWorkers.
 	Workers    int
 	PageSize   int
 	Timeout    time.Duration

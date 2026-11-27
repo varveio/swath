@@ -129,6 +129,8 @@ are exact in raw bytes, or the run stops.
 A provider whose service matches and folds prefixes without normalization sets
 `ExactPrefixes`. Vercel uses this contract: partial scopes apply the same raw-byte
 filter without the normalized-sibling refusal, counted by `tree.scope_exact_prefixes`.
+`tree.scope_exact_aliases` counts skipped folders whose normalized spelling could
+overlap the scope, showing when that provider contract decided the result.
 Raw-prefix, direct-child, duplicate and cursor validation still apply to every page.
 The default remains conservative for stores such as R2 whose folding can merge spellings.
 

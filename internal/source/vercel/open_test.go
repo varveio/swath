@@ -146,6 +146,13 @@ func TestFoldedWalk(t *testing.T) {
 					if got := counts.Value("tree.scope_exact_prefixes"); got != exactScopes {
 						t.Fatalf("exact-prefix scopes = %d, want %d", got, exactScopes)
 					}
+					var exactAliases int64
+					if scope == "e" {
+						exactAliases = 1
+					}
+					if got := counts.Value("tree.scope_exact_aliases"); got != exactAliases {
+						t.Fatalf("skipped aliases = %d, want %d", got, exactAliases)
+					}
 					if o.Listed() != int64(len(expected)) || !report.Coverage.Complete || report.Coverage.Prefix != scope ||
 						counts.Value("tree.pages") < 1 || counts.Value("attempts") != o.Requests().Attempts || o.folders.Staged() != 0 {
 						t.Fatalf("listed %d, coverage %+v, counts %+v", o.Listed(), report.Coverage, counts)

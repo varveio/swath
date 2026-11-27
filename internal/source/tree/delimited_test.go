@@ -438,14 +438,15 @@ func TestDelimitedExactPrefixes(t *testing.T) {
 			stats := d.opt.Counters.Snapshot()
 			exact := stats.Value("tree.scope_exact_prefixes")
 			aliases := stats.Value("tree.violations.scope_alias")
+			skipped := stats.Value("tree.scope_exact_aliases")
 			if tc.exact {
 				if err != nil || !slices.Equal(got, []string{decomposed + "x"}) ||
-					!slices.Equal(l.prefixes, []string{"", decomposed}) || exact != 1 || aliases != 0 {
-					t.Fatalf("keys %q, requests %q, exact %d, aliases %d, err %v", got, l.prefixes, exact, aliases, err)
+					!slices.Equal(l.prefixes, []string{"", decomposed}) || exact != 1 || aliases != 0 || skipped != 1 {
+					t.Fatalf("keys %q, requests %q, exact %d, aliases %d, skipped aliases %d, err %v", got, l.prefixes, exact, aliases, skipped, err)
 				}
 			} else if !errors.Is(err, source.ErrProtocol) || len(got) != 0 ||
-				!slices.Equal(l.prefixes, []string{""}) || exact != 0 || aliases != 1 {
-				t.Fatalf("keys %q, requests %q, exact %d, aliases %d, err %v", got, l.prefixes, exact, aliases, err)
+				!slices.Equal(l.prefixes, []string{""}) || exact != 0 || aliases != 1 || skipped != 0 {
+				t.Fatalf("keys %q, requests %q, exact %d, aliases %d, skipped aliases %d, err %v", got, l.prefixes, exact, aliases, skipped, err)
 			}
 		})
 	}

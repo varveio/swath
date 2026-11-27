@@ -112,6 +112,7 @@ var DelimitedCounters = []counters.Def{
 	{Key: "tree.violations.scope_alias", Kind: counters.Count, Unit: "folders", Help: "a child folder of the start folder outside a source prefix not ending in '/' whose name, decomposed (NFD), begins with the prefix's remainder up to its last starter: it could hold keys of the prefix under another spelling, and the run stops before listing it, protocol"},
 	{Key: "tree.violations.token", Kind: counters.Count, Unit: "pages", Help: "a truncated page without a continuation token, or with one the folder already returned: the run stops, protocol"},
 	{Key: "tree.scope_exact_prefixes", Kind: counters.Count, Unit: "scopes", Help: "partial scopes filtered by raw bytes on a service that matches and folds prefixes without normalizing names"},
+	{Key: "tree.scope_exact_aliases", Kind: counters.Count, Unit: "folders", Help: "out-of-scope folders skipped on a byte-exact service whose normalized names could overlap the partial prefix"},
 }
 
 const (
@@ -141,6 +142,7 @@ const (
 	cViolationScopeAlias
 	cViolationToken
 	cScopeExactPrefixes
+	cScopeExactAliases
 	numDelimitedCounters
 )
 
@@ -443,11 +445,9 @@ func (d *Delimited[P]) grow(prefix string, held *int64, n int64) error {
 // decomposition holds '/', and '/' composes and reorders with nothing).
 func (d *Delimited[P]) scope(prefix string, entries []entry[P]) ([]entry[P], error) {
 	sel := d.opt.Select
-	var r0 string
+	r0 := stem(sel[len(prefix):])
 	if d.opt.ExactPrefixes {
 		d.inc(cScopeExactPrefixes)
-	} else {
-		r0 = stem(sel[len(prefix):])
 	}
 	kept := entries[:0]
 	for _, e := range entries {
@@ -456,7 +456,11 @@ func (d *Delimited[P]) scope(prefix string, entries []entry[P]) ([]entry[P], err
 			continue
 		}
 		d.inc(cOutOfScope)
-		if !d.opt.ExactPrefixes && e.folder && strings.HasPrefix(norm.NFD.String(e.row.Key[len(prefix):]), r0) {
+		if e.folder && strings.HasPrefix(norm.NFD.String(e.row.Key[len(prefix):]), r0) {
+			if d.opt.ExactPrefixes {
+				d.inc(cScopeExactAliases)
+				continue
+			}
 			return nil, d.violation(cViolationScopeAlias, "folder %+q, outside the scope %+q, could hold keys of the scope under another spelling (a store that matches names in Unicode NFC merges them): list a prefix that ends in '/'",
 				e.row.Key, sel)
 		}

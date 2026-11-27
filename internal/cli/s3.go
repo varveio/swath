@@ -180,7 +180,7 @@ func openS3(ctx context.Context, req registry.Request) (registry.Source, error) 
 }
 
 // treeDatasetNotice: a dataset run of the folder walk keeps no journal.
-const treeDatasetNotice = "a folder-by-folder listing keeps no journal: if this dataset run is interrupted, swath resume cannot continue it; run the command again"
+const treeDatasetNotice = "a folder-by-folder listing (--s3-listing tree) keeps no journal: if this dataset run is interrupted, swath resume cannot continue it; run the command again"
 
 // s3TreeSource is the folder walk as a run takes it; a dataset run is told
 // that it cannot be resumed.
