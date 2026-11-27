@@ -24,6 +24,46 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## Azure HNS live verification (2026-11-27)
+
+PR [#702](https://github.com/varveio/swath/pull/702), production source `67cc5a2c`, was checked against
+`az://overturemapswestus2/release/2026-10-21.0/` anonymously from Linux arm64 with Go 1.27.4.
+The binary was built with `./build.sh` immediately before committing the review fixes, so its report
+identifies `0f8f371f-dirty`; its production source is identical to `67cc5a2c`.
+These are correctness checks, not performance comparisons.
+
+The independent oracle used the Data Lake endpoint, not swath's Blob listing path:
+`GET https://overturemapswestus2.dfs.core.windows.net/release` with `resource=filesystem`,
+`directory=2026-10-21.0`, `recursive=true`, `maxResults=5000` and `x-ms-version: 2023-11-03`.
+It followed `x-ms-continuation`, appended `/` to directory names, and sorted the resulting keys by
+UTF-8 bytes. One request returned 1,041 keys. Every comparison below checked the complete ordered
+key sequence, including directory rows, rather than just counts.
+
+| Run | Keys | Result | Listing requests | Accepted splits |
+|---|---:|---|---:|---:|
+| Normal listing | 1,041 | Exact oracle match | 24 | 0 |
+| Diagnostic listing, page size 20 | 1,041 | Exact oracle match | 113 | 18 |
+| Include `^theme=addresses/` | 66 | Exact filtered-oracle match | 3 | 0 |
+
+The small-page run split eight directories. All runs selected tree mode from filesystem properties
+and completed successfully. Listing requests exclude namespace admission; total HTTP attempts were
+26, 115 and 5, respectively.
+
+Commands used the same root and common flags `--anonymous --workers 8 --format jsonl --columns key
+--no-stats --max-duration 90s --report REPORT.json`:
+
+```sh
+swath list az://overturemapswestus2/release/2026-10-21.0/ [common flags]
+swath diag list az://overturemapswestus2/release/2026-10-21.0/ [common flags] --page-size 20
+swath list az://overturemapswestus2/release/2026-10-21.0/ [common flags] --include-regex '^theme=addresses/'
+```
+
+The include run retained the matching directory row as well as its descendants. This check validates
+live anonymous traversal, paging, splitting and include pruning for this scope. It does not validate
+SAS admission, metadata columns, Parquet publication, or empty admission pages against the live service;
+the latter has deterministic regression coverage. The November 11 predecessor's Overture and Bing
+checks were different binaries and are not counted as validation of this rebuild.
+
 ## Localfs tree extraction (2026-11-27)
 
 Base `f579bd64` versus PR [#702](https://github.com/varveio/swath/pull/702) production code
