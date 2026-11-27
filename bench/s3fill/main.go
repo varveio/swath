@@ -40,6 +40,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -96,7 +97,13 @@ func (f fill) run(ctx context.Context, out io.Writer) error {
 	mb, mk := f.marker(sum)
 	if f.create {
 		for _, b := range []string{f.bucket, mb} {
-			if _, err := c.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(b)}); err != nil && !owned(err) {
+			in := &s3.CreateBucketInput{Bucket: aws.String(b)}
+			// AWS refuses a CreateBucket outside us-east-1 without its region
+			// as the location constraint.
+			if f.region != "us-east-1" {
+				in.CreateBucketConfiguration = &types.CreateBucketConfiguration{LocationConstraint: types.BucketLocationConstraint(f.region)}
+			}
+			if _, err := c.CreateBucket(ctx, in); err != nil && !owned(err) {
 				return fmt.Errorf("create %s: %w", b, err)
 			}
 		}

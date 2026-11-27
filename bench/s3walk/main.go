@@ -119,6 +119,7 @@ func (w walker) walk(ctx context.Context, out io.Writer) (stats, error) {
 		in.StartAfter = aws.String(w.startAfter)
 	}
 	var st stats
+	seen := map[string]bool{} // the continuation tokens followed
 	for {
 		t := time.Now()
 		p, err := w.c.ListObjectsV2(ctx, in)
@@ -151,9 +152,10 @@ func (w walker) walk(ctx context.Context, out io.Writer) (stats, error) {
 		if next == "" {
 			return st, errors.New("a truncated page without a continuation token")
 		}
-		if next == aws.ToString(in.ContinuationToken) {
-			return st, fmt.Errorf("page %d repeats the continuation token it was asked with", st.pages)
+		if seen[next] {
+			return st, fmt.Errorf("page %d returns a continuation token already followed", st.pages)
 		}
+		seen[next] = true
 		st.sizes = append(st.sizes, len(p.Contents))
 		in.ContinuationToken = p.NextContinuationToken
 	}

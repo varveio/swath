@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ type recorder struct {
 	mu       sync.Mutex
 	reqs     []string
 	regions  map[string]bool
+	creates  []string // the body of each CreateBucket
 }
 
 func (r *recorder) ServeHTTP(w http.ResponseWriter, q *http.Request) {
@@ -39,6 +41,11 @@ func (r *recorder) ServeHTTP(w http.ResponseWriter, q *http.Request) {
 		if f := strings.Split(strings.SplitN(strings.SplitN(a, "Credential=", 2)[1], ",", 2)[0], "/"); len(f) > 2 {
 			r.regions[f[2]] = true
 		}
+	}
+	if q.Method == http.MethodPut && strings.Count(strings.Trim(q.URL.Path, "/"), "/") == 0 {
+		b, _ := io.ReadAll(q.Body)
+		r.creates = append(r.creates, string(b))
+		q.Body = io.NopCloser(bytes.NewReader(b))
 	}
 	r.mu.Unlock()
 	if r.noCreate && q.Method == http.MethodPut && strings.Count(strings.Trim(q.URL.Path, "/"), "/") == 0 {
@@ -150,6 +157,32 @@ func TestFillDefault(t *testing.T) {
 	}
 	if !rec.regions["us-east-1"] || len(rec.regions) != 1 {
 		t.Fatalf("requests signed for %v, want us-east-1 only", rec.regions)
+	}
+	for _, c := range rec.creates {
+		if strings.Contains(c, "LocationConstraint") {
+			t.Fatalf("a us-east-1 CreateBucket carries a location constraint: %q", c)
+		}
+	}
+}
+
+// Outside us-east-1 both CreateBuckets name the region as the location
+// constraint, which AWS requires there.
+func TestFillRegionalCreate(t *testing.T) {
+	rec, b, url, keys := setup(t, false)
+	f := fill{endpoint: url, region: "eu-west-1", bucket: "bkt", keys: keys, workers: 4, create: true}
+	if err := f.run(context.Background(), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := objects(t, b, "bkt"); len(got) != 3 {
+		t.Fatalf("bucket holds %q, want the 3 keys", got)
+	}
+	if len(rec.creates) != 2 {
+		t.Fatalf("%d CreateBuckets, want the bucket and the marker bucket", len(rec.creates))
+	}
+	for _, c := range rec.creates {
+		if !strings.Contains(c, "<LocationConstraint>eu-west-1</LocationConstraint>") {
+			t.Fatalf("CreateBucket body %q: want the location constraint eu-west-1", c)
+		}
 	}
 }
 
