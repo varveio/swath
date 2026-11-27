@@ -136,9 +136,11 @@ the same stop. (3) Anything else (a refusal, another code or a missing header
 there too, another failure, no Data Lake host) is unknown. For current blobs, a directory listing can
 establish HNS; otherwise the source refuses unless `--azure-assume-flat` asserts a flat namespace.
 A reported hierarchical namespace always selects tree listing, even beside that assertion. The probe
-requeues transient failures with the admission backoff and preserves cancellation;
-`namespace_probe_requests` counts probe attempts and `namespace_probe_requeues` reports outer retries
-when nonzero. An assertion still permits probing an unknown namespace; an affirmative HNS answer
+follows empty continuing pages until the first entry or the end of the listing, using the bounded token window
+to detect repeated continuation markers. It requeues transient failures at the same marker with the admission
+backoff and preserves cancellation. The report counts probe attempts (`namespace_probe_requests`),
+empty pages whose markers the probe followed (`namespace_probe_empty_pages`), and outer retries
+(`namespace_probe_requeues`) when nonzero. An assertion still permits probing an unknown namespace; an affirmative HNS answer
 always wins. Signed authentication failures on the Blob endpoint retain their class without a Data Lake fallback
 or listing probe. A Data Lake authentication failure after a silent Blob header does not preclude
 probing the Blob endpoint.

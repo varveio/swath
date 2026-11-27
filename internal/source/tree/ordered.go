@@ -6,7 +6,6 @@ package tree
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
@@ -175,7 +174,7 @@ func (o *Ordered[P]) Read(ctx context.Context, r OrderedRange, out *OrderedOut[P
 	k := o.know(r.Prefix)
 	q := &keyrange.Query{Prefix: r.Prefix, Max: o.page}
 	var pg *keyrange.Page[P]
-	wait := requeueFirstWait
+	var wait time.Duration
 	var empty emptyChain
 	for {
 		var err error
@@ -188,14 +187,9 @@ func (o *Ordered[P]) Read(ctx context.Context, r OrderedRange, out *OrderedOut[P
 				return err
 			}
 			o.add(cFirstRequeues, 1)
-			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return context.Cause(ctx)
-			case <-t.C:
+			if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
+				return err
 			}
-			wait = min(2*wait, requeueMaxWait)
 			continue
 		}
 		if !pg.Truncated || len(pg.Rows) > 0 {
@@ -210,7 +204,7 @@ func (o *Ordered[P]) Read(ctx context.Context, r OrderedRange, out *OrderedOut[P
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
 		}
-		q.Token, wait = pg.Token, requeueFirstWait
+		q.Token, wait = pg.Token, 0
 	}
 	if !pg.Truncated {
 		o.forget(r.Prefix)
@@ -376,7 +370,7 @@ func (o *Ordered[P]) list(ctx context.Context, q *keyrange.Query, k *known[P]) (
 	}
 	in := &DirQuery{Dir: dir, After: name, Token: token, Max: q.Max}
 	prev := name
-	wait := requeueFirstWait
+	var wait time.Duration
 	var emptyPages emptyChain
 	for first := true; ; first = false {
 		if !first {
@@ -394,17 +388,12 @@ func (o *Ordered[P]) list(ctx context.Context, q *keyrange.Query, k *known[P]) (
 				return nil, err
 			}
 			o.add(cResolveRequeues, 1)
-			t := time.NewTimer(wait/2 + rand.N(wait/2+1))
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return nil, context.Cause(ctx)
-			case <-t.C:
+			if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
+				return nil, err
 			}
-			wait = min(2*wait, requeueMaxWait)
 			continue
 		}
-		wait = requeueFirstWait
+		wait = 0
 		if len(pg.Entries) > 0 {
 			o.advanced.Add(1)
 			emptyPages = emptyChain{}
@@ -506,13 +495,9 @@ func (o *Ordered[P]) forget(dir string) {
 // default-size directory page of evidence per record and a small number of
 // records, because retained directory payloads sit outside the order
 // budget.
-// requeueFirstWait and requeueMaxWait bound a requeued first page's
-// or inner resolution page's backoff.
 var (
-	maxKnownEntries  = 1024
-	maxKnownRecords  = 8
-	requeueFirstWait = 1 * time.Second
-	requeueMaxWait   = 30 * time.Second
+	maxKnownEntries = 1024
+	maxKnownRecords = 8
 )
 
 // known is what has been read of one directory: the name intervals listed

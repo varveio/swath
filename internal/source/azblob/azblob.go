@@ -195,12 +195,13 @@ type Stats struct {
 	// information", "filesystem properties", "filesystem endpoint blocked"
 	// (the Data Lake host refused the flat account for soft delete or blob
 	// events), "listing" (a hierarchical item) or "asserted" (--azure-assume-flat).
-	Namespace              string            `json:"namespace"`
-	NamespaceProbeRequests int64             `json:"namespace_probe_requests,omitempty"`
-	NamespaceProbeRequeues int64             `json:"namespace_probe_requeues,omitempty"`
-	NoVerifySSL            bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
-	MeanActive             float64           `json:"mean_active"`
-	Counters               counters.Snapshot `json:"counters"`
+	Namespace                string            `json:"namespace"`
+	NamespaceProbeRequests   int64             `json:"namespace_probe_requests,omitempty"`
+	NamespaceProbeEmptyPages int64             `json:"namespace_probe_empty_pages,omitempty"`
+	NamespaceProbeRequeues   int64             `json:"namespace_probe_requeues,omitempty"`
+	NoVerifySSL              bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
+	MeanActive               float64           `json:"mean_active"`
+	Counters                 counters.Snapshot `json:"counters"`
 }
 
 // Provider is the range engine bound to List Blobs: the current blobs,
@@ -224,6 +225,7 @@ type provider[P any] struct {
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
 	namespace        string // how admission determined the namespace (Stats.Namespace)
 	probeRequests    int64
+	probeEmptyPages  int64
 	probeRequeues    int64 // exhausted namespace listing probes requeued during admission
 	schema           *schema.Schema[P]
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
@@ -436,20 +438,38 @@ func (p *provider[P]) admit(ctx context.Context, probeTree bool) (bool, error) {
 func (p *provider[P]) probeNamespace(ctx context.Context) (bool, error) {
 	dir := p.opt.Prefix[:strings.LastIndexByte(p.opt.Prefix, '/')+1]
 	in := &client.ListInput{Container: p.opt.Container, Prefix: dir, Delimiter: "/", MaxResults: 1, Tree: true}
+	var seen *keyrange.TokenWindow
 	var wait time.Duration
 	for {
+		if ctx.Err() != nil {
+			return false, context.Cause(ctx)
+		}
 		p.probeRequests++
 		out, err := p.client.List(ctx, in)
-		switch {
-		case err == nil:
-			return len(out.Items) > 0 && out.Items[0].Hierarchical, nil
-		case !objhttp.Requeue(err):
+		if objhttp.Requeue(err) {
+			p.probeRequeues++
+			if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
+				return false, err
+			}
+			continue
+		}
+		if err != nil {
 			return false, err
 		}
-		p.probeRequeues++
-		if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
-			return false, err
+		if len(out.Items) > 0 {
+			return out.Items[0].Hierarchical, nil
 		}
+		if out.NextMarker == "" {
+			return false, nil
+		}
+		if seen == nil {
+			seen = keyrange.NewTokenWindow(in.Marker)
+		}
+		if !seen.Add(out.NextMarker) {
+			return false, source.Violation(fmt.Errorf("%w: namespace listing probe repeats an empty continuation marker", objhttp.ErrInvalidPage))
+		}
+		p.probeEmptyPages++
+		in.Marker, wait = out.NextMarker, 0
 	}
 }
 
@@ -642,7 +662,7 @@ func (p *provider[P]) stats(eng *keyrange.Engine[P]) Stats {
 		eng.Set().Set(eng.ID(client.CXMLItems), f.XMLItems)
 	}
 	e := eng.Stats()
-	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NamespaceProbeRequests: p.probeRequests, NamespaceProbeRequeues: p.probeRequeues, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
+	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NamespaceProbeRequests: p.probeRequests, NamespaceProbeEmptyPages: p.probeEmptyPages, NamespaceProbeRequeues: p.probeRequeues, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
 		MeanActive: e.MeanActive, Counters: e.Counters}
 	return st
 }

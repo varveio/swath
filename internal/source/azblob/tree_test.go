@@ -11,12 +11,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/azblobtest"
 	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/tree"
 )
@@ -610,6 +612,76 @@ type lookupPages struct {
 
 func (a lookupPages) List(_ context.Context, in *client.ListInput) (*client.ListOutput, error) {
 	return a.list(in)
+}
+
+func TestTreeAdmissionProbeContinuesEmptyPage(t *testing.T) {
+	defer keyrange.SetRequeueBackoff(time.Microsecond, time.Microsecond)()
+	for _, flat := range []bool{false, true} {
+		t.Run(fmt.Sprintf("assume_flat=%t", flat), func(t *testing.T) {
+			var markers []string
+			api := lookupPages{TreeStore: azblobtest.NewTreeStore(nil), list: func(in *client.ListInput) (*client.ListOutput, error) {
+				markers = append(markers, in.Marker)
+				switch in.Marker {
+				case "":
+					return &client.ListOutput{NextMarker: "next"}, nil
+				case "next":
+					if len(markers) == 2 {
+						return nil, treeExhausted()
+					}
+					return &client.ListOutput{Items: []client.Item{{Name: "dir", Dir: true, Hierarchical: true}}}, nil
+				default:
+					return nil, errors.New("unexpected admission marker")
+				}
+			}}
+			opened, err := Open(context.Background(), "az://acct/c", Options{Client: silentInfo{api}, Flat: flat, Workers: 1})
+			if _, ok := opened.(*OpenedTree); err != nil || !ok || !slices.Equal(markers, []string{"", "next", "next"}) {
+				t.Fatalf("admission: opened %T, err %v, markers %q; want HNS proved after following and retrying next", opened, err, markers)
+			}
+			stats := opened.Report().Stats.(*Stats)
+			if stats.Namespace != "listing" || stats.NamespaceProbeRequests != 3 || stats.NamespaceProbeEmptyPages != 1 || stats.NamespaceProbeRequeues != 1 {
+				t.Fatalf("admission: namespace %q, %d requests, %d empty continuations, %d requeues",
+					stats.Namespace, stats.NamespaceProbeRequests, stats.NamespaceProbeEmptyPages, stats.NamespaceProbeRequeues)
+			}
+		})
+	}
+}
+
+func TestTreeAdmissionProbeRejectsMarkerCycle(t *testing.T) {
+	var markers []string
+	api := lookupPages{TreeStore: azblobtest.NewTreeStore(nil), list: func(in *client.ListInput) (*client.ListOutput, error) {
+		markers = append(markers, in.Marker)
+		switch len(markers) {
+		case 1, 3:
+			return &client.ListOutput{NextMarker: "a"}, nil
+		case 2:
+			return &client.ListOutput{NextMarker: "b"}, nil
+		default:
+			return nil, errors.New("unexpected extra admission request")
+		}
+	}}
+	_, err := Open(context.Background(), "az://acct/c", Options{Client: silentInfo{api}, Workers: 1})
+	if !errors.Is(err, objhttp.ErrInvalidPage) || !slices.Equal(markers, []string{"", "a", "b"}) {
+		t.Fatalf("admission: err %v, markers %q, want invalid page at a repeated marker", err, markers)
+	}
+}
+
+func TestTreeAdmissionProbeCancelsBetweenPages(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	cause := errors.New("stop admission")
+	var markers []string
+	api := lookupPages{TreeStore: azblobtest.NewTreeStore(nil), list: func(in *client.ListInput) (*client.ListOutput, error) {
+		markers = append(markers, in.Marker)
+		if len(markers) > 1 {
+			return nil, errors.New("unexpected request after cancellation")
+		}
+		cancel(cause)
+		return &client.ListOutput{NextMarker: "next"}, nil
+	}}
+	_, err := Open(ctx, "az://acct/c", Options{Client: silentInfo{api}, Flat: true, Workers: 1})
+	if !errors.Is(err, cause) || !slices.Equal(markers, []string{""}) {
+		t.Fatalf("admission: err %v, markers %q, want cancellation before the next request", err, markers)
+	}
 }
 
 func TestTreeLookupContinues(t *testing.T) {

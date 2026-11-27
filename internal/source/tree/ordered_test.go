@@ -366,9 +366,7 @@ func TestOrderedCandidatePastFirstPage(t *testing.T) {
 // exhausted is asked again (the provider's Requeue), as the engine asks its
 // own pages, instead of failing the run.
 func TestOrderedFirstPageRequeued(t *testing.T) {
-	old := requeueFirstWait
-	requeueFirstWait = time.Millisecond
-	t.Cleanup(func() { requeueFirstWait = old })
+	defer keyrange.SetRequeueBackoff(time.Millisecond, time.Millisecond)()
 	transient := errors.New("exhausted")
 	h := newHNS(siblingKeys)
 	h.fail = func(n int64) error {
