@@ -266,7 +266,7 @@ func EmitRows[R, P any](e source.Emitter[R, P], rows []schema.Row[P], noDirs boo
 func (o *Out[D, S, P]) Folder(dir D, prefix string) error {
 	seg, ok := strings.CutPrefix(prefix, o.r.Prefix)
 	if !ok || seg == "" || strings.IndexByte(seg, '/') != len(seg)-1 {
-		return source.Violation(fmt.Errorf("tree: folder %q is not one segment and a slash below %q", prefix, o.r.Prefix))
+		return source.Violation(fmt.Errorf("tree: folder %+q is not one segment and a slash below %+q", prefix, o.r.Prefix))
 	}
 	o.st.Folders++
 	return o.e.Child(Range[D, S]{Dir: dir, Prefix: strings.Clone(prefix)})

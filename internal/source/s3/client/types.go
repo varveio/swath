@@ -51,6 +51,10 @@ type Page struct {
 	CommonPrefixes        []string
 	IsTruncated           bool
 	NextContinuationToken string
+	// Retained is the bytes the page's strings hold: one arena, kept at
+	// its encoded size (URL decoding shrinks the strings in place), which
+	// every string of the page keeps alive.
+	Retained int
 }
 
 // VersionsInput is one ListObjectVersions request.

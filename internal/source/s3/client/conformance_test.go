@@ -67,7 +67,7 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !reflect.DeepEqual(a, b) {
+				if !reflect.DeepEqual(unretained(a), b) {
 					t.Fatalf("%+v page %d:\nscanner %+v\n    sdk %+v", in, n, a, b)
 				}
 				if !a.IsTruncated {
@@ -100,6 +100,7 @@ func TestScannerConformsToSDKDecoder(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				want = unretained(want)
 				got, err := stockList(context.Background(), stock(url), &ListInput{Bucket: "b"})
 				if err != nil || !reflect.DeepEqual(got, want) {
 					t.Fatalf("sdk %+v (%v)\nscanner %+v", got, err, want)

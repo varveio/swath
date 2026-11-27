@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/varveio/swath/internal/counters"
@@ -22,14 +23,16 @@ import (
 // service's order), size entries a page. edit, if set, may rewrite a page
 // before it is returned.
 type memLister struct {
-	keys  []string
-	size  int
-	calls int
-	edit  func(prefix string, page int, p *FolderPage[int64])
+	keys     []string
+	size     int
+	calls    int
+	prefixes []string // every request's prefix
+	edit     func(prefix string, page int, p *FolderPage[int64])
 }
 
 func (m *memLister) ListFolder(_ context.Context, prefix, token string) (*FolderPage[int64], error) {
 	m.calls++
+	m.prefixes = append(m.prefixes, prefix)
 	var names []string
 	seen := map[string]bool{}
 	for _, k := range m.keys {
@@ -389,4 +392,204 @@ func TestFolderNotPruned(t *testing.T) {
 	if got := drain(t, source.Provider[FolderRange, int64](w)); !slices.Equal(got, keys) {
 		t.Fatalf("got %q", got)
 	}
+}
+
+// aliasLister answers folders from a fixed table, as a store that groups
+// names in NFC answers them: a folder's listing may hold another
+// spelling's keys.
+type aliasLister struct {
+	folders  map[string]*FolderPage[int64]
+	prefixes []string
+}
+
+func (a *aliasLister) ListFolder(_ context.Context, prefix, _ string) (*FolderPage[int64], error) {
+	a.prefixes = append(a.prefixes, prefix)
+	if p, ok := a.folders[prefix]; ok {
+		c := *p
+		c.Objects = slices.Clone(p.Objects)
+		return &c, nil
+	}
+	return &FolderPage[int64]{}, nil
+}
+
+func objects(keys ...string) []schema.Row[int64] {
+	rows := make([]schema.Row[int64], len(keys))
+	for i, k := range keys {
+		rows[i].Key = k
+	}
+	return rows
+}
+
+// TestDelimitedScopeProbe: a child folder of the start folder outside the
+// scope whose name (or the scope's remainder) is not ASCII may hold a key
+// of the scope under another spelling (R2 merges e\u0301/ and \u00e9/ into
+// one common prefix, spelled as one of them): it is probed, its subtree
+// listed and checked, emitting nothing, so that such a key stops the run
+// (protocol), however deep it is. ASCII folders outside the scope are left
+// out without a request.
+func TestDelimitedScopeProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name, sel string
+		folders   map[string]*FolderPage[int64]
+		probes    int64
+	}{
+		{"alias in the folder", "e", map[string]*FolderPage[int64]{
+			"":        {Folders: []string{"\u00e9/"}},
+			"\u00e9/": {Objects: objects("\u00e9/!", "e\u0301/x")},
+		}, 1},
+		{"alias below the folder", "e", map[string]*FolderPage[int64]{
+			"":          {Folders: []string{"\u00e9/"}},
+			"\u00e9/":   {Folders: []string{"\u00e9/a/"}},
+			"\u00e9/a/": {Objects: objects("\u00e9/a/1", "e\u0301/a/2")},
+		}, 2},
+		{"kelvin", "d/K", map[string]*FolderPage[int64]{
+			"d/":        {Folders: []string{"d/\u212a/"}},
+			"d/\u212a/": {Objects: objects("d/\u212a/a", "d/K/b")},
+		}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &aliasLister{folders: tc.folders}
+			got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: tc.sel})
+			if !errors.Is(err, source.ErrProtocol) || !strings.Contains(err.Error(), "by its raw bytes") {
+				t.Fatalf("err %v, keys %q", err, got)
+			}
+			s := d.opt.Counters.Snapshot()
+			if s.Value("tree.probes") != tc.probes || s.Value("tree.violations.raw_prefix") != 1 || d.Staged() != 0 {
+				t.Fatalf("counters %s, staged %d", mustJSON(s), d.Staged())
+			}
+			if len(got) != 0 {
+				t.Fatalf("a probe emitted %q", got)
+			}
+		})
+	}
+	// Probed folders that hold nothing of the scope emit nothing, and the
+	// walk goes on.
+	l := &aliasLister{folders: map[string]*FolderPage[int64]{
+		"":          {Objects: objects("e1"), Folders: []string{"\u00e9/", "e/"}},
+		"\u00e9/":   {Objects: objects("\u00e9/x"), Folders: []string{"\u00e9/y/"}},
+		"\u00e9/y/": {Objects: objects("\u00e9/y/z")},
+		"e/":        {Objects: objects("e/a")},
+	}}
+	got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "e"})
+	if err != nil || !slices.Equal(got, []string{"e/a", "e1"}) || d.opt.Counters.Snapshot().Value("tree.probes") != 2 {
+		t.Fatalf("%q, %v, %s", got, err, mustJSON(d.opt.Counters.Snapshot()))
+	}
+	// ASCII: no request for a folder outside the scope.
+	m := &memLister{keys: []string{"lo/x", "logs/a", "lz/y", "m/1"}, size: 10}
+	if got, d, _, err := walkDelimited(t, m, DelimitedOptions[int64]{Select: "logs"}); err != nil || !slices.Equal(got, []string{"logs/a"}) ||
+		d.opt.Counters.Snapshot().Value("tree.probes") != 0 || !slices.Equal(m.prefixes, []string{"", "logs/"}) {
+		t.Fatalf("%q, %v, requests %q", got, err, m.prefixes)
+	}
+}
+
+// TestDelimitedDuplicateOutOfScope: an entry listed twice is a violation
+// whether or not the scope keeps it.
+func TestDelimitedDuplicateOutOfScope(t *testing.T) {
+	l := &aliasLister{folders: map[string]*FolderPage[int64]{"": {Objects: objects("a", "b", "b")}}}
+	if got, _, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "a"}); !errors.Is(err, source.ErrProtocol) {
+		t.Fatalf("%q, %v", got, err)
+	}
+}
+
+// TestDelimitedRetained: a page that says what its strings retain is
+// charged that, not their lengths.
+func TestDelimitedRetained(t *testing.T) {
+	l := &memLister{keys: []string{"a", "b"}, size: 1, edit: func(_ string, _ int, p *FolderPage[int64]) { p.Retained = 10_000 }}
+	_, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{})
+	if v := d.opt.Counters.Snapshot().Value("tree.max_folder_bytes"); err != nil || v < 20_000 {
+		t.Fatalf("charged %d for two pages retaining 10,000 bytes each (%v)", v, err)
+	}
+}
+
+// gatedLister holds the first request for folder held until release, and
+// records each folder's requests.
+type gatedLister struct {
+	mu      sync.Mutex
+	held    string
+	entered chan struct{}
+	release chan struct{}
+	calls   map[string]int
+}
+
+func (g *gatedLister) ListFolder(_ context.Context, prefix, _ string) (*FolderPage[int64], error) {
+	g.mu.Lock()
+	g.calls[prefix]++
+	g.mu.Unlock()
+	if prefix == g.held {
+		close(g.entered)
+		<-g.release
+	}
+	return &FolderPage[int64]{Objects: objects(prefix + "x")}, nil
+}
+
+func (g *gatedLister) count(prefix string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.calls[prefix]
+}
+
+// TestDelimitedHeadroom: with room for one page in flight, a second
+// folder's page waits until the first is decoded and charged; then both
+// complete. The wait is observed by the reader's hook, not by time.
+func TestDelimitedHeadroom(t *testing.T) {
+	g := &gatedLister{held: "a/", entered: make(chan struct{}), release: make(chan struct{}), calls: map[string]int{}}
+	d := NewDelimited[int64](g, DelimitedOptions[int64]{PageHeadroom: 100, HeadroomBytes: 150})
+	waiting := make(chan struct{})
+	d.waiting = func() { close(waiting) }
+	read := func(prefix string, done chan<- error) {
+		var items []any
+		out := &Out[struct{}, struct{}, int64]{e: &recorder[struct{}, struct{}, int64]{items: &items}, r: FolderRange{Prefix: prefix}}
+		done <- d.Read(context.Background(), FolderRange{Prefix: prefix}, out)
+	}
+	a, b := make(chan error, 1), make(chan error, 1)
+	go read("a/", a)
+	<-g.entered
+	go read("b/", b)
+	select {
+	case <-waiting:
+	case err := <-b:
+		t.Fatalf("folder b/ did not wait for the headroom a/'s page held (%v)", err)
+	}
+	if n := g.count("b/"); n != 0 {
+		t.Fatalf("folder b/ sent %d requests while a/'s page held the headroom", n)
+	}
+	close(g.release)
+	if err := <-a; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-b; err != nil {
+		t.Fatal(err)
+	}
+	s := d.opt.Counters.Snapshot()
+	if s.Value("tree.headroom_waits") != 1 || g.count("b/") != 1 || d.Staged() != 0 {
+		t.Fatalf("counters %s", mustJSON(s))
+	}
+	// A cancelled wait returns.
+	g2 := &gatedLister{held: "a/", entered: make(chan struct{}), release: make(chan struct{}), calls: map[string]int{}}
+	d2 := NewDelimited[int64](g2, DelimitedOptions[int64]{PageHeadroom: 100, HeadroomBytes: 100})
+	waiting2 := make(chan struct{})
+	d2.waiting = func() { close(waiting2) }
+	go func() {
+		var items []any
+		out := &Out[struct{}, struct{}, int64]{e: &recorder[struct{}, struct{}, int64]{items: &items}, r: FolderRange{Prefix: "a/"}}
+		d2.Read(context.Background(), FolderRange{Prefix: "a/"}, out)
+	}()
+	<-g2.entered
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		var items []any
+		out := &Out[struct{}, struct{}, int64]{e: &recorder[struct{}, struct{}, int64]{items: &items}, r: FolderRange{Prefix: "b/"}}
+		done <- d2.Read(ctx, FolderRange{Prefix: "b/"}, out)
+	}()
+	select {
+	case <-waiting2:
+	case err := <-done:
+		t.Fatalf("folder b/ did not wait for the headroom (%v)", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled wait: %v", err)
+	}
+	close(g2.release)
 }

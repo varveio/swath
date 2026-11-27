@@ -23,7 +23,7 @@ func sameAsOld(t *testing.T, body []byte) {
 	t.Helper()
 	got, gerr := parseList(body)
 	want, werr := oldParseList(body)
-	same(t, "list", body, got, want, gerr, werr)
+	same(t, "list", body, unretained(got), want, gerr, werr)
 	gotV, gerr := parseVersions(body)
 	wantV, werr := oldParseVersions(body)
 	same(t, "versions", body, gotV, wantV, gerr, werr)

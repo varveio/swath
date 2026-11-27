@@ -497,11 +497,16 @@ the run (`protocol`), so a report shows at most one of them; `tree.limit.*` are 
 | `tree.empty_segments` | count | folders |  | child folders whose last segment is empty (a//), walked as any other |
 | `tree.non_nfc_names` | count | entries |  | entries whose name below the folder is not in Unicode NFC: where a store that matches names in NFC can merge two spellings of one folder |
 | `tree.out_of_scope` | count | entries |  | entries of the start folder whose keys do not start with the source prefix: left out, not walked |
+| `tree.probes` | count | folders |  | folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: below an out-of-scope child of the start folder whose name or the scope's remainder is not ASCII (an NFC-matching store can merge spellings), and below each of their folders |
+| `tree.headroom_waits` | count | pages |  | pages that waited for their response headroom (every page in flight at once reserves at most tree.limit.headroom_bytes) |
+| `tree.headroom_wait_ns` | count | ns |  | time those pages waited, summed |
 | `tree.max_folder_entries` | max | entries |  | the most entries (objects and child folders) of one folder |
-| `tree.max_folder_bytes` | max | bytes |  | the most one folder staged (keys, payload strings, entries, tokens: an estimate) |
+| `tree.max_folder_bytes` | max | bytes |  | the most one folder staged (what its pages' strings retain, or their lengths; entries; tokens: an estimate) |
 | `tree.peak_staged_bytes` | max | bytes |  | the most every folder being read staged at once |
 | `tree.limit.folder_bytes` | max | bytes |  | the bound on one folder's staging: a folder past it stops the run (folder_limit) |
 | `tree.limit.staging_bytes` | max | bytes |  | the bound on every folder's staging at once: a folder that would pass it stops the run (folder_limit) |
+| `tree.limit.page_headroom_bytes` | max | bytes |  | what each page in flight reserves until it is decoded and charged (0: no reservation) |
+| `tree.limit.headroom_bytes` | max | bytes |  | the bound on what every page in flight reserves at once: a page past it waits |
 | `tree.budget_refusals` | count | folders |  | folders stopped at a staging bound |
 | `tree.sort_ns` | count | ns |  | time spent sorting folders' entries by raw bytes, summed |
 | `tree.violations.raw_prefix` | count | entries |  | an object or child folder whose raw bytes do not start with its folder's (a store that matched the prefix another way): the run stops, protocol |

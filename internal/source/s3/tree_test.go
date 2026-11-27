@@ -137,7 +137,7 @@ func TestTreeListsR2Exact(t *testing.T) {
 			sameRows(t, fmt.Sprintf("page %d, workers %d", page, workers), rows, want)
 			st := o.t.Stats()
 			if st.Listing != "tree" || st.ListingReason != ReasonExplicitTree || st.Counters.Value("tree.objects") != int64(len(keys)) ||
-				st.Counters.Value("tree.markers") == 0 || o.Staged() != 0 || o.Listed() != int64(len(keys)) {
+				st.Counters.Value("tree.markers") == 0 || o.Staged() != 0 || o.Listed() != int64(len(keys)) || !o.Report().Coverage.Complete {
 				t.Fatalf("stats %+v, staged %d", st, o.Staged())
 			}
 		}
@@ -253,7 +253,123 @@ func TestTreeAliasFolders(t *testing.T) {
 	if v := o.t.Stats().Counters.Value("tree.violations.raw_prefix"); v != 1 {
 		t.Fatalf("raw-prefix violations %d (%v)", v, err)
 	}
+	// The two spellings read apart in the message (%+q), and a stopped
+	// walk does not claim its scope.
+	if !strings.Contains(err.Error(), `e\u0301/`) || !strings.Contains(err.Error(), `\u00e9/x`) {
+		t.Fatalf("message %q does not tell the spellings apart", err)
+	}
+	if r := o.Report(); r.Coverage.Complete || r.Coverage.StopReason != "" {
+		t.Fatalf("a stopped walk's coverage %+v", r.Coverage)
+	}
 	noSeek(t, f)
+}
+
+// TestTreeScopeAlias: a source prefix that does not end in '/' starts at
+// its folder and keeps by raw bytes; a common prefix outside it whose name
+// is not ASCII may be R2's merge of another spelling, holding keys of the
+// scope, and is probed: listing it finds them, and the run stops
+// (protocol) instead of ending without them. R2 spells the merged folder
+// as its first key in its order: e\u0301/x and \u00e9/! group under
+// \u00e9/ (from \u00e9/!), which does not start with e; the Kelvin sign
+// K\u212a groups with K. An ASCII folder outside the scope is never
+// listed.
+func TestTreeScopeAlias(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix string
+		keys         []string
+	}{
+		{"nfd under nfc", "e", []string{"e\u0301/x", "\u00e9/!", "f"}},
+		{"kelvin", "d/K", []string{"d/\u212a/a", "d/K/b", "d/L"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, u := r2Bucket(t, tc.keys)
+			opt := r2Options(u)
+			opt.Listing = source.ListingTree
+			rows, o, err := treeList(t, "s3://bkt/"+tc.prefix, opt, 2)
+			if !errors.Is(err, source.ErrProtocol) {
+				t.Fatalf("err %v, rows %q", err, keysOf(rows))
+			}
+			st := o.t.Stats().Counters
+			if st.Value("tree.probes") != 1 || st.Value("tree.violations.raw_prefix") != 1 {
+				t.Fatalf("probes %d, violations %d (%v)", st.Value("tree.probes"), st.Value("tree.violations.raw_prefix"), err)
+			}
+			noSeek(t, f)
+		})
+	}
+	keys := []string{"lo/x", "logs", "logs-old/a", "logs/b", "lz/q", "m/1"}
+	f, u := r2Bucket(t, keys)
+	opt := r2Options(u)
+	opt.Listing = source.ListingTree
+	rows, o, err := treeList(t, "s3://bkt/logs", opt, 2)
+	if err != nil || !slices.Equal(keysOf(rows), []string{"logs", "logs-old/a", "logs/b"}) || o.t.Stats().Counters.Value("tree.probes") != 0 {
+		t.Fatalf("%q, %v", keysOf(rows), err)
+	}
+	for _, q := range f.Log() {
+		if p := q.Get("prefix"); p != "" && !strings.HasPrefix(p, "logs") {
+			t.Fatalf("listed %q, an ASCII folder outside the scope", p)
+		}
+	}
+}
+
+// TestTreeRetainedBytes: a folder is charged what its pages retain. Keys
+// of decomposed characters are three times longer URL-encoded than raw
+// (e\u0301 is %CC%81 and an e), and a decoded page keeps its encoded
+// arena, so the folder's staging is at least the encoded keys' bytes.
+func TestTreeRetainedBytes(t *testing.T) {
+	var keys []string
+	var encoded int64
+	for i := range 20 {
+		k := fmt.Sprintf("p/%02d", i) + strings.Repeat("\u00e9", 300)
+		keys = append(keys, k)
+		encoded += int64(len(url.QueryEscape(k)))
+	}
+	_, u := r2Bucket(t, keys)
+	opt := r2Options(u)
+	opt.Listing = source.ListingTree
+	rows, o, err := treeList(t, "s3://bkt/p/", opt, 1)
+	if err != nil || len(rows) != len(keys) {
+		t.Fatalf("%d rows, %v", len(rows), err)
+	}
+	if v := o.t.Stats().Counters.Value("tree.max_folder_bytes"); v < encoded {
+		t.Fatalf("folder p/ charged %d bytes, below its %d bytes of URL-encoded keys", v, encoded)
+	}
+}
+
+// routedClient is a supplied client that names its route (Routed): an R2
+// host, while its requests go to the fake.
+type routedClient struct {
+	*client.Client
+	route string
+}
+
+func (r routedClient) Route(bucket string) string { return r.route + bucket }
+
+// TestListingFromRoute: with a supplied client and no Endpoint, the
+// default reads the client's route; a client that names none lists by key
+// ranges.
+func TestListingFromRoute(t *testing.T) {
+	s3test.NoCredentials(t)
+	keys := markerKeys()
+	_, u := r2Bucket(t, keys)
+	c, err := client.New(context.Background(), client.Config{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, o, err := treeList(t, "s3://bkt", Options{Client: routedClient{c, "https://acct.r2.cloudflarestorage.com/"}}, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameRows(t, "routed to R2", rows, r2Rows(keys))
+	if st := o.t.Stats(); st.ListingReason != ReasonR2Endpoint || !st.R2Endpoint {
+		t.Fatalf("stats %+v", st)
+	}
+	inv, err := Open(context.Background(), "s3://bkt", Options{Client: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := inv.(*Opened[Object]); !ok {
+		t.Fatalf("an unrouted client opened %T", inv)
+	}
 }
 
 // TestTreeMalformed: an S3 answer that breaks a folder's structure stops

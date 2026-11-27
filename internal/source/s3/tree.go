@@ -52,13 +52,30 @@ func newTree(p *Provider, own bool, reason string) (*Tree, error) {
 		Select:       p.opt.Prefix,
 		FolderBytes:  p.opt.TreeFolderBytes,
 		StagingBytes: p.opt.TreeStagingBytes,
-		Bytes:        objectBytes,
-		Requeue:      objhttp.Requeue,
-		Counters:     t.set,
-		Base:         counters.ID(len(clientCounters)),
+		// A page in flight reserves what its decoded strings can hold at
+		// most: its entries' URL-encoded keys (3 bytes a key byte, up to
+		// S3's 1,024) and metadata.
+		PageHeadroom:  int64(pageKeys(p.opt.Policy.PageSize)) * pageEntryHeadroom,
+		HeadroomBytes: p.opt.TreeHeadroomBytes,
+		Bytes:         objectBytes,
+		Requeue:       objhttp.Requeue,
+		Counters:      t.set,
+		Base:          counters.ID(len(clientCounters)),
 	})
 	t.Walker = tree.NewWalker[struct{}, struct{}, Object](t.d.Root(), t.d, tree.Options[Object]{Size: func(o *Object) int64 { return o.Size }})
 	return t, nil
+}
+
+// pageEntryHeadroom is what one entry of a page in flight is reserved:
+// a URL-encoded 1,024-byte key and its metadata, rounded up.
+const pageEntryHeadroom = 4 << 10
+
+// pageKeys is the entries a page asks for: the page size, or S3's 1,000.
+func pageKeys(size int) int {
+	if size > 0 {
+		return min(size, maxListKeys)
+	}
+	return maxListKeys
 }
 
 // objectBytes is what a row's payload holds beyond the row: its strings.
@@ -79,7 +96,7 @@ func (l folderLister) ListFolder(ctx context.Context, prefix, token string) (*tr
 		return nil, err
 	}
 	return &tree.FolderPage[Object]{Objects: l.p.rows(out), Folders: out.CommonPrefixes, Truncated: out.IsTruncated,
-		Token: out.NextContinuationToken}, nil
+		Token: out.NextContinuationToken, Retained: int64(out.Retained)}, nil
 }
 
 // Stats snapshots the counters: the client's and the folder walk's.
@@ -92,7 +109,7 @@ func (t *Tree) Stats() Stats {
 	}
 	p := t.p
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
-		Listing: "tree", ListingReason: t.reason, R2Endpoint: R2Endpoint(p.opt.Endpoint),
+		Listing: "tree", ListingReason: t.reason, R2Endpoint: R2Endpoint(p.opt.endpoint()),
 		Counters: t.set.Snapshot(p.opt.Admission.Off(t.own)...)}
 }
 
@@ -156,15 +173,23 @@ func (o *OpenedTree) Capabilities() source.Capabilities {
 }
 
 // Report is the walk's statistics: its objects, bytes, folders and
-// pages, the client's requests and retries.
+// pages, the client's requests and retries. Its coverage is complete only
+// when every folder the walk handed out was read whole: the start folder
+// and each child spliced in (tree.Stats.Folders). A run that stopped
+// (an error, a cancellation) leaves some unread, and says so.
 func (o *OpenedTree) Report() source.Report {
 	st := o.t.Stats()
 	w := o.t.Walker.Stats()
 	v := st.Counters.Value
+	complete := v("tree.folders_completed") == 1+w.Folders
+	stop := source.StopEndOfScope
+	if !complete {
+		stop = ""
+	}
 	r := source.Report{Name: "s3", Stats: &st,
 		Brief: fmt.Sprintf("listing=tree objects=%d bytes=%d folders=%d pages=%d requests=%d retries=%d max_folder_entries=%d peak_staged_bytes=%d",
 			w.Files, w.Bytes, v("tree.folders_completed"), v("tree.pages"), v("attempts"), v("retries"), v("tree.max_folder_entries"), v("tree.peak_staged_bytes")),
-		Coverage: source.Coverage{Target: o.opened().target(), Prefix: o.t.p.opt.Prefix, Complete: true, StopReason: source.StopEndOfScope},
+		Coverage: source.Coverage{Target: o.opened().target(), Prefix: o.t.p.opt.Prefix, Complete: complete, StopReason: stop},
 	}
 	if o.t.p.opt.FetchOwner {
 		r.Collected = []string{"owner_id", "owner_display_name"}

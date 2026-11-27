@@ -51,11 +51,14 @@ const (
 )
 
 // listing is how opt lists: the folder walk (tree) or the range engine,
-// and why.
+// and why. ListingAuto reads the endpoint: Options.Endpoint, else the
+// route a supplied client names (Routed). A supplied client that names
+// none, with no Endpoint, gives nothing to read, and lists by key ranges:
+// ask for ListingTree to walk folders through it.
 func (o *Options) listing() (tree bool, reason string, err error) {
 	switch l := o.Listing.OrAuto(); l {
 	case source.ListingAuto:
-		if R2Endpoint(o.Endpoint) {
+		if R2Endpoint(o.endpoint()) {
 			return true, ReasonR2Endpoint, nil
 		}
 		return false, ReasonDefault, nil
@@ -75,9 +78,21 @@ func (o *Options) warnListing(tree bool, reason string) {
 	case o.Warn == nil:
 	case tree && reason == ReasonR2Endpoint:
 		o.Warn(source.WarnTreeListing, r2Notice)
-	case !tree && R2Endpoint(o.Endpoint):
+	case !tree && R2Endpoint(o.endpoint()):
 		o.Warn(source.WarnUnorderedRange, r2RangeWarning)
 	}
+}
+
+// endpoint is where requests go, for choosing the listing: the endpoint
+// given, else a supplied Routed client's route for the bucket.
+func (o *Options) endpoint() string {
+	if o.Endpoint != "" {
+		return o.Endpoint
+	}
+	if r, ok := o.Client.(Routed); ok {
+		return r.Route(o.Bucket)
+	}
+	return ""
 }
 
 // errTreeOpen: a folder-walk listing asked of the range engine's

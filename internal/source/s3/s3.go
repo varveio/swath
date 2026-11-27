@@ -84,7 +84,11 @@ type Options struct {
 	// being read at once (0: tree.DefaultFolderBytes,
 	// tree.DefaultStagingBytes).
 	TreeFolderBytes, TreeStagingBytes int64
-	Client                            API // optional; built from the options above when nil
+	// TreeHeadroomBytes bounds what the folder walk's pages in flight
+	// reserve until they are decoded and charged (0:
+	// tree.DefaultHeadroomBytes); each reserves 4 KiB an entry asked for.
+	TreeHeadroomBytes int64
+	Client            API // optional; built from the options above when nil
 	// Policy is the range engine's (the shared engine flags).
 	keyrange.Policy
 	// Admission is the built-in client's (the shared engine flags); a
@@ -305,7 +309,7 @@ func (p *provider[P]) Stats() Stats {
 	}
 	e := p.Engine.Stats()
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
-		Listing: "range", ListingReason: p.reason, R2Endpoint: R2Endpoint(p.opt.Endpoint), MeanActive: e.MeanActive, Counters: e.Counters}
+		Listing: "range", ListingReason: p.reason, R2Endpoint: R2Endpoint(p.opt.endpoint()), MeanActive: e.MeanActive, Counters: e.Counters}
 }
 
 // fetch is the engine's page fetch: one ListObjectsV2. Start-after is

@@ -187,3 +187,26 @@ func TestTreeSourceInterfaces(t *testing.T) {
 }
 
 func is[I any](v any) bool { _, ok := v.(I); return ok }
+
+// TestTreeIncludeNarrowingAlias: an --include narrowing is the folder
+// walk's scope, kept by raw bytes; a common prefix outside it whose name is
+// not ASCII (R2's merge of é/ into é/) is probed, and the key of
+// the include it hides stops the run (protocol) instead of being left out.
+func TestTreeIncludeNarrowingAlias(t *testing.T) {
+	s3test.NoCredentials(t)
+	f := s3test.NewR2([]string{"é/x", "é/!", "f"})
+	u := s3test.Serve(t, f)
+	spec := &filter.Spec{Include: []string{"e*/**"}}
+	inferred, why := spec.NarrowPrefix("")
+	if inferred != "e" || why != filter.Narrowed {
+		t.Fatalf("the include narrowed to %q (%s)", inferred, why)
+	}
+	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: source.ListingTree}
+	_, err := inventory.Run(context.Background(), inventory.Config{
+		Source: inventory.SourceConfig{URI: "s3://bkt/" + inferred, OriginalURI: "s3://bkt", Narrowing: why, Options: opt},
+		Filter: spec,
+	})
+	if !errors.Is(err, source.ErrProtocol) {
+		t.Fatalf("err %v", err)
+	}
+}

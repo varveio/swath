@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -104,7 +105,7 @@ func agree(t *testing.T, body []byte) {
 	if gerr != nil {
 		t.Fatalf("scanner rejects what encoding/xml accepts: %v\n%q", gerr, body)
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(unretained(got), want) {
 		t.Fatalf("pages differ\n got %+v\nwant %+v\n%q", got, want, body)
 	}
 }
@@ -278,3 +279,20 @@ func TestEveryTruncationFails(t *testing.T) {
 const okPageEntities = `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>true</IsTruncated>` +
 	`<NextContinuationToken>a&amp;b</NextContinuationToken><Contents><Key>x%26y&amp;z</Key>` +
 	`<ETag>&#34;e&#x22;</ETag></Contents></ListBucketResult>`
+
+// TestPageRetained: a page says what its strings keep alive: the arena
+// they share, at the encoded size of URL-encoded keys (decoding shrinks
+// them in place), at least every stored string's encoded length.
+func TestPageRetained(t *testing.T) {
+	key := strings.Repeat("e\u0301", 100)
+	enc := url.QueryEscape(key)
+	body := []byte(`<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>true</IsTruncated><NextContinuationToken>tok</NextContinuationToken>` +
+		`<Contents><Key>` + enc + `</Key><ETag>e</ETag></Contents><CommonPrefixes><Prefix>` + enc + `%2F</Prefix></CommonPrefixes></ListBucketResult>`)
+	pg, err := parse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pg.Contents[0].Key != key || pg.Retained < 2*len(enc)+len("tok")+len("e") {
+		t.Fatalf("key %q, retained %d for %d encoded bytes", pg.Contents[0].Key, pg.Retained, 2*len(enc))
+	}
+}
