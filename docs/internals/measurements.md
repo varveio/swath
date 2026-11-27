@@ -24,6 +24,91 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## Cloudflare R2, first run (2026-11-27)
+
+swath at commit `f579bd64` (bench tools from this change), Go 1.27.4, `CGO_ENABLED=0`, on the host above, through an
+HTTPS proxy. One R2 bucket, `swath-test`, through the S3-compatible endpoint
+`https://ACCOUNT.r2.cloudflarestorage.com` with `--s3-region auto`, signed with the keys of an R2 API token
+with Object Read & Write on that bucket only. Every object is empty, so sizes were not checked; counts and keys were.
+Commands as run, per prefix:
+
+```bash
+swath list s3://swath-test/r2test/SHAPE/ --endpoint-url https://ACCOUNT.r2.cloudflarestorage.com --s3-region auto -o SHAPE.jsonl --report SHAPE.json
+swath du s3://swath-test/r2test/SHAPE/ -d 0 --endpoint-url https://ACCOUNT.r2.cloudflarestorage.com --s3-region auto --format jsonl --report SHAPE.du.json
+```
+
+**Fill.** `bench/shapekeys` wrote ten shapes at scale 12,500 under `r2test/SHAPE/` (`maxlen` with `-overlay`, so
+its keys stay 1,024 bytes): 102,061 keys. `bench/s3fill -region auto -create=false -marker-prefix _fill/` put
+them at about 320 PUTs/s with 64 workers and 600 with 128; R2 refused none, at 1,024 bytes included, and no
+request was retried.
+
+**Listing order.** R2 lists in byte order except in two cases, seen through ListObjectsV2 from `bench/s3walk`
+(sequential, continuation tokens, `encoding-type=url`) as well as from swath:
+
+- A key that is a proper prefix of another sorts as if its end were a byte between `0x39` (`9`) and `0x3a` (`:`).
+  Of `k` and `k` followed by each byte `0x01`–`0x7f`, all came back in byte order except `k`, between `k9` and `k:`.
+  So a folder marker `site/0000/00/` comes before `site/0000/00/p00` but `site/0002/` after `site/0002/19/p49`, and
+  `IMG_0000000.jpg` after `IMG_0000000.jpg.orig`.
+- Order follows the key's NFC form while the key is returned as uploaded: a decomposed `éx` comes after `~`,
+  beside `éy`. An NFD and an NFC upload of the same name are one object.
+
+`start-after` seeks in that order and drops the start key only from the first page: `start-after=k5` returned
+`k6`…`k9` and then `k`; `start-after=k9` returned `k`, `k:`, `k;`; `start-after=k` returned the 136 other keys,
+`k` not among them. The prefix-key order has been reported by others
+([Cloudflare Community](https://community.cloudflare.com/t/r2-listobjectsv2-returns-keys-in-non-standard-lexicographical-order/941399),
+[litestream-rs #342](https://github.com/emschwartz/litestream-rs/issues/342)); no answer from Cloudflare was found.
+
+**Per shape**, 64 workers. Pass: the keys listed are the key file's, byte for byte, in order; `du -d 0` counts the same.
+
+| Shape | Keys | Result | List requests | `end_check` (claims, ladders, ladder requests) |
+|---|---:|---|---:|---|
+| baseline | 12,400 | pass | 211 | 2, 1, 5 (1 floor, 1 wait) |
+| zipf_folders | 12,960 | pass | 283 | 2, 2, 6 |
+| punct_siblings | 11,200 | pass | 268 | 2, 2, 6 |
+| highbytes | 9,375 | pass | 237 | 2, 2, 6 |
+| percent_keys | 12,500 | pass | 38 | 4, 4, 10 |
+| folder_objects | 6,126 | exit 1, cause `protocol` (list and du) | 123 | none |
+| trailing_variants | 12,500 | exit 1, cause `protocol` (list and du) | 7 | 1, 1, 1 |
+| density_cliff | 12,500 | pass | 33 | 3, 3, 7 |
+| maxlen | 2,500 | pass | 18 | 3, 3, 7 |
+| small10k | 10,000 | pass | 68 | 2, 2, 6 |
+
+The two failures are the shapes with keys that are prefixes of others; a prefix of 13 NFD and NFC keys also stopped
+with `protocol`. No run had a contradicted, raced or omitted `end_check` claim, a retry, a throttle or a timeout: R2
+never ended a listing early, and no run stopped with `omitted_keys`.
+
+**A silent miss.** `r2test/markers/` holds 40 folders, each a marker (`f000/`) and 30 keys (`f000/0000`…). With
+`-j 32` swath exited 0 and wrote 1,200 of the 1,240 keys, in order, without any of the 40 markers; `end_check` made
+2 claims and found nothing. With `-j 8` and `-j 1` it stopped with `protocol`. Ranges are cut at folder names: the
+range that ends at `f000/` stops at `f000/0000`, which R2 sends before the marker, and the one that starts after
+`f000/` does not get it. With 1,020 keys per folder (`folder_objects`) the marker falls on a second page, where R2
+does return it, and every run stopped with `protocol` (`-j 1`, `2`, `4`, `64`).
+
+**Whole root.** `r2test/` at `-j 256` stopped with `protocol` (426 requests); `--include` for each clean shape still
+listed the whole root and stopped the same way. The eight clean shapes, filled again under `r2good/` (83,435 keys),
+listed exactly at `-j 256` (1,110 requests, 9.3 s, 257 in flight, `overfetch_keys` 813,330) and `-j 64` (374
+requests, 8.4 s). Page latency at `-j 64`: p50 0.54 s, p90 0.81 s, p99 1.07 s; at `-j 256` 0.81, 1.34 and 1.88 s.
+
+**Kill and resume** of `swath list s3://swath-test/r2good/ ... -j 8 --part-size 32KiB -o DIR`: SIGINT at 6 s
+(3,724 rows in published parts) and SIGKILL at 6 s (10,531), each followed by `swath resume DIR`. Both datasets
+are the 83,435 keys in order and pass `verify.py`. Resume was not tried on a prefix with prefix keys.
+
+**A dataset in R2.** `-o s3://swath-test/r2test-out/good/ --work-dir DIR --output-endpoint-url
+https://ACCOUNT.r2.cloudflarestorage.com --output-s3-region auto --part-size 256KiB` committed 4 parts with no
+retry. Downloaded with boto3, its keys are the 83,435 in order. `verify.py` looks for parts in `data/*.parquet` only,
+not the `data/RUN/ATTEMPT/` of a dataset written to a bucket ([dataset layout](../dataset.md)); with the glob made
+recursive every check passed except the one that `data/` holds exactly the manifest's parts, which assumes the flat
+layout too. No part reached the 8 MiB multipart threshold.
+
+**Independent count.** `r2test/punct_siblings/`: `swath du -d 0` 11,200; `bench/s3walk` 11,200, byte for byte the
+key file; boto3's ListObjectsV2 paginator 11,200.
+
+**Other differences from S3.** `max-keys` above 1,000 returns 1,000 keys and echoes the value asked. Without
+`encoding-type=url` a key with a control character comes back raw and the AWS SDK cannot parse the page (S3 is
+reported to escape it). Responses carry no `x-amz-request-id`; `cf-ray` identifies them. `fetch-owner` returns the
+account ID as owner ID and display name. R2 has no versioning, so `--all-versions` was not run. About 193,500
+requests in all, 185,000 of them PUTs.
+
 ## macOS volume boundary checks (2026-11-23)
 
 Commit `fbfb8344`, Go 1.27.4, GitHub Actions `macos-latest` arm64, on the
