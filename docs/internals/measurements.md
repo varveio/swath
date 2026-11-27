@@ -24,6 +24,59 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## Localfs tree extraction (2026-11-27)
+
+Base `f579bd64` versus PR [#702](https://github.com/varveio/swath/pull/702) production code
+`29e218b4`, built with `CGO_ENABLED=0 GOMAXPROCS=4 go build -trimpath ./cmd/swath`.
+This host differed from the default above: Linux arm64, Go 1.27.4, 18 logical CPUs, 31.4 GiB RAM,
+overlay filesystem, shared host. Runs used four workers, `GOMAXPROCS=4`, `GOMEMLIMIT=2GiB`,
+default GC settings and the shared benchmark lock.
+
+Synthetic fixtures reused `localtree_gen.py` with seed `20261127`: 120,000 files in each shape,
+24 directories in `bigdirs` (5,000 files each, crossing the chunk boundary) and 20,073 descendant
+directories in `smalldirs`. Files had deterministic nonzero sparse lengths, and all timestamps were
+fixed. [`localfs_ab.py`](../../bench/localfs_ab.py) compared native and portable `--metadata stat`
+listings (JSONL key, kind, size, mode and modification time) and `du --apparent-size -d 0`.
+All 64 invocations, including warmups, matched the independent listing or apparent-total oracle;
+complete output was byte-identical across arms within each shape/engine/command.
+
+Wall time below is milliseconds, median (min–max) of three measured runs per arm after one validated
+warmup per arm. Measured order was candidate/base, base/candidate, candidate/base; the harness now
+defaults to four repetitions to balance this order. Wall time includes startup, Python pipe
+draining and report writes. RSS is median process peak MiB, base / candidate.
+
+| Shape, reader, command | Base ms | Candidate ms | RSS MiB |
+|---|---:|---:|---:|
+| bigdirs, native, list | 68.4 (59.0–73.3) | 60.1 (58.9–64.0) | 61.3 / 61.2 |
+| bigdirs, native, du | 46.5 (44.4–52.0) | 47.9 (47.6–58.3) | 49.2 / 50.5 |
+| bigdirs, portable, list | 62.8 (62.6–80.7) | 66.0 (56.3–75.9) | 65.9 / 64.2 |
+| bigdirs, portable, du | 50.0 (44.6–50.4) | 52.3 (48.2–53.8) | 53.3 / 58.2 |
+| smalldirs, native, list | 182.2 (180.8–184.5) | 198.8 (192.2–199.2) | 68.3 / 69.6 |
+| smalldirs, native, du | 102.4 (92.0–114.3) | 101.8 (89.5–106.0) | 47.9 / 46.6 |
+| smalldirs, portable, list | 181.9 (173.7–185.7) | 175.5 (171.9–180.8) | 79.0 / 72.8 |
+| smalldirs, portable, du | 125.1 (121.8–126.4) | 111.7 (109.3–115.9) | 48.5 / 48.2 |
+
+The initial native `smalldirs` listing was 9.1% slower. A focused repeat on the same fixture,
+three pairs in the opposite starting order, gave base 179.9 (176.8–182.6) ms and candidate
+172.1 (170.0–181.7) ms, with identical output again. This did not reproduce the slowdown;
+neither sample establishes a speedup or a tight regression bound on this shared host.
+
+The identical `BenchmarkProviderEmit` source in both revisions measured already sorted batches
+of 2,048 rows, excluding traversal, sorting and output encoding. Three interleaved 300 ms runs
+per arm (base/candidate, candidate/base, base/candidate), `GOMAXPROCS=4`, gave these medians:
+
+| Batch | Base ns/row | Candidate ns/row | Bytes / allocations per batch, both arms |
+|---|---:|---:|---:|
+| files | 1.157 | 4.888 | 0 / 0 |
+| one directory per 16 rows | 6.278 | 8.280 | 10,240 / 256 |
+| same mixed batch, no directory rows | 6.036 | 8.149 | 10,240 / 256 |
+
+The extraction adds a measured 2–4 ns per row in this isolated path. ARM64 disassembly shows
+the per-row classifier remains an indirect call and copies its returned range even for a leaf;
+the former loop classified inline. Allocation counts are unchanged. This comparison covers
+warm-cache Linux metadata workloads, not cold disks, mounted/network filesystems, Parquet output
+or native macOS/Windows performance. Reproduction commands are in [testing.md](testing.md#running-tests-locally).
+
 ## macOS volume boundary checks (2026-11-23)
 
 Commit `fbfb8344`, Go 1.27.4, GitHub Actions `macos-latest` arm64, on the
