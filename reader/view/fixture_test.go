@@ -466,7 +466,7 @@ func sameEntry(e listing.Entry, r rec, isLocal bool) bool {
 func vercelObjects() []rec {
 	rs := objects()
 	for i := range rs {
-		rs[i].extra = map[string]any{"uploaded_at": base}
+		rs[i].extra = map[string]any{"created_at": base}
 		rs[i].modified, rs[i].class = nil, nil
 	}
 	return rs

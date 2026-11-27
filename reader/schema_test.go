@@ -65,7 +65,7 @@ func TestSchema(t *testing.T) {
 // content hash is md5.
 func TestColumnNames(t *testing.T) {
 	times := []string{"last_modified", "created_at", "deleted_at", "accessed_at", "metadata_changed_at", "storage_class_changed_at",
-		"immutability_policy_until", "uploaded_at"}
+		"immutability_policy_until"}
 	for _, id := range SchemaIDs() {
 		s, _ := Schema(id)
 		for _, c := range s.Columns {

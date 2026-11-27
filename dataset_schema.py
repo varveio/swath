@@ -21,7 +21,7 @@ AZURE_COLUMNS = ["key", "size", "last_modified", "etag", "md5", "content_type", 
                  "encryption_scope", "customer_provided_key_sha256", "lease_state", "tag_count", "metadata", "tags",
                  "immutability_policy_until", "immutability_policy_mode", "legal_hold"]
 COLUMNS = {
-    VERCEL_CURRENT: ["key", "size", "uploaded_at", "etag"],
+    VERCEL_CURRENT: ["key", "size", "created_at", "etag"],
     S3_CURRENT: S3_COLUMNS,
     S3_VERSIONS: S3_COLUMNS + ["version_id", "is_latest", "is_delete_marker"],
     GCS_CURRENT: GCS_COLUMNS,

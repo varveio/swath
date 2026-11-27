@@ -48,8 +48,9 @@ bounded responses, retries, cancellation and credential redaction.
 ## Dataset and metadata
 
 The schema is [`swath/vercel-objects/v1`](../dataset.md#schema-registry): `key`,
-`size`, `uploaded_at` and `etag`. Upload time is kept as an upload time, not a
-modification time. The ETag is opaque. URLs and synthetic folder rows are omitted.
+`size`, `created_at` and `etag`. `created_at` normalizes Vercel's `uploadedAt`: the
+service-reported upload time of the current blob. It is neither a modification
+time nor a promise of the first creation time of that pathname. The ETag is opaque. URLs and synthetic folder rows are omitted.
 Modification-time and storage-class filters are refused because these fields
 are not supplied. Size and pathname filters work normally.
 

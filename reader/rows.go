@@ -76,13 +76,13 @@ type GCSGeneration struct {
 	DeletedAt *time.Time
 }
 
-// VercelObject is a swath/vercel-objects/v1 row. UploadedAt is the service's
-// upload time, not a modification time; ETag is opaque.
+// VercelObject is a swath/vercel-objects/v1 row. CreatedAt records the upload
+// time Vercel reports for the current blob. ETag is opaque.
 type VercelObject struct {
 	Position
-	Size       int64
-	UploadedAt time.Time
-	ETag       *string
+	Size      int64
+	CreatedAt time.Time
+	ETag      *string
 }
 
 // AzureObject is a swath/azure-objects/v1 row: one current Azure blob.
@@ -161,7 +161,7 @@ type LocalEntry struct {
 func DecodeVercelObject(row seekparquet.Row) (VercelObject, error) {
 	d := decoder{spec: schemas[VercelObjectsV1], row: &row}
 	o := VercelObject{Position: d.position(), Size: d.required("size").Int64(),
-		UploadedAt: time.UnixMicro(d.required("uploaded_at").Int64()).UTC(), ETag: d.string("etag")}
+		CreatedAt: time.UnixMicro(d.required("created_at").Int64()).UTC(), ETag: d.string("etag")}
 	return o, d.err
 }
 

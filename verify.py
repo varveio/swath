@@ -47,7 +47,7 @@ AZURE_CONTRACT = {
 VERCEL_CONTRACT = {
     "key": ("BYTE_ARRAY", "REQUIRED", "String"),
     "size": ("INT64", "REQUIRED", "Int"),
-    "uploaded_at": ("INT64", "REQUIRED", "Timestamp"),
+    "created_at": ("INT64", "REQUIRED", "Timestamp"),
     "etag": ("BYTE_ARRAY", "OPTIONAL", "String"),
 }
 

@@ -37,7 +37,7 @@ const (
 type Config struct {
 	objhttp.Retry
 	Token          string        // validated by the provider opener
-	RequestTimeout time.Duration // per attempt; default 30 s
+	RequestTimeout time.Duration // per attempt; default source.DefaultRequestTimeout
 	Trust          source.Trust
 	Workers        int
 	HTTPClient     *http.Client // transport injection for tests
@@ -147,7 +147,7 @@ func (c *Client) CloseIdleConnections() {
 type ListInput struct {
 	Prefix string
 	Cursor string
-	Limit  int // validated by the provider opener
+	Limit  int // 1..MaxPageSize, normalized and validated by the provider opener
 }
 
 // List fetches one folded listing page, retrying the same request when

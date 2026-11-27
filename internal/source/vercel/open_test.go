@@ -182,13 +182,15 @@ func TestFoldedWalkRetriesDefaultHTTPPolicy(t *testing.T) {
 
 func TestFoldedWalkStopsAfterHTTPJSONRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		retry := objhttp.Retry{}
+		retry.Defaults()
 		calls := 0
 		hc := &http.Client{Transport: listTransport(func(*http.Request) (*http.Response, error) {
 			calls++
 			body := "{\"blobs\":["
-			// The first request after the shared client's nine attempts
+			// The first request after the shared client's attempt budget
 			// would succeed if the folder walker erroneously requeued.
-			if calls > 9 {
+			if calls > retry.MaxAttempts {
 				body = "{\"blobs\":[],\"folders\":[],\"hasMore\":false}"
 			}
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
@@ -197,7 +199,7 @@ func TestFoldedWalkStopsAfterHTTPJSONRetries(t *testing.T) {
 		r := o.Report()
 		v := r.Stats.(*Stats).Counters.Value
 		if !errors.Is(err, objhttp.ErrSyntax) || len(rows) != 0 || r.Coverage.Complete ||
-			calls != 9 || v("parse_failures") != 9 || v("retries") != 8 || v("tree.requeues") != 0 {
+			calls != retry.MaxAttempts || v("parse_failures") != int64(retry.MaxAttempts) || v("retries") != int64(retry.MaxAttempts-1) || v("tree.requeues") != 0 {
 			t.Fatalf("rows %d, err %v, attempts %d, parse_failures %d, retries %d, requeues %d, coverage %+v",
 				len(rows), err, calls, v("parse_failures"), v("retries"), v("tree.requeues"), r.Coverage)
 		}

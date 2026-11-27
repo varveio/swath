@@ -28,7 +28,7 @@ COLUMNS = {
     "swath/gcs-objects/v1": ["size", "last_modified", "etag", "generation", "md5", "created_at"],
     "swath/gcs-generations/v1": ["size", "generation", "is_latest", "deleted_at"],
     "swath/azure-objects/v1": ["size", "last_modified", "etag", "md5", "blob_type", "created_at"],
-    "swath/vercel-objects/v1": ["size", "uploaded_at", "etag"],
+    "swath/vercel-objects/v1": ["size", "created_at", "etag"],
     "swath/local-entries/v1": ["size", "last_modified", "kind", "link_target"],
 }
 

@@ -37,6 +37,8 @@ func TestVerifierFixtures(t *testing.T) {
 	writeVerifierFixtures(t, filepath.Join(base, "azure"), "azure", azblob.Schema, azblob.Object{Size: 7, Mtime: 10, CreationTime: 5})
 	writeVerifierFixtures(t, filepath.Join(base, "azureversions"), "azure", azblob.VersionSchema,
 		azblob.Version{Object: azblob.Object{Size: 7, Mtime: 10, CreationTime: 5}, VersionID: "2026-01-01T00:00:00.0000000Z", IsLatest: true})
+	writeVerifierFixtures(t, filepath.Join(base, "vercel"), "vercel", vercel.Schema,
+		vercel.Object{Size: 7, UploadedAt: 1767314045123456, ETag: "opaque"})
 }
 
 func writeVerifierFixtures[P any](t *testing.T, base, kind string, original schema.Schema[P], value P) {

@@ -17,7 +17,7 @@ type Object struct {
 	ETag       string // opaque service tag, including its quotes if present
 }
 
-// Schema records upload time as uploaded_at. It has no modification time.
+// Schema records the upload time of the current blob as created_at.
 var Schema = schema.Bind(reader.VercelObjectsV1, schema.Schema[Object]{
 	Info: schema.Info{Name: "swath_listing"},
 	Columns: []schema.Column[Object]{

@@ -299,7 +299,7 @@ class VerifierSchema(unittest.TestCase):
         self.assertIn("whole-row ordered sequence and multiset match reference", proc.stdout)
 
     def test_complete_object_contract_in_every_part(self):
-        for schema in ("current", "generations", "azure", "azureversions"):
+        for schema in ("current", "generations", "azure", "azureversions", "vercel"):
             for dataset in sorted((self.base / schema).iterdir()):
                 with self.subTest(schema=schema, mutation=dataset.name):
                     status, output = self.verify(dataset)

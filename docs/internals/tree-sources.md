@@ -80,7 +80,7 @@ whose pages can arrive in any order. A provider supplies a `FolderLister`, which
 and cursor. It returns the direct objects as rows, the child prefixes as spelled by the service, and the
 next cursor. The first call for a folder uses an empty cursor. S3 uses `ListObjectsV2` with delimiter `/`, never `StartAfter`,
 and maps objects with the range listing's `rows`. Vercel uses folded mode and maps `pathname` to the row key
-and `uploadedAt` to the upload timestamp. The same validation and sorting serve Vercel and Cloudflare R2.
+and `uploadedAt` to `created_at`, the current blob's reported upload time. The same validation and sorting serve Vercel and Cloudflare R2.
 See [Vercel Blob](../sources/vercel.md) and [S3](../sources/s3.md#cloudflare-r2).
 GCS (`delimiter` and `pageToken`) and flat Azure (`delimiter` and `marker`) adapters are not wired.
 
