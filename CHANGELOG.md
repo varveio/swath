@@ -195,6 +195,10 @@ Notable changes per release. The human summary of the current release is in the
   without the workspace (`GOWORK=off`), as an outside project does, and refuses a tagged `go.mod` that carries a
   `replace` or requires a nested tag that does not hold that module's code at the release commit
   ([RELEASING.md](RELEASING.md#cutting-a-release)).
+- The image `ghcr.io/varveio/swath` is built on distroless static for Debian 13
+  (`gcr.io/distroless/static-debian13:nonroot`, pinned by digest) instead of Debian 12, whose image no longer
+  receives the CA certificate and zone data updates Debian publishes for it. The user (65532), the home
+  directory, `/etc/passwd` and the absence of a shell are as before.
 
 ## 0.4.0
 
