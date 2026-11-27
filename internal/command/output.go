@@ -259,7 +259,7 @@ func resolveRemote(o *options) error {
 	case o.format != "":
 		return fmt.Errorf("--format %s: -o %s is a dataset, not text rows", o.format, shown)
 	}
-	r := inventory.RemoteOutput{Location: o.out, CredentialsFile: o.outputCreds, Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
+	r := inventory.RemoteOutput{Location: o.out, Endpoint: o.outputEndpoint, CredentialsFile: o.outputCreds, Profile: o.outputProfile, SAS: o.outputSAS, Region: o.outputRegion}
 	if err := r.Check(); err != nil {
 		return fmt.Errorf("-o %s: %w", shown, err)
 	}

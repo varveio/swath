@@ -124,7 +124,7 @@ type provider[P any] struct {
 	creds            string
 	region           string // the resolved signing region ("" with a supplied Client)
 	route            string // a supplied Routed client's Route ("" otherwise)
-	b2               bool   // a versions listing of Backblaze B2 (b2.go)
+	b2               bool   // the endpoint is Backblaze B2's (b2.go)
 }
 
 // Range is the engine's unit of listing work.
@@ -150,10 +150,11 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.b2 = source.Backblaze(opt.Endpoint)
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
-		AcceptBound: AcceptBound,
+		AcceptBound: acceptBound(opt.Endpoint),
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
@@ -181,11 +182,11 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	if !ok {
 		return nil, fmt.Errorf("s3: the client (%T) cannot list versions", p.client)
 	}
-	p.b2 = b2Endpoint(opt.Endpoint)
+	p.b2 = source.Backblaze(opt.Endpoint)
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Version]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
-		AcceptBound: AcceptBound,
+		AcceptBound: acceptBound(opt.Endpoint),
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Groups:      VersionsSchema.Groups,
@@ -291,15 +292,30 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 	if q.Token == "" {
 		in.StartAfter = q.After
 	}
+	var restart string // a B2 restart's point (b2.go)
+	if p.b2 && strings.HasPrefix(q.Token, b2Restart) {
+		restart = q.Token[len(b2Restart):]
+		in.ContinuationToken, in.StartAfter = "", b2Start(restart)
+	}
 	out, err := p.client.ListObjectsV2(ctx, in)
 	if err != nil {
 		return nil, err
+	}
+	token := out.NextContinuationToken
+	if p.b2 {
+		var restarted bool
+		if token, restarted, err = b2Continue(restart, out); err != nil {
+			return nil, err
+		}
+		if restarted {
+			p.Set().Inc(p.ID(cB2LongKeyRestarts))
+		}
 	}
 	if p.opt.NeedSize && slices.ContainsFunc(out.Contents, func(o client.Object) bool { return o.NoSize }) {
 		return nil, source.Violation(errors.New("s3: a listed object has no size"))
 	}
 	return &keyrange.Page[Object]{Rows: p.rows(out), Prefixes: out.CommonPrefixes, Truncated: out.IsTruncated,
-		Token: out.NextContinuationToken}, nil
+		Token: token}, nil
 }
 
 // rows converts a page's objects to rows (Swath's mapping). Rows share

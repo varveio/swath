@@ -48,8 +48,8 @@ func TestDocsCounters(t *testing.T) {
 // TestCountersMatchIDs: one client counter definition per ID; keys unique
 // across the engine's and the client's.
 func TestCountersMatchIDs(t *testing.T) {
-	if len(clientCounters) != cCredentialExpired+1 {
-		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cCredentialExpired+1)
+	if len(clientCounters) != cB2LongKeyRestarts+1 {
+		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cB2LongKeyRestarts+1)
 	}
 	if len(versionsCounters) != cB2LatestCleared+1 || !slices.Equal(versionsCounters[:len(clientCounters)], clientCounters) {
 		t.Fatalf("%d versions definitions for %d IDs, or not the client's first", len(versionsCounters), cB2LatestCleared+1)
