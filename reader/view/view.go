@@ -89,7 +89,7 @@ func Open(d *reader.Dataset) (*Inventory, error) {
 		return nil, fmt.Errorf("%w: the manifest records no scope", listing.ErrUnsupported)
 	}
 
-	inv := &Inventory{sp: d.SeekParquet(), rows: shapeOf(spec.ID), digest: sha256.Sum256(m.Manifest.Manifest)}
+	inv := &Inventory{sp: d.SeekParquet(), rows: shapeOf(spec), digest: sha256.Sum256(m.Manifest.Manifest)}
 	inv.base = listing.Evidence{
 		Scope:     scope,
 		Unlocated: unlocated(m.Coverage),

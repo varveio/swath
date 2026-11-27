@@ -18,28 +18,19 @@ import (
 // rowShape is how the rows of one schema become Entries: the columns the
 // view projects, and whether they are a local tree's.
 type rowShape struct {
-	local    bool
-	sizeOnly bool
-	columns  []string
+	local   bool
+	columns []string
+	// Optional metadata slots are -1 when the schema has no such column.
+	modified, class int
+	sizeRequired    bool
 }
 
-// The projections. Most object schemas have size, last_modified and
-// storage_class; Vercel supplies size only to the common view. A local
-// tree's entries are its own rows.
-var (
-	objectColumns = []string{"size", "last_modified", "storage_class"}
-	localColumns  = []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes", "link_target"}
-)
+var localColumns = []string{"size", "last_modified", "kind", "nlink", "inode", "dev", "allocated_bytes", "link_target"}
 
-// The projections' slots.
-const (
-	slotSize = iota
-	slotModified
-	slotClass // an object's
-)
+const slotSize = 0
 
 const (
-	slotKind = iota + 2 // a local entry's
+	slotKind = iota + 2
 	slotLinks
 	slotInode
 	slotDevice
@@ -47,14 +38,21 @@ const (
 	slotLinkTarget
 )
 
-func shapeOf(id reader.SchemaID) rowShape {
-	if id == reader.VercelObjectsV1 {
-		return rowShape{sizeOnly: true, columns: []string{"size"}}
+func shapeOf(spec reader.SchemaSpec) rowShape {
+	if spec.ID == reader.LocalV1 {
+		return rowShape{local: true, columns: localColumns, modified: 1, class: -1}
 	}
-	if id == reader.LocalV1 {
-		return rowShape{local: true, columns: localColumns}
+	size, _ := spec.Column("size")
+	shape := rowShape{columns: []string{"size"}, modified: -1, class: -1, sizeRequired: size.Required}
+	if _, ok := spec.Column("last_modified"); ok {
+		shape.modified = len(shape.columns)
+		shape.columns = append(shape.columns, "last_modified")
 	}
-	return rowShape{columns: objectColumns}
+	if _, ok := spec.Column("storage_class"); ok {
+		shape.class = len(shape.columns)
+		shape.columns = append(shape.columns, "storage_class")
+	}
+	return shape
 }
 
 // localKinds maps the kinds swath writes for a local entry to an Entry's.
@@ -114,15 +112,16 @@ func (d *decoder) entry(r row) (listing.Entry, error) {
 	if e.Size, err = d.size(r, slotSize); err != nil {
 		return listing.Entry{}, err
 	}
-	if d.rows.sizeOnly {
-		return e, nil
-	}
-	if e.LastModified, err = d.time(r, slotModified); err != nil {
-		return listing.Entry{}, err
+	if d.rows.modified >= 0 {
+		if e.LastModified, err = d.time(r, d.rows.modified); err != nil {
+			return listing.Entry{}, err
+		}
 	}
 	if !d.rows.local {
-		if e.StorageClass, err = d.class(r); err != nil {
-			return listing.Entry{}, err
+		if d.rows.class >= 0 {
+			if e.StorageClass, err = d.class(r); err != nil {
+				return listing.Entry{}, err
+			}
 		}
 		return e, nil
 	}
@@ -173,7 +172,7 @@ func (d *decoder) fault(r row, kind reader.Kind, slot int, reason string) error 
 
 // size reads a byte count, which is never negative.
 func (d *decoder) size(r row, slot int) (*int64, error) {
-	v, ok, err := d.value(r, slot, seekparquet.KindInt64, d.rows.sizeOnly)
+	v, ok, err := d.value(r, slot, seekparquet.KindInt64, slot == slotSize && d.rows.sizeRequired)
 	if !ok {
 		return nil, err
 	}
@@ -193,7 +192,7 @@ func (d *decoder) time(r row, slot int) (*time.Time, error) {
 }
 
 func (d *decoder) class(r row) (*string, error) {
-	v, ok, err := d.value(r, slotClass, seekparquet.KindByteArray, false)
+	v, ok, err := d.value(r, d.rows.class, seekparquet.KindByteArray, false)
 	if !ok {
 		return nil, err
 	}

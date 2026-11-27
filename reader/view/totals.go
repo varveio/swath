@@ -59,10 +59,7 @@ var errUnknownTotal = wrap(listing.ErrUnsupported, "an aggregation left a total 
 // groups, in one fold that reads every value it needs and checks the
 // order of every key it counts.
 func (inv *Inventory) fold(ctx context.Context, spans []seekparquet.RowSpan, sel selection, split listing.Split) ([]tallies, error) {
-	f := objectFold(split)
-	if inv.rows.sizeOnly {
-		f = sizeOnlyFold(split)
-	}
+	f := objectFold(inv.rows, split)
 	if inv.rows.local {
 		f = localFold(sel, split)
 	}
@@ -82,13 +79,7 @@ func (inv *Inventory) fold(ctx context.Context, spans []seekparquet.RowSpan, sel
 	return out, nil
 }
 
-// The slots of the folds' projections.
-const (
-	foldObjectSize = iota
-	foldObjectModified
-	foldObjectClass // projected only when the split asks for it
-)
-
+// The slots of the local fold projection.
 const (
 	foldLocalSize = iota
 	foldLocalModified
@@ -98,57 +89,44 @@ const (
 
 // objectFold counts an object inventory's rows, checking every row as the
 // view checks an entry. Its rows have no space on disk.
-func objectFold(split listing.Split) seekparquet.Fold[tallies] {
-	columns := []string{"size", "last_modified"}
-	if split.StorageClass {
-		columns = append(columns, "storage_class")
+func objectFold(rows rowShape, split listing.Split) seekparquet.Fold[tallies] {
+	columns := rows.columns
+	classSlot := rows.class
+	if !split.StorageClass && classSlot >= 0 {
+		columns = columns[:classSlot:classSlot] // class is the last projected object column
+		classSlot = -1
 	}
-	return seekparquet.Fold[tallies]{
-		Columns: columns,
+	return seekparquet.Fold[tallies]{Columns: columns,
 		Add: func(acc *tallies, b *seekparquet.ValueBatch) error {
-			size := b.Column(foldObjectSize)
-			modified := b.Column(foldObjectModified)
-			if err := present(modified, "last_modified", seekparquet.KindInt64); err != nil {
-				return err
-			}
+			size := b.Column(slotSize)
 			if err := sizes(size, "size"); err != nil {
 				return err
 			}
-			var class seekparquet.ColumnView
-			if split.StorageClass {
-				class = b.Column(foldObjectClass)
+			var modified, class seekparquet.ColumnView
+			if rows.modified >= 0 {
+				modified = b.Column(rows.modified)
+				if err := present(modified, "last_modified", seekparquet.KindInt64); err != nil {
+					return err
+				}
+			}
+			if classSlot >= 0 {
+				class = b.Column(classSlot)
 				if err := present(class, "storage_class", seekparquet.KindByteArray); err != nil {
 					return err
 				}
 			}
-
 			for i := range b.Len() {
-				it := item{size: int64Of(size, i), modified: int64Of(modified, i)}
-				if split.StorageClass && !class.IsNull(i) {
+				if rows.sizeRequired && size.IsNull(i) {
+					return &reader.SemanticError{Kind: reader.KindRow, Column: "size", Err: errors.New("null in a required column")}
+				}
+				it := item{size: int64Of(size, i)}
+				if rows.modified >= 0 {
+					it.modified = int64Of(modified, i)
+				}
+				if classSlot >= 0 && !class.IsNull(i) {
 					it.class, it.classed = class.Bytes(i), true
 				}
 				acc.add(it, split.SizeBounds)
-			}
-			return nil
-		},
-		Merge: merge,
-	}
-}
-
-// sizeOnlyFold counts objects whose schema supplies neither modification
-// times nor storage classes. Splitting by class puts every row in the null group.
-func sizeOnlyFold(split listing.Split) seekparquet.Fold[tallies] {
-	return seekparquet.Fold[tallies]{Columns: []string{"size"},
-		Add: func(acc *tallies, b *seekparquet.ValueBatch) error {
-			size := b.Column(0)
-			if err := sizes(size, "size"); err != nil {
-				return err
-			}
-			for i := range b.Len() {
-				if size.IsNull(i) {
-					return &reader.SemanticError{Kind: reader.KindRow, Column: "size", Err: errors.New("null in a required column")}
-				}
-				acc.add(item{size: int64Of(size, i)}, split.SizeBounds)
 			}
 			return nil
 		}, Merge: merge}
