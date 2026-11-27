@@ -1189,3 +1189,13 @@ their dated results remain in
 
 The measurements, their configurations and the commands that reproduce them are in
 [measurements.md](measurements.md); scripts are in `../bench/`.
+
+### Tree-source regression checks
+
+The tree core checks exact global order and child placement (`TestWalkerGlobalOrder`), held directories
+and candidate lookups (`TestOrderedHeldAndCandidates`), and bounded empty-page token cycles
+(`TestOrderedEmptyTokenCycle`). `TestWithin` and `TestWithinIgnoresFlatScope` hold directory-local ranges
+to their explicit scopes. localfs tests rejected-row descriptor ownership
+(`TestRejectedDirectoryRowsDoNotKeepDescriptor`). Azure checks HNS listing, scoped roots, retries,
+pruning, optional columns and reports; CLI integration checks dataset keys and totals, unreadable roots,
+trace refusal and safe include narrowing. These builder tests do not alter the acceptance suite.

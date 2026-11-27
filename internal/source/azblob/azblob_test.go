@@ -528,13 +528,13 @@ func TestAdmissionFallback(t *testing.T) {
 		{"401, dfs false", blob(401, ""), 200, "false", false, "filesystem properties", false, false, ""},
 		{"403, dfs false", blob(403, ""), 200, "false", false, "filesystem properties", false, false, ""},
 		{"silent, dfs false", blob(200, ""), 200, "false", false, "filesystem properties", false, false, ""},
-		{"401, dfs true", blob(401, ""), 200, "true", false, "", true, false, ""},
-		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "", true, false, ""},
+		{"401, dfs true", blob(401, ""), 200, "true", false, "filesystem properties", true, false, ""},
+		{"401, dfs true, asserted", blob(401, ""), 200, "true", true, "filesystem properties", true, false, ""},
 		{"401, dfs absent", blob(401, ""), 200, "", false, "", false, false, ""},
 		{"401, dfs absent, asserted", blob(401, ""), 200, "", true, "asserted", false, false, ""},
 		{"401, dfs 401, asserted", blob(401, ""), 401, "", true, "asserted", false, false, ""},
 		{"blob false", blob(200, "false"), 200, "true", false, "account information", false, true, ""},
-		{"blob true, asserted", blob(200, "true"), 200, "false", true, "", true, true, ""},
+		{"blob true, asserted", blob(200, "true"), 200, "false", true, "account information", true, true, ""},
 		{"blob 500, asserted", blob(500, ""), 200, "false", true, "asserted", false, true, ""},
 		{"401, dfs 409 soft delete or events", blob(401, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
 		{"403, dfs 409 soft delete or events", blob(403, ""), 409, "", false, "filesystem endpoint blocked", false, false, "EndpointUnsupportedAccountFeatures"},
@@ -560,8 +560,12 @@ func TestAdmissionFallback(t *testing.T) {
 		case err != nil:
 			t.Fatalf("%s: %v", c.name, err)
 		default:
-			o := src.(*Opened[Object])
-			if n := o.p.Stats().Namespace; n != c.admitted {
+			o := src.(Inventory)
+			stats := o.Report().Stats.(*Stats)
+			if stats.Listing != "" && stats.Listing != "tree" || (stats.Listing == "tree") != c.hierarchical {
+				t.Fatalf("%s: unexpected mode %q", c.name, stats.Listing)
+			}
+			if n := stats.Namespace; n != c.admitted {
 				t.Fatalf("%s: admitted by %q, want %q", c.name, n, c.admitted)
 			}
 			var asserted string

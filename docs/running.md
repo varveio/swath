@@ -113,8 +113,8 @@ To refresh the inventory later, list into a new directory and pass the previous 
 swath list s3://bucket/prefix/ -o inventory-2 --seed-from inventory --max-duration 6h
 ```
 
-The previous dataset must be of the same bucket and prefix (S3, GCS and Azure Blob; a mounted filesystem
-takes none). It tells swath how the keys are spread, so the run divides the work up front instead
+The previous dataset must be of the same bucket and prefix (S3, GCS and flat-namespace Azure Blob; a mounted filesystem
+or Azure hierarchical namespace takes none). It tells swath how the keys are spread, so the run divides the work up front instead
 of finding it as it goes; the rows are the same
 ([warm start](resume-and-refresh.md#warm-start-for-repeat-listings)). Keep the old directory until readers
 have moved to the new one. `--overwrite` replaces a dataset in place instead

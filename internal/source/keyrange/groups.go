@@ -200,7 +200,7 @@ type chainState struct {
 	seen    bool
 	ordinal int64
 	idle    int
-	win     *tokenWindow
+	win     *TokenWindow
 }
 
 func (p *Engine[P]) observe(in *Query, out *Page[P]) error {
@@ -230,9 +230,9 @@ func (p *Engine[P]) observe(in *Query, out *Page[P]) error {
 			g.win, g.idle = nil, 0
 		} else {
 			if g.win == nil {
-				g.win = newTokenWindow(strings.Clone(in.Token))
+				g.win = NewTokenWindow(strings.Clone(in.Token))
 			}
-			if !g.win.add(strings.Clone(out.Token)) {
+			if !g.win.Add(strings.Clone(out.Token)) {
 				return fmt.Errorf("%w: a continuing page makes no progress (its token repeats)", p.d.invalid())
 			}
 			g.idle++

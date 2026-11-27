@@ -10,6 +10,11 @@ else `prefix/name`; byte order puts `a-b` < `a.b` < `a/` < `a/…` < `a0`, so a 
 by its subtree, before the next sibling, is global order. A directory with more than 4096 entries is split into
 chunk ranges of 2048 sorted names that share one reference-counted directory fd, so several workers stat it.
 
+Row batches use the [tree core](../tree-sources.md)'s `EmitRows` for child splicing. localfs keeps its
+own ranges, descriptor ownership, unread reporting and count slabs. A child retains its directory
+reference only after its preceding rows are accepted; the order stage owns that reference once the child
+is submitted, even if submission returns an error.
+
 - **Engines.** `getdents` (Linux): raw `getdents64` into a reused buffer, keys in one arena per directory,
   entries sorted before stat so each result lands in its final slot. `portable` (elsewhere, or
   `SWATH_LOCALFS_ENGINE=portable`): `os.File.ReadDir` on the directory opened as the getdents engine opens it

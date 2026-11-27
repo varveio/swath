@@ -539,3 +539,10 @@ strictly ascending generation ordinals across page seams, including empty and su
 with state owned by each chain. `groups.max_rows` scans every group, including interior groups,
 sequential listings and seed EOF. `groups.overfetch_rows` counts only rows above a range's upper bound
 read to close its last group; resume suppression and split relisting have separate accounting.
+
+## Directory-local intervals
+
+`Engine.Within` creates an interval in a caller-owned scope, used by [tree sources](tree-sources.md)
+to split one directory. Its scope and ceiling travel with child ranges. It does not inherit the flat
+namespace prefix or publish flat coverage fences and end checks. The caller establishes the directory
+listing order before handing pages to the engine.

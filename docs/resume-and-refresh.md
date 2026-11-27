@@ -35,9 +35,9 @@ Press Ctrl-C once: only the first signal counts, and swath exits on its own at m
 (SIGKILL, an out-of-memory kill) or a crash loses nothing the run saved, and `swath resume DIR` continues it the
 same way; its `error.json` is missing then, or an earlier attempt's.
 
-Only a dataset run of an object store (S3, GCS or Azure Blob with `-o DIR`) can be resumed: it keeps a journal
+Only a dataset run of an object store (S3, GCS or flat-namespace Azure Blob with `-o DIR`) can be resumed: it keeps a journal
 of what it saved in `DIR/.swath/`. Leave that directory in place and do not edit its files: without it there
-is nothing to resume. A run of a local or mounted filesystem, a text output (`-o rows.tsv`) and `swath du` keep no
+is nothing to resume. A run of a local or mounted filesystem or Azure hierarchical namespace, a text output (`-o rows.tsv`) and `swath du` keep no
 journal and are run again: a filesystem dataset with `--overwrite`, or into a new directory.
 
 ### Resume it
@@ -181,7 +181,7 @@ The previous dataset says where the bucket's keys fall, so the run divides the w
 numbers of keys from the start instead of discovering the key space as it goes. This run sent 7 requests
 (the report's `requests.http_attempts`) where the same listing without `--seed-from` sent 32. With a dataset (or
 a cut file with counts, below) a run's requests approach one per 1,000 keys on S3 and GCS and one per 5,000 on
-Azure Blob. The report's `invocation.prior` names what was used (swath calls the previous dataset the prior):
+flat-namespace Azure Blob. The report's `invocation.prior` names what was used (swath calls the previous dataset the prior):
 
 ```json
 {

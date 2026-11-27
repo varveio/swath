@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/source/azblob/client"
+	"github.com/varveio/swath/internal/source/keyrange"
 )
 
 // The lead bytes that bound a scalar group under a parent Q: Q+leadE starts
@@ -82,6 +83,7 @@ type seek struct {
 	excl     bool // drop an item equal to from (rule 1)
 	marker   string
 	accepted bool // a member was accepted (rule 2 no longer applies)
+	empty    *keyrange.TokenWindow
 }
 
 // span is a byte interval of the scope (§3): the names n under the prefix

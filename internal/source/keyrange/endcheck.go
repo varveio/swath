@@ -261,7 +261,7 @@ func (p *Engine[P]) follows(ctx context.Context, in *Query, l string) (bool, err
 func (p *Engine[P]) listAfter(ctx context.Context, in *Query, l string) (*Page[P], error) {
 	q := &Query{Prefix: in.Prefix, After: p.safeStart(l), Max: in.Max}
 	prev := q.After
-	var tokens *tokenWindow
+	var tokens *TokenWindow
 	for {
 		if ctx.Err() != nil {
 			return nil, context.Cause(ctx)
@@ -289,9 +289,9 @@ func (p *Engine[P]) listAfter(ctx context.Context, in *Query, l string) (*Page[P
 			return nil, fmt.Errorf("%w: truncated page without a continuation token", p.d.invalid())
 		}
 		if tokens == nil {
-			tokens = newTokenWindow(q.Token)
+			tokens = NewTokenWindow(q.Token)
 		}
-		if !tokens.add(out.Token) {
+		if !tokens.Add(out.Token) {
 			return nil, fmt.Errorf("%w: the pages up to %q after %q make no progress", p.d.invalid(), l, q.After)
 		}
 		q.Token = out.Token

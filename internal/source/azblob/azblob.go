@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/varveio/swath/internal/counters"
+	"github.com/varveio/swath/internal/filter"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/azblob/client"
@@ -92,7 +93,7 @@ type Options struct {
 	Anonymous bool   // send no credentials, whatever the environment holds
 	SAS       string // shared access signature; else the root's, else EnvSAS
 	// Flat asserts a flat namespace where admission cannot establish it
-	// (--azure-assume-flat); an answered hierarchical namespace still refuses.
+	// (--azure-assume-flat); a reported hierarchical namespace takes precedence.
 	// It is part of the resume identity and the report.
 	Flat    bool
 	Timeout time.Duration
@@ -185,16 +186,20 @@ func RedactRoot(arg string) string {
 
 // Stats are the provider's part of the run report.
 type Stats struct {
-	Anonymous   bool   `json:"anonymous"`
-	Credentials string `json:"credentials,omitempty"`
-	// Namespace is how admission found the namespace flat: "account
+	Pruning     *filter.Pruning `json:"pruning,omitempty"`
+	PrunedDirs  int64           `json:"pruned_dirs,omitempty"`
+	Listing     string          `json:"listing,omitempty"`
+	Anonymous   bool            `json:"anonymous"`
+	Credentials string          `json:"credentials,omitempty"`
+	// Namespace is how admission determined the namespace: "account
 	// information", "filesystem properties", "filesystem endpoint blocked"
 	// (the Data Lake host refused the flat account for soft delete or blob
-	// events) or "asserted" (--azure-assume-flat).
-	Namespace   string            `json:"namespace"`
-	NoVerifySSL bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
-	MeanActive  float64           `json:"mean_active"`
-	Counters    counters.Snapshot `json:"counters"`
+	// events), "listing" (a hierarchical item) or "asserted" (--azure-assume-flat).
+	Namespace              string            `json:"namespace"`
+	NamespaceProbeRequeues int64             `json:"namespace_probe_requeues,omitempty"`
+	NoVerifySSL            bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
+	MeanActive             float64           `json:"mean_active"`
+	Counters               counters.Snapshot `json:"counters"`
 }
 
 // Provider is the range engine bound to List Blobs: the current blobs,
@@ -216,7 +221,8 @@ type provider[P any] struct {
 	anonymous        bool
 	creds            string
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
-	namespace        string // how admission found the namespace flat (Stats.Namespace)
+	namespace        string // how admission determined the namespace (Stats.Namespace)
+	probeRequeues    int64  // exhausted namespace listing probes requeued during admission
 	schema           *schema.Schema[P]
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
 	size             func(*P) int64
@@ -259,15 +265,26 @@ func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row fun
 		return nil, err
 	}
 	p.schema, p.row, p.size = s, row, size
-	if err := p.admit(ctx); err != nil {
-		return nil, err
-	}
-	e, err := keyrange.New(p.engineOptions(own), p.description(), p.fetch)
+	hns, err := p.admit(ctx, false)
 	if err != nil {
 		return nil, err
 	}
-	p.Engine = e
+	if hns {
+		if opt.AllVersions {
+			return nil, source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); --all-versions requires a flat namespace", p.opt.Account, p.namespace))
+		}
+		return nil, source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); the flat provider lists only flat accounts", p.opt.Account, p.namespace))
+	}
+	if err := p.flat(own); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+func (p *provider[P]) flat(own bool) error {
+	e, err := keyrange.New(p.engineOptions(own), p.description(), p.fetch)
+	p.Engine = e
+	return err
 }
 
 // description is what the range engine must know about the provider.
@@ -352,43 +369,42 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 	return p.Engine.Expand(context.WithValue(ctx, adapterKey{}, a), r, e)
 }
 
-// admit refuses the run unless the account's namespace is flat: (1) Get
-// Account Information on the blob endpoint, whose x-ms-is-hns-enabled
-// false passes and true refuses; (2) when that call is refused (401, the
-// answer to any anonymous caller, or 403) or the header is absent,
-// Filesystem Get Properties on the account's Data Lake host (only for an
-// ACCOUNT.blob.core.windows.net endpoint), whose x-ms-namespace-enabled
-// false passes and true refuses, and whose 409
-// EndpointUnsupportedAccountFeatures passes (flatFeatures); (3) anything
-// else is unknown, which
-// refuses unless Options.Flat asserts a flat namespace. Credentials that
-// could not be had, or that the service refused (a signed caller's 401 or
-// 403), are that failure (class auth or access denied), as on any later
-// request: the Data Lake host would need the same. A busy or failing
-// service is no answer: a call whose retries were spent on transient
-// failures (5xx, throttling, timeouts) is asked again after the listing's
-// requeue backoff, for as long as the run lives, as a listing page is; the
-// command's watchdog stops a run that never gets an answer as stuck. An
-// endpoint nothing ever answered at is unreachable, not refused.
-func (p *provider[P]) admit(ctx context.Context) error {
+// admit establishes the namespace. namespaceOf reads the account or Data
+// Lake headers, or recognizes a Data Lake response specific to flat
+// accounts. Admission requeues transient failures for as long as the run
+// lives. Inventory can probe a listing when namespace reads were refused.
+// Flat asserts a namespace only when the reads offered no answer.
+func (p *provider[P]) admit(ctx context.Context, probeTree bool) (bool, error) {
 	var wait time.Duration
 	hns, how, busy, err := p.namespaceOf(ctx)
 	for busy && ctx.Err() == nil {
 		if werr := keyrange.RequeueBackoff(ctx, &wait); werr != nil {
-			return werr
+			return false, werr
 		}
 		hns, how, busy, err = p.namespaceOf(ctx)
 	}
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
-		return fmt.Errorf("Azure Blob client: %w", err)
+		return false, fmt.Errorf("Azure Blob client: %w", err)
+	}
+	if probeTree && !p.opt.Flat && ctx.Err() == nil && refused(err) {
+		proved, probeErr := p.probeNamespace(ctx)
+		switch {
+		case ctx.Err() != nil:
+			return false, context.Cause(ctx)
+		case errors.As(probeErr, new(*objhttp.CredentialError)):
+			return false, fmt.Errorf("Azure Blob client: %w", probeErr)
+		case probeErr != nil && !refused(probeErr):
+			return false, fmt.Errorf("Azure Blob: account %s: namespace listing probe: %w", p.opt.Account, probeErr)
+		case proved:
+			hns, how, err = true, "listing", nil
+		}
 	}
 	switch {
 	case err != nil && ctx.Err() != nil:
-		return context.Cause(ctx)
-	case err == nil && hns:
-		return source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
+		return false, context.Cause(ctx)
 	case err == nil:
 		p.namespace = how
+		return hns, nil
 	case p.opt.Flat:
 		p.namespace = "asserted"
 		if p.opt.Warn != nil {
@@ -397,14 +413,36 @@ func (p *provider[P]) admit(ctx context.Context) error {
 	case errors.Is(err, source.ErrUnreachable):
 		// Nothing answered at all (objhttp's fail-fast): no answer about
 		// the namespace either; the run stops as unreachable.
-		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
+		return false, fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	case !p.unsigned() && refused(err):
 		// Credentials the service rejected: what any request would meet.
-		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
+		return false, fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	default:
-		return source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish that its namespace is flat (%w); only flat accounts are listed (--azure-assume-flat asserts it)", p.opt.Account, err))
+		return false, source.Unsupported(fmt.Errorf("Azure Blob: account %s: cannot establish its namespace (%w); --azure-assume-flat asserts a flat namespace", p.opt.Account, err))
 	}
-	return nil
+	return false, nil
+}
+
+// probeNamespace looks for an affirmative resource type. A container SAS
+// may list a directory without reading account information. Absence of a
+// resource type cannot establish flatness.
+func (p *provider[P]) probeNamespace(ctx context.Context) (bool, error) {
+	dir := p.opt.Prefix[:strings.LastIndexByte(p.opt.Prefix, '/')+1]
+	in := &client.ListInput{Container: p.opt.Container, Prefix: dir, Delimiter: "/", MaxResults: 1, Tree: true}
+	var wait time.Duration
+	for {
+		out, err := p.client.List(ctx, in)
+		switch {
+		case err == nil:
+			return len(out.Items) > 0 && out.Items[0].Hierarchical, nil
+		case !objhttp.Requeue(err):
+			return false, err
+		}
+		p.probeRequeues++
+		if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
+			return false, err
+		}
+	}
 }
 
 // namespaceOf is one round of admit's calls: whether the namespace is
@@ -576,23 +614,25 @@ func AcceptBound(s string) bool {
 }
 
 // Stats snapshots the counters.
-func (p *provider[P]) Stats() Stats {
-	p.Activity.Store(p.Set(), p.ID(0))
+func (p *provider[P]) Stats() Stats { return p.stats(p.Engine) }
+
+func (p *provider[P]) stats(eng *keyrange.Engine[P]) Stats {
+	p.Activity.Store(eng.Set(), eng.ID(0))
 	if c, ok := p.client.(pooled); ok {
-		p.Set().Set(p.ID(client.CPoolSize), int64(c.Transports()))
+		eng.Set().Set(eng.ID(client.CPoolSize), int64(c.Transports()))
 	}
 	if c, ok := p.client.(capped); ok {
-		p.Set().Set(p.ID(client.CRetryAfterCapped), c.RetryAfterCapped())
+		eng.Set().Set(eng.ID(client.CRetryAfterCapped), c.RetryAfterCapped())
 	}
 	if c, ok := p.client.(formatted); ok {
 		f := c.Formats()
-		p.Set().Set(p.ID(client.CArrowPages), f.ArrowPages)
-		p.Set().Set(p.ID(client.CArrowItems), f.ArrowItems)
-		p.Set().Set(p.ID(client.CXMLPages), f.XMLPages)
-		p.Set().Set(p.ID(client.CXMLItems), f.XMLItems)
+		eng.Set().Set(eng.ID(client.CArrowPages), f.ArrowPages)
+		eng.Set().Set(eng.ID(client.CArrowItems), f.ArrowItems)
+		eng.Set().Set(eng.ID(client.CXMLPages), f.XMLPages)
+		eng.Set().Set(eng.ID(client.CXMLItems), f.XMLItems)
 	}
-	e := p.Engine.Stats()
-	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
+	e := eng.Stats()
+	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NamespaceProbeRequeues: p.probeRequeues, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
 		MeanActive: e.MeanActive, Counters: e.Counters}
 	return st
 }
@@ -628,8 +668,12 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 
 // object is a listed blob's row payload.
 func (p *provider[P]) object(it *client.Item) Object {
-	o := Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
-		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
+	o := itemObject(it)
 	p.fill(&o)
 	return o
+}
+
+func itemObject(it *client.Item) Object {
+	return Object{Size: it.Size, Mtime: it.LastModified, CreationTime: it.CreationTime, ETag: it.ETag, ContentMD5: it.ContentMD5,
+		ContentType: it.ContentType, BlobType: it.BlobType, AccessTier: it.AccessTier, Props: it.Props}
 }

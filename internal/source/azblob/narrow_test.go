@@ -345,8 +345,8 @@ func (a *admissionAPI) List(context.Context, *client.ListInput) (*client.ListOut
 
 // TestNarrowedAdmission: namespace admission asks about the container,
 // whatever prefix an include narrows the root to, and decides as it does
-// for the root: a hierarchical namespace refuses, an unknown one refuses
-// unless --azure-assume-flat asserts it, which warns, with the same
+// for the root: a hierarchical namespace opens as a tree, an unknown one
+// refuses unless --azure-assume-flat asserts it, which warns, with the same
 // errors and warnings word for word.
 func TestNarrowedAdmission(t *testing.T) {
 	const root = "az://acct/c"
@@ -369,7 +369,18 @@ func TestNarrowedAdmission(t *testing.T) {
 		for _, r := range []string{root, narrowed} {
 			api := &admissionAPI{hns: c.hns, err: c.err}
 			var warned []string
-			_, err := openView(r, Options{Client: api, Flat: c.flat, Warn: func(code, msg string) { warned = append(warned, code+": "+msg) }}, 1)
+			var original string
+			if r != root {
+				original = root
+			}
+			opened, err := OpenNarrowed(context.Background(), r, original, Options{Client: api, Workers: 1, Flat: c.flat,
+				Warn: func(code, msg string) { warned = append(warned, code+": "+msg) }})
+			if err == nil {
+				_, tree := opened.(*OpenedTree)
+				if tree != c.hns {
+					t.Fatalf("%s, %s: opened %T, HNS=%v", c.name, r, opened, c.hns)
+				}
+			}
 			if !slices.Equal(api.asked, []string{"c"}) {
 				t.Fatalf("%s, %s: admission asked about %q", c.name, r, api.asked)
 			}
@@ -378,7 +389,7 @@ func TestNarrowedAdmission(t *testing.T) {
 		if outcomes[0] != outcomes[1] {
 			t.Fatalf("%s: the root %s, narrowed %s", c.name, outcomes[0], outcomes[1])
 		}
-		refused := c.hns || c.err != nil && !c.flat
+		refused := c.err != nil && !c.flat
 		if strings.HasPrefix(outcomes[0], "<nil>") == refused || c.flat != strings.Contains(outcomes[0], source.WarnFlatAssumed) {
 			t.Fatalf("%s: %s", c.name, outcomes[0])
 		}

@@ -8,7 +8,7 @@ working command, authentication and permissions, its own options, writing a data
 | [Local and mounted filesystems](local.md) | a path | files and directories | – | no: an interrupted run is run again | a local directory |
 | [Amazon S3 and S3-compatible stores](s3.md) | `s3://BUCKET[/PREFIX]` | current objects of a general-purpose bucket | versions and delete markers | yes | `-o s3://BUCKET/PREFIX` |
 | [Google Cloud Storage](gcs.md) | `gs://BUCKET[/PREFIX]` | current objects | live and noncurrent generations | yes | `-o gs://BUCKET/PREFIX` |
-| [Azure Blob Storage](azure.md) | `az://ACCOUNT/CONTAINER[/PREFIX]` | current blobs of a flat namespace | versions, snapshots and soft-deleted blobs | yes | `-o az://ACCOUNT/CONTAINER/PREFIX` |
+| [Azure Blob Storage](azure.md) | `az://ACCOUNT/CONTAINER[/PREFIX]` | current blobs; directories on hierarchical namespaces | versions, snapshots and soft-deleted blobs on flat namespaces | flat namespaces | `-o az://ACCOUNT/CONTAINER/PREFIX` |
 
 A dataset of any source can be written to a local directory (`-o DIR`) or to any of the three object stores
 (`-o` a bucket prefix with `--work-dir DIR`).

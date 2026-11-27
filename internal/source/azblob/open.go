@@ -34,18 +34,74 @@ type Opened[P any] struct {
 // journal never records, given none again.
 var errSASNotRecorded = errors.New("Azure Blob: the run's root carried a SAS, which is never recorded: give it again with --azure-sas-token or " + EnvSAS)
 
+// Inventory is an opened listing of current Azure objects. The concrete
+// source exposes the capabilities of its listing mode.
+type Inventory interface {
+	Bound() bind.Bound[Object]
+	Options() Options
+	Locator() source.Locator
+	Listed() int64
+	source.Identified
+	source.Capable
+	source.Reporter
+}
+
 // Open opens root, az://ACCOUNT/CONTAINER[/PREFIX][?SAS], for its current
-// blobs: opt with the account, container and prefix root names
+// blobs: flat accounts list by range and hierarchical accounts list by
+// directory. The account, container and prefix come from root
 // (ParseURL), and the root's SAS where opt has none. A root whose SAS was
 // redacted (RedactedSAS: a resumed run's) needs a SAS again, from opt or
 // EnvSAS, or anonymity. opt.AllVersions is refused (New): OpenVersions
-// lists every entry.
-func Open(ctx context.Context, root string, opt Options) (*Opened[Object], error) {
+// lists every entry on flat accounts.
+func Open(ctx context.Context, root string, opt Options) (Inventory, error) {
+	return OpenNarrowed(ctx, root, "", opt)
+}
+
+// OpenNarrowed opens root after include-based narrowing. Original, when
+// present, is the root before narrowing. A hierarchical listing can narrow
+// only to a directory whose own row cannot match the inferred prefix.
+func OpenNarrowed(ctx context.Context, root, original string, opt Options) (Inventory, error) {
 	if err := opt.setRoot(root); err != nil {
 		return nil, err
 	}
-	p, err := New(ctx, opt)
+	if opt.AllVersions {
+		return nil, errors.New("Azure Blob: Options.AllVersions lists every entry: use OpenVersions")
+	}
+	narrowed := opt.Prefix
+	if original != "" {
+		account, container, prefix, _, err := ParseURL(original)
+		if err != nil {
+			return nil, err
+		}
+		if account != opt.Account || container != opt.Container || !strings.HasPrefix(narrowed, prefix) {
+			return nil, errors.New("Azure Blob: narrowed root is outside the original scope")
+		}
+		opt.Prefix = prefix
+	}
+	p, own, err := connect[Object](ctx, opt)
 	if err != nil {
+		return nil, err
+	}
+	p.schema, p.row, p.size = &Schema, (*Provider).object, func(o *Object) int64 { return o.Size }
+	hns, err := p.admit(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	if hns {
+		// Preserve the user's original scope. A directory used as the
+		// traversal root emits no row for itself, so a narrowed prefix that
+		// ends in '/' must start from its parent if that row could match.
+		if opt.Prefix == "" || strings.HasSuffix(opt.Prefix, "/") {
+			dir := strings.TrimSuffix(narrowed, "/")
+			dir = dir[:strings.LastIndexByte(dir, '/')+1]
+			if len(dir) > len(opt.Prefix) {
+				p.opt.Prefix = dir
+			}
+		}
+		return openTree(p, own)
+	}
+	p.opt.Prefix = narrowed
+	if err := p.flat(own); err != nil {
 		return nil, err
 	}
 	return opened(p, &Schema)
@@ -154,14 +210,18 @@ func (o *Opened[P]) Capabilities() source.Capabilities {
 // the default ones.
 func (o *Opened[P]) Report() source.Report {
 	st := o.p.Stats()
-	r := keyrange.Report("azure", o.p.target(), o.p.opt.Prefix, &st, st.Counters)
-	if o.p.opt.FetchMetadata {
+	return o.p.report(&st)
+}
+
+func (p *provider[P]) report(st *Stats) source.Report {
+	r := keyrange.Report("azure", p.target(), p.opt.Prefix, st, st.Counters)
+	if p.opt.FetchMetadata {
 		r.Collected = append(r.Collected, "metadata")
 	}
-	if o.p.opt.FetchTags {
+	if p.opt.FetchTags {
 		r.Collected = append(r.Collected, "tags")
 	}
-	if o.p.opt.FetchImmutability {
+	if p.opt.FetchImmutability {
 		r.Collected = append(r.Collected, "immutability_policy_until", "immutability_policy_mode", "legal_hold")
 	}
 	return r

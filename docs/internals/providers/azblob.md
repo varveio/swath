@@ -3,10 +3,10 @@
 ## Support and differences
 
 `az://account/container[/prefix]` lists current blobs in flat namespaces, and with `--all-versions` every
-entry (versions, snapshots, soft-deleted blobs; `NewVersions`, below). Hierarchical namespaces are unsupported (the library's
-[live source](#the-live-source) pages them where it can). Namespace admission is
-required even for a public container; `--azure-assume-flat` only overrides an unknown result, never
-an account reported as hierarchical.
+entry (versions, snapshots, soft-deleted blobs; `NewVersions`, below). Current listings of hierarchical
+namespaces use the [tree core](../tree-sources.md); grouped listings require a flat namespace. Namespace
+admission is required even for a public container; `--azure-assume-flat` overrides an unknown result,
+never an account reported as hierarchical.
 [Shared object-store controls](../../sources/README.md#object-store-requests) cover authentication,
 request timeout, retries and admission.
 
@@ -109,14 +109,14 @@ report's `invocation.source` see it, so an admission refusal records no SAS eith
 and the errors carry the root without its query. A scope prefix holding a byte in EE..F4 is accepted and listed
 through the adapter like any other.
 
-**Admission.** Before any listing request the namespace must be positively flat. (1) Get Account Information on
-the container path: `x-ms-is-hns-enabled` `false` passes, `true` refuses. (2) When that call is refused (401,
+**Admission.** Before choosing a listing engine, admission establishes the namespace. (1) Get Account Information on
+the container path: `x-ms-is-hns-enabled` `false` selects flat listing, `true` selects tree listing for current blobs. (2) When that call is refused (401,
 which Azure answers any anonymous caller, or 403) or answers without the header, Filesystem Get Properties on the
 account's Data Lake host (`client.NamespaceInfo`: `HEAD https://ACCOUNT.dfs.core.windows.net/CONTAINER?resource=filesystem`,
 the blob host with its `blob` label replaced, so only for the exact default endpoint, `https://ACCOUNT.blob.core.windows.net`
 with the configured account, no port and no path; with any other `--endpoint-url` there is no such host and
 this step is skipped, as it is with Shared Key, which this request is not signed with): `x-ms-namespace-enabled` `false`
-passes, `true` refuses. Azure answers it anonymously for a public container (checked live on 2026-11-08). A 409
+selects flat listing, `true` selects tree listing for current blobs. Azure answers it anonymously for a public container (checked live on 2026-11-08). A 409
 `EndpointUnsupportedAccountFeatures` there ("This endpoint does not support BlobStorageEvents or SoftDelete") also
 passes (`flatFeatures`): Azure documents that blob soft delete blocks the Data Lake endpoint only on an account
 without a hierarchical namespace, while on one with it that endpoint is the account's own API and keeps working
@@ -133,15 +133,29 @@ after the engine's requeue backoff (`keyrange.RequeueBackoff`), as a listing pag
 lives, so a service that never answers stops as stuck (exit 75), never refused; an endpoint nothing ever
 answered at (objhttp's fail-fast) stops as unreachable (exit 75); with `--azure-assume-flat` the listing reaches
 the same stop. (3) Anything else (a refusal, another code or a missing header
-there too, another failure, no Data Lake host) is unknown and refuses,
-unless `--azure-assume-flat` asserts a flat namespace; a reported hierarchical namespace refuses whatever is asserted.
+there too, another failure, no Data Lake host) is unknown. For current blobs, a directory listing can
+establish HNS; otherwise the source refuses unless `--azure-assume-flat` asserts a flat namespace.
+A reported hierarchical namespace always selects tree listing, even beside that assertion. The probe
+requeues transient failures with the admission backoff and preserves cancellation;
+`namespace_probe_requeues` reports those outer retries when nonzero.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
-`filesystem properties`, `filesystem endpoint blocked` or `asserted`, with a warning), so a wrong one is visible. A refusal is
+`filesystem properties`, `filesystem endpoint blocked`, `listing`, or `asserted`, with a warning for the assertion), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
 reason). The order defenses cannot stand in: on a hierarchical-namespace account `/` sorts lowest, and after a
 byte cursor `a.z` the key `a/child` is still in range, but a seek that sorts `/` lowest skips it while every page
-still ascends. `--all-versions` is admitted as any listing. Admission runs before the range engine is constructed, so exhausted admission
+still ascends. `--all-versions` requires a flat namespace. Admission runs before the range engine is constructed, so exhausted admission
 calls do not reach engine requeue.
+
+## Hierarchical namespace inventory
+
+`Open` selects `OpenedTree` for a current HNS listing. Its directory reader uses the byte-order adapter
+for name pages, then `tree.Ordered` for slash-suffixed directory keys and directory-local splits.
+Tree requests use XML: the SDK Arrow hierarchy decoder does not expose the directory properties needed
+for this mode. Include narrowing uses a directory boundary inside the original scope and retains a
+matching directory row by starting from its parent. Directory rows retain their listing properties but leave optional metadata, tags and immutability fields
+null. The root directory is omitted. Tree capabilities refuse resume, seeds and range traces; `--max-keys`, sequential
+and grouped listings require a flat namespace. See [tree sources](../tree-sources.md) for ownership,
+pruning, continuation and bounded lookup evidence.
 
 ## Order: the byte-order adapter
 
