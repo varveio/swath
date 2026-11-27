@@ -21,7 +21,7 @@ import (
 // writer without waiting (runtrace).
 
 // bornName names a range's origin in the trace.
-var bornName = [...]string{fromRoot: "root", fromSeed: "seed", fromLower: "lower", fromUpper: "upper"}
+var bornName = [...]string{fromRoot: "root", fromSeed: "seed", fromLower: "lower", fromUpper: "upper", fromWithin: "within"}
 
 // TraceTo writes the run trace to w (source.Traced): called before
 // execution, after Restart and SeedFrom, so run_start records the options

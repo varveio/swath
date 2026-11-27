@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/varveio/swath/internal/bind"
 	"github.com/varveio/swath/internal/counters"
@@ -35,25 +36,38 @@ import (
 // immutability, so those columns stay null on its row (dirLister.object).
 //
 // The listing mode is part of the resume identity (listing tree); resume
-// itself is not implemented (docs/internals/tree-sources.md, "Resume").
+// itself is not implemented (docs/internals/tree-sources.md, "Azure ordered directories").
 type Tree struct {
 	*tree.Walker[struct{}, keyrange.Range, Object]
 	objhttp.Activity
-	p        *Provider // the connected, admitted provider: client, options, route
-	client   treeClient
-	ord      *tree.Ordered[Object]
-	pruning  atomic.Pointer[filter.Pruning] // installed before workers start; reports may run concurrently
-	requests atomic.Int64                   // listing requests sent (treeClient): list_requests
+	p              *Provider // the connected, admitted provider: client, options, route
+	client         treeClient
+	ord            *tree.Ordered[Object]
+	pruning        atomic.Pointer[filter.Pruning] // installed before workers start; reports may run concurrently
+	requests       atomic.Int64                   // listing requests sent (treeClient): list_requests
+	counterBase    int
+	includePrefix  string
+	includePruned  atomic.Int64
+	lookupEmpty    atomic.Int64
+	lookupStalled  atomic.Int64
+	lookupRequeues atomic.Int64
 }
 
 // treeCounters are the tree listing's own, registered after the flat
 // provider's (the client's and the adapter's).
 var treeCounters = []counters.Def{
 	{Key: "list_requests", Kind: counters.Count, Unit: "requests", Help: "listing requests of the tree listing: directories' first pages, segment and resolve pages, lookups (a call the client retried is one; requests counts segment pages only)"},
+	{Key: "tree.include_prefix_pruned", Kind: counters.Count, Unit: "directories", Help: "subtrees disjoint from the include prefix"},
+	{Key: "tree.lookup_empty_pages", Kind: counters.Count, Unit: "pages", Help: "empty continuing pages followed by directory lookups"},
+	{Key: "tree.lookup_requeues", Kind: counters.Count, Unit: "requests", Help: "directory lookup pages retried after the HTTP client's retries were exhausted"},
 }
 
-// cListRequests is list_requests' index among the provider's counters.
-var cListRequests = len(client.CounterDefs) + len(order.CounterDefs)
+const (
+	cListRequests = iota
+	cIncludePruned
+	cLookupEmpty
+	cLookupRequeues
+)
 
 var _ source.Provider[tree.OrderedRange, Object] = (*Tree)(nil)
 
@@ -75,10 +89,10 @@ func newTree(p *Provider, own bool) (*Tree, error) {
 	// segment is one directory's names.
 	eo.Seed, eo.SeedFirstPage, eo.Structure = false, false, keyrange.StructureOff
 	d := p.description()
+	t := &Tree{p: p, Activity: p.Activity, counterBase: len(d.Counters)}
 	d.Counters = append(d.Counters, treeCounters...)
-	t := &Tree{p: p, Activity: p.Activity}
 	t.client = treeClient{c: p.client, n: &t.requests}
-	ord, err := tree.NewOrdered[Object](dirLister{c: t.client, p: p}, eo, d)
+	ord, err := tree.NewOrdered[Object](dirLister{c: t.client, p: p, t: t}, eo, d)
 	if err != nil {
 		return nil, err
 	}
@@ -104,9 +118,12 @@ func (t *Tree) Expand(ctx context.Context, r tree.OrderedRange, e source.Emitter
 // adapter's and the tree core's (tree.*).
 func (t *Tree) Stats() Stats {
 	eng := t.ord.Engine()
-	eng.Set().Set(eng.ID(cListRequests), t.requests.Load())
+	eng.Set().Set(eng.ID(t.counterBase+cListRequests), t.requests.Load())
+	eng.Set().Set(eng.ID(t.counterBase+cIncludePruned), t.includePruned.Load())
+	eng.Set().Set(eng.ID(t.counterBase+cLookupEmpty), t.lookupEmpty.Load()+t.lookupStalled.Load())
+	eng.Set().Set(eng.ID(t.counterBase+cLookupRequeues), t.lookupRequeues.Load())
 	st := t.p.stats(eng)
-	st.Listing, st.Pruning, st.PrunedDirs = "tree", t.pruning.Load(), t.Walker.Stats().Excluded
+	st.Listing, st.Pruning, st.PrunedDirs = "tree", t.pruning.Load(), max(0, t.Walker.Stats().Excluded-t.includePruned.Load())
 	return st
 }
 
@@ -136,10 +153,11 @@ func (c treeClient) List(ctx context.Context, in *client.ListInput) (*client.Lis
 }
 
 // dirLister is the ordered mode's Lister: one directory's names through
-// the Expand's byte-order adapter, and Lookup as one listing request.
+// the Expand's byte-order adapter, and Lookup as a listing with at most one entry.
 type dirLister struct {
 	c treeClient
 	p *Provider
+	t *Tree
 }
 
 var _ tree.Lister[Object] = dirLister{}
@@ -173,17 +191,46 @@ func (l dirLister) List(ctx context.Context, q *tree.DirQuery) (*tree.DirPage[Ob
 // named name, if there is one, sorts before every other name it begins.
 // Its row is a directory's, which no include adds to, so it sends none.
 func (l dirLister) Lookup(ctx context.Context, dir, name string) (tree.Entry[Object], bool, error) {
-	out, err := l.c.List(ctx, &client.ListInput{Container: l.p.opt.Container, Prefix: dir + name, Delimiter: "/", MaxResults: 1})
-	if err != nil {
-		return tree.Entry[Object]{}, false, err
+	in := &client.ListInput{Container: l.p.opt.Container, Prefix: dir + name, Delimiter: "/", MaxResults: 1}
+	var seen *keyrange.TokenWindow
+	var empty int
+	var wait time.Duration
+	for {
+		out, err := l.c.List(ctx, in)
+		if objhttp.Requeue(err) {
+			l.t.lookupRequeues.Add(1)
+			if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
+				return tree.Entry[Object]{}, false, err
+			}
+			continue
+		}
+		if err != nil {
+			return tree.Entry[Object]{}, false, err
+		}
+		if len(out.Items) > 0 {
+			it := &out.Items[0]
+			if it.Name == in.Prefix && it.Dir {
+				return tree.Entry[Object]{Name: name, Dir: true, Data: l.object(it)}, true, nil
+			}
+			return tree.Entry[Object]{}, false, nil
+		}
+		if out.NextMarker == "" {
+			return tree.Entry[Object]{}, false, nil
+		}
+		if seen == nil {
+			seen = keyrange.NewTokenWindow(in.Marker)
+		}
+		if !seen.Add(out.NextMarker) {
+			return tree.Entry[Object]{}, false, source.Violation(fmt.Errorf("%w: directory lookup repeats an empty continuation marker", objhttp.ErrInvalidPage))
+		}
+		empty++
+		if empty <= keyrange.EmptyChainLive {
+			l.t.lookupEmpty.Add(1)
+		} else {
+			l.t.lookupStalled.Add(1)
+		}
+		in.Marker, wait = out.NextMarker, 0
 	}
-	if len(out.Items) == 0 && out.NextMarker != "" {
-		return tree.Entry[Object]{}, false, source.Violation(fmt.Errorf("%w: empty continuing lookup of directory %q", objhttp.ErrInvalidPage, dir+name))
-	}
-	if len(out.Items) == 0 || out.Items[0].Name != dir+name || !out.Items[0].Dir {
-		return tree.Entry[Object]{}, false, nil
-	}
-	return tree.Entry[Object]{Name: name, Dir: true, Data: l.object(&out.Items[0])}, true, nil
 }
 
 // object is an entry's row payload: a file's as a flat listing makes it
@@ -216,11 +263,12 @@ var (
 	_ source.Requested = (*OpenedTree)(nil)
 )
 
-func openTree(p *Provider, own bool) (*OpenedTree, error) {
+func openTree(p *Provider, own bool, includePrefix string) (*OpenedTree, error) {
 	t, err := newTree(p, own)
 	if err != nil {
 		return nil, err
 	}
+	t.includePrefix = includePrefix
 	b, err := bind.Provider[tree.OrderedRange, Object](t, &Schema)
 	if err != nil {
 		return nil, err
@@ -241,6 +289,16 @@ func (o *OpenedTree) PruneDirectories(spec *filter.Spec) error {
 	if err != nil {
 		return err
 	}
+	if prefix := o.t.includePrefix; prefix != "" {
+		exclude := prune
+		prune = func(dir string) bool {
+			if !strings.HasPrefix(dir, prefix) && !strings.HasPrefix(prefix, dir) {
+				o.t.includePruned.Add(1)
+				return true
+			}
+			return exclude != nil && exclude(dir)
+		}
+	}
 	o.t.SetPruneDirectories(prune)
 	o.t.pruning.Store(&plan)
 	return nil
@@ -255,7 +313,10 @@ func (o *OpenedTree) Listed() int64 {
 // Frontier is the walk's key-space progress (source.Advancing), which the
 // watchdog takes in place of Answered: an empty continuing page answers
 // but does not advance.
-func (o *OpenedTree) Frontier() (advanced, emptyChained int64) { return o.t.ord.Frontier() }
+func (o *OpenedTree) Frontier() (advanced, emptyChained int64) {
+	advanced, emptyChained = o.t.ord.Frontier()
+	return advanced + o.t.lookupEmpty.Load(), emptyChained + o.t.lookupStalled.Load()
+}
 
 // Locator records the root without its SAS.
 func (o *OpenedTree) Locator() source.Locator {

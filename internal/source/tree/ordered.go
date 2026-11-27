@@ -28,8 +28,8 @@ import (
 // engine works on keys, the store on names: a file's key is its name, a
 // directory's its name + "/", so a directory sorts after its siblings that
 // extend its name with a byte below '/' (a-b < a/), while the store lists it
-// first. fetch translates (docs/internals/tree-sources.md, "The ordered
-// mode: names to keys").
+// first. fetch translates (docs/internals/tree-sources.md, "Azure ordered
+// directories").
 
 // Entry is one entry of a directory as a Lister lists it.
 type Entry[P any] struct {
@@ -477,9 +477,10 @@ func (o *Ordered[P]) know(dir string) *known[P] {
 	k := o.known[dir]
 	if k == nil {
 		if len(o.known) >= maxKnownRecords {
-			// Any record may be evicted: it only saves lookups. Active
-			// readers retain their own bounded record until they finish.
-			for d := range o.known {
+			// Any record may be evicted: it only saves lookups. Clear it
+			// even if a reader is still using it, to keep the aggregate cap.
+			for d, record := range o.known {
+				record.discard()
 				delete(o.known, d)
 				break
 			}
@@ -501,13 +502,15 @@ func (o *Ordered[P]) forget(dir string) {
 }
 
 // maxKnownEntries caps each record's combined spans, directories and negative
-// lookups; maxKnownRecords caps cached directory records. Retained entries
-// are bounded by their product, plus one bounded record per active reader.
+// lookups; maxKnownRecords caps cached directory records. Keep only one
+// default-size directory page of evidence per record and a small number of
+// records, because retained directory payloads sit outside the order
+// budget.
 // requeueFirstWait and requeueMaxWait bound a requeued first page's
 // or inner resolution page's backoff.
 var (
-	maxKnownEntries  = 4096
-	maxKnownRecords  = 256
+	maxKnownEntries  = 1024
+	maxKnownRecords  = 8
 	requeueFirstWait = 1 * time.Second
 	requeueMaxWait   = 30 * time.Second
 )
@@ -517,8 +520,15 @@ var (
 type known[P any] struct {
 	mu    sync.Mutex
 	spans []span
-	dirs  map[string]Entry[P] // directories seen or looked up
+	dirs  map[string]Entry[P] // directories seen or looked up, nil after eviction
 	none  []string            // candidates looked up and absent
+}
+
+// discard clears an evicted record and stops active readers refilling it.
+func (k *known[P]) discard() {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.spans, k.dirs, k.none = nil, nil, nil
 }
 
 // span is a name interval read whole: (lo, hi], or [lo, hi] with loIn; to
@@ -537,6 +547,9 @@ func (s span) holds(n string) bool {
 func (k *known[P]) read(in *DirQuery, pg *DirPage[P]) (reset bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.dirs == nil {
+		return false
+	}
 	s := span{lo: in.After, end: !pg.Truncated}
 	if in.Token != "" {
 		if len(pg.Entries) == 0 {
@@ -553,6 +566,9 @@ func (k *known[P]) read(in *DirQuery, pg *DirPage[P]) (reset bool) {
 	for _, e := range pg.Entries {
 		if e.Dir {
 			k.dirs[e.Name] = e
+			if k.trim() {
+				return true
+			}
 		}
 	}
 	return k.trim()
@@ -581,6 +597,9 @@ func (k *known[P]) dirAt(name string) (Entry[P], bool, bool) {
 func (k *known[P]) found(name string, e Entry[P], ok bool) (reset bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.dirs == nil {
+		return false
+	}
 	if ok {
 		k.dirs[name] = e
 	} else {

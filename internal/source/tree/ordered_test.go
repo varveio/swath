@@ -565,3 +565,37 @@ func TestOrderedEmptyTokenCycle(t *testing.T) {
 		})
 	}
 }
+
+func TestOrderedCacheDefaults(t *testing.T) {
+	o, err := NewOrdered[obj](newHNS(nil), keyrange.Options{Workers: 1}, keyrange.Description[obj]{Target: "hns", Listing: keyrange.Listing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := make(map[string]*known[obj])
+	for i := range 9 {
+		dir := fmt.Sprint(i)
+		record := o.know(dir)
+		record.found("entry", entryOf("entry/"), true)
+		records[dir] = record
+	}
+	if got := len(o.known); got != 8 || counter(o, "tree.record_evictions") != 1 {
+		t.Fatalf("retained %d directory records, %d evictions, want 8 records and one eviction", got, counter(o, "tree.record_evictions"))
+	}
+	for dir, record := range records {
+		if o.known[dir] == record {
+			continue
+		}
+		record.read(&DirQuery{}, &DirPage[obj]{Entries: []Entry[obj]{entryOf("entry/")}})
+		record.found("missing", Entry[obj]{}, false)
+		if len(record.spans)+len(record.dirs)+len(record.none) != 0 {
+			t.Fatalf("an evicted reader retained evidence for %q", dir)
+		}
+	}
+	k := o.know("large")
+	for i := range 1025 {
+		k.found(fmt.Sprint(i), Entry[obj]{Dir: true}, true)
+	}
+	if len(k.dirs) != 0 {
+		t.Fatalf("retained %d directory entries after hitting the default cap", len(k.dirs))
+	}
+}

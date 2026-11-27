@@ -102,7 +102,7 @@ Azure's own:
   listing](../filters.md#what-narrows-the-listing)). When the source URL cannot carry that prefix beside its
   SAS, swath lists the URL as given and filters the rows, and the report says why (`invocation.narrowing`
   `provider_declined_prefix`). For a hierarchical namespace, narrowing uses a directory boundary
-  that retains any matching directory row; the row filter applies the exact include.
+  that retains any matching directory row and skips unrelated subtrees; the row filter applies the exact include.
 - A run with such an include that was interrupted under 0.4.0 must be finished with 0.4.0: 0.4.0 listed the
   whole source URL, this release lists the narrowed prefix, so `swath resume` refuses the run (exit 2).
 - The report has no cost estimate for an Azure listing.

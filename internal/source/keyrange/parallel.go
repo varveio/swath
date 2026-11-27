@@ -47,6 +47,7 @@ const (
 	fromSeed
 	fromLower
 	fromUpper
+	fromWithin
 )
 
 // pivotSource is the synthesis that made a split's pivot; srcBound marks a
@@ -566,7 +567,10 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 	// end, the split cursor and the end. llo is above the request bound
 	// after an unsafe resume key, whose keys up to K are dropped; a fence is
 	// declared only at a bound the provider accepts or at K itself.
-	fence, _ := e.(source.Fencer)
+	var fence source.Fencer
+	if !r.scoped {
+		fence, _ = e.(source.Fencer)
+	}
 	wait, _ := e.(source.Awaiter) // the account's only: whether the output waits for r
 	llo := max(r.lo, r.after)
 	k := p.resumeKey()
@@ -800,7 +804,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			p.tracePage(r, st, before, c, n, pageNs, done)
 		}
 		if done {
-			p.covered(r.lo, r.hi, r.open)
+			if !r.scoped {
+				p.covered(r.lo, r.hi, r.open)
+			}
 			return faults.At("range-done")
 		}
 		// The pivot is placed outside the decision mutex, on this snapshot
@@ -854,7 +860,9 @@ func (p *Engine[P]) expandRange(ctx context.Context, r Range, e source.Emitter[R
 			if err := faults.At("split"); err != nil {
 				return err
 			}
-			p.covered(r.lo, c, false)
+			if !r.scoped {
+				p.covered(r.lo, c, false)
+			}
 			fenceAt(c, false)
 			if err := e.Child(lower); err != nil {
 				return err
@@ -894,7 +902,7 @@ func (p *Engine[P]) ceiling(r Range) (string, bool) {
 // seed, prior, structure probes and end checks do not apply to it.
 func (p *Engine[P]) Within(scope, after string) Range {
 	hi, bounded := prefixCeil(scope)
-	r := Range{lo: strings.Clone(after), hi: hi, open: !bounded, scope: strings.Clone(scope), scoped: true, born: fromSeed, id: p.ids.Add(1)}
+	r := Range{lo: strings.Clone(after), hi: hi, open: !bounded, scope: strings.Clone(scope), scoped: true, born: fromWithin, id: p.ids.Add(1)}
 	p.lock()
 	p.account(time.Now())
 	p.queued++

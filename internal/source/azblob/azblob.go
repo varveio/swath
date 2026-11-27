@@ -196,6 +196,7 @@ type Stats struct {
 	// (the Data Lake host refused the flat account for soft delete or blob
 	// events), "listing" (a hierarchical item) or "asserted" (--azure-assume-flat).
 	Namespace              string            `json:"namespace"`
+	NamespaceProbeRequests int64             `json:"namespace_probe_requests,omitempty"`
 	NamespaceProbeRequeues int64             `json:"namespace_probe_requeues,omitempty"`
 	NoVerifySSL            bool              `json:"no_verify_ssl,omitempty"` // --no-verify-ssl: certificates were not verified
 	MeanActive             float64           `json:"mean_active"`
@@ -222,7 +223,8 @@ type provider[P any] struct {
 	creds            string
 	route            string // the URL the container's requests go to ("" with a supplied Client that is not Routed)
 	namespace        string // how admission determined the namespace (Stats.Namespace)
-	probeRequeues    int64  // exhausted namespace listing probes requeued during admission
+	probeRequests    int64
+	probeRequeues    int64 // exhausted namespace listing probes requeued during admission
 	schema           *schema.Schema[P]
 	row              func(*provider[P], *client.Item) P // a listed blob's payload
 	size             func(*P) int64
@@ -246,7 +248,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	if opt.AllVersions {
 		return nil, errors.New("Azure Blob: Options.AllVersions lists every entry: use NewVersions")
 	}
-	return build(ctx, opt, &Schema, (*Provider).object, func(o *Object) int64 { return o.Size })
+	return build(ctx, opt, false, &Schema, (*Provider).object, func(o *Object) int64 { return o.Size })
 }
 
 // NewVersions builds a provider of every entry of each name (versions,
@@ -256,16 +258,16 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 // (keyrange's group mode).
 func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	opt.AllVersions = true
-	return build(ctx, opt, &VersionSchema, (*VersionsProvider).version, func(v *Version) int64 { return v.Size })
+	return build(ctx, opt, false, &VersionSchema, (*VersionsProvider).version, func(v *Version) int64 { return v.Size })
 }
 
-func build[P any](ctx context.Context, opt Options, s *schema.Schema[P], row func(*provider[P], *client.Item) P, size func(*P) int64) (*provider[P], error) {
+func build[P any](ctx context.Context, opt Options, probeTree bool, s *schema.Schema[P], row func(*provider[P], *client.Item) P, size func(*P) int64) (*provider[P], error) {
 	p, own, err := connect[P](ctx, opt)
 	if err != nil {
 		return nil, err
 	}
 	p.schema, p.row, p.size = s, row, size
-	hns, err := p.admit(ctx, false)
+	hns, err := p.admit(ctx, probeTree)
 	if err != nil {
 		return nil, err
 	}
@@ -386,14 +388,19 @@ func (p *provider[P]) admit(ctx context.Context, probeTree bool) (bool, error) {
 	if ce := (*objhttp.CredentialError)(nil); errors.As(err, &ce) {
 		return false, fmt.Errorf("Azure Blob client: %w", err)
 	}
-	if probeTree && !p.opt.Flat && ctx.Err() == nil && refused(err) {
+	if probeTree && ctx.Err() == nil && !p.unsigned() && class(err) == objhttp.ClassAuth {
+		return false, fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
+	}
+	if probeTree && ctx.Err() == nil && fallback(err) {
 		proved, probeErr := p.probeNamespace(ctx)
 		switch {
 		case ctx.Err() != nil:
 			return false, context.Cause(ctx)
 		case errors.As(probeErr, new(*objhttp.CredentialError)):
 			return false, fmt.Errorf("Azure Blob client: %w", probeErr)
-		case probeErr != nil && !refused(probeErr):
+		case !p.unsigned() && class(probeErr) == objhttp.ClassAuth:
+			return false, fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, probeErr)
+		case probeErr != nil && !p.opt.Flat && !refused(probeErr):
 			return false, fmt.Errorf("Azure Blob: account %s: namespace listing probe: %w", p.opt.Account, probeErr)
 		case proved:
 			hns, how, err = true, "listing", nil
@@ -431,6 +438,7 @@ func (p *provider[P]) probeNamespace(ctx context.Context) (bool, error) {
 	in := &client.ListInput{Container: p.opt.Container, Prefix: dir, Delimiter: "/", MaxResults: 1, Tree: true}
 	var wait time.Duration
 	for {
+		p.probeRequests++
 		out, err := p.client.List(ctx, in)
 		switch {
 		case err == nil:
@@ -632,7 +640,7 @@ func (p *provider[P]) stats(eng *keyrange.Engine[P]) Stats {
 		eng.Set().Set(eng.ID(client.CXMLItems), f.XMLItems)
 	}
 	e := eng.Stats()
-	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NamespaceProbeRequeues: p.probeRequeues, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
+	st := Stats{Anonymous: p.anonymous, Credentials: p.creds, Namespace: p.namespace, NamespaceProbeRequests: p.probeRequests, NamespaceProbeRequeues: p.probeRequeues, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
 		MeanActive: e.MeanActive, Counters: e.Counters}
 	return st
 }

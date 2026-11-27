@@ -137,7 +137,9 @@ there too, another failure, no Data Lake host) is unknown. For current blobs, a 
 establish HNS; otherwise the source refuses unless `--azure-assume-flat` asserts a flat namespace.
 A reported hierarchical namespace always selects tree listing, even beside that assertion. The probe
 requeues transient failures with the admission backoff and preserves cancellation;
-`namespace_probe_requeues` reports those outer retries when nonzero.
+`namespace_probe_requests` counts probe attempts and `namespace_probe_requeues` reports outer retries
+when nonzero. An assertion still permits probing an unknown namespace; an affirmative HNS answer
+always wins. Signed authentication failures retain their class without fallback listing.
 The assertion is the identity's `flat_asserted` field and the report's `namespace` (`account information`,
 `filesystem properties`, `filesystem endpoint blocked`, `listing`, or `asserted`, with a warning for the assertion), so a wrong one is visible. A refusal is
 `source.Unsupported` (exit 2, class `refused`, cause `unsupported`, the message naming the account and the
@@ -155,7 +157,10 @@ for this mode. Include narrowing uses a directory boundary inside the original s
 matching directory row by starting from its parent. Directory rows retain their listing properties but leave optional metadata, tags and immutability fields
 null. The root directory is omitted. Tree capabilities refuse resume, seeds and range traces; `--max-keys`, sequential
 and grouped listings require a flat namespace. See [tree sources](../tree-sources.md) for ownership,
-pruning, continuation and bounded lookup evidence.
+pruning, continuation and bounded lookup evidence. Include narrowing skips subtrees disjoint from the
+inferred prefix (`tree.include_prefix_pruned`), separately from recursive-exclude pruning. Candidate
+lookups follow empty continuation pages (`tree.lookup_empty_pages`) and retry exhausted transient reads
+at the current marker (`tree.lookup_requeues`).
 
 ## Order: the byte-order adapter
 

@@ -262,8 +262,10 @@ records `no_dirs` in `coverage.filters`):
 Under `--metadata names` (no stat) the stat columns are null.
 
 **Azure hierarchical directories.** A directory row uses its name with a trailing `/`; the source root
-itself is omitted. It uses `swath/azure-objects/v1`, with no extra kind column. Directory rows contribute
-no object count or object bytes. Optional metadata, tags and immutability fields stay null on directories.
+itself is omitted. It uses `swath/azure-objects/v1`, with no extra kind column. Dataset totals and `du`
+count these rows as objects and sum their reported size (normally zero); a trailing slash cannot
+distinguish a directory from a flat namespace's real marker blob. The tree source's diagnostic counters
+separate files and directories. Optional metadata, tags and immutability fields stay null on directories.
 
 **Totals from a local dataset.** A directory's `size` and `last_modified` are its own, never its subtree's, and
 the root has no row. Summing `size` over every row gives entry bytes, directories' own `st_size` included: not

@@ -98,7 +98,10 @@ func OpenNarrowed(ctx context.Context, root, original string, opt Options) (Inve
 				p.opt.Prefix = dir
 			}
 		}
-		return openTree(p, own)
+		if original == "" {
+			narrowed = ""
+		}
+		return openTree(p, own, narrowed)
 	}
 	p.opt.Prefix = narrowed
 	if err := p.flat(own); err != nil {
@@ -113,7 +116,8 @@ func OpenVersions(ctx context.Context, root string, opt Options) (*Opened[Versio
 	if err := opt.setRoot(root); err != nil {
 		return nil, err
 	}
-	p, err := NewVersions(ctx, opt)
+	opt.AllVersions = true
+	p, err := build(ctx, opt, true, &VersionSchema, (*VersionsProvider).version, func(v *Version) int64 { return v.Size })
 	if err != nil {
 		return nil, err
 	}

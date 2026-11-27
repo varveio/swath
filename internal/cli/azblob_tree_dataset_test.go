@@ -169,6 +169,9 @@ func TestTreeNarrowedScope(t *testing.T) {
 					r.Output.RowsEmitted, "az://acct/c/"+tc.scope, tc.reason, tc.wantRows)
 			}
 			for _, req := range store.Log() {
+				if req.In.Prefix == "d/other/" {
+					t.Error("traversed a subtree disjoint from the inferred include prefix")
+				}
 				if !strings.HasPrefix(req.In.Prefix, tc.scope) {
 					t.Errorf("listed %q outside %q", req.In.Prefix, tc.scope)
 				}

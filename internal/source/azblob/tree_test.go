@@ -560,9 +560,9 @@ func TestTreeProbeAdmissionRetries(t *testing.T) {
 				t.Fatal(err)
 			}
 			st := o.Report().Stats.(*Stats)
-			if n := len(store.Log()); n != 2 || st.Namespace != "listing" || st.NamespaceProbeRequeues != 1 {
-				t.Fatalf("admission: %d attempts, namespace %q, %d requeues; want two attempts, listing, and one requeue",
-					n, st.Namespace, st.NamespaceProbeRequeues)
+			if n := len(store.Log()); n != 2 || st.Namespace != "listing" || st.NamespaceProbeRequests != 2 || st.NamespaceProbeRequeues != 1 {
+				t.Fatalf("admission: %d attempts, namespace %q, report counts %d requests and %d requeues",
+					n, st.Namespace, st.NamespaceProbeRequests, st.NamespaceProbeRequeues)
 			}
 		})
 	}
@@ -576,5 +576,98 @@ func TestTreeProbeAdmissionKeepsPermanentFailure(t *testing.T) {
 	_, err := Open(context.Background(), "az://acct/c", Options{Client: refusedInfo{store}, Workers: 1})
 	if objhttp.Classify(err) != objhttp.ClassNotFound || len(store.Log()) != 1 {
 		t.Fatalf("admission: %v, %d probes; want the not-found failure without retries", err, len(store.Log()))
+	}
+}
+
+type silentInfo struct{ API }
+
+func (silentInfo) AccountInfo(context.Context, string) (bool, error) {
+	return false, client.ErrHNSUnknown
+}
+
+func TestTreeAdmissionProbeOverridesAssertion(t *testing.T) {
+	store := azblobtest.NewTreeStore([]string{"a/b"})
+	for _, api := range []API{silentInfo{store}, refusedInfo{store}} {
+		var warnings int
+		opt := Options{Client: api, Flat: true, Workers: 1, Warn: func(string, string) { warnings++ }}
+		opened, err := Open(context.Background(), "az://acct/c", opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := opened.(*OpenedTree); !ok || opened.Report().Stats.(*Stats).Namespace != "listing" || warnings != 0 {
+			t.Fatalf("%T: opened %+v with %d warnings, want HNS by listing", api, opened, warnings)
+		}
+		if _, err := OpenVersions(context.Background(), "az://acct/c", opt); !errors.Is(err, source.ErrUnsupported) {
+			t.Fatalf("%T: all-version admission %v, want HNS refusal", api, err)
+		}
+	}
+}
+
+type lookupPages struct {
+	*azblobtest.TreeStore
+	list func(*client.ListInput) (*client.ListOutput, error)
+}
+
+func (a lookupPages) List(_ context.Context, in *client.ListInput) (*client.ListOutput, error) {
+	return a.list(in)
+}
+
+func TestTreeLookupContinues(t *testing.T) {
+	for _, cycle := range []bool{false, true} {
+		t.Run(fmt.Sprint(cycle), func(t *testing.T) {
+			var markers []string
+			api := lookupPages{TreeStore: azblobtest.NewTreeStore(nil), list: func(in *client.ListInput) (*client.ListOutput, error) {
+				markers = append(markers, in.Marker)
+				switch len(markers) {
+				case 1:
+					return &client.ListOutput{NextMarker: "marker-a"}, nil
+				case 2:
+					if cycle {
+						return &client.ListOutput{NextMarker: "marker-b"}, nil
+					}
+					return nil, treeExhausted()
+				case 3:
+					if cycle {
+						return &client.ListOutput{NextMarker: "marker-a"}, nil
+					}
+					return &client.ListOutput{Items: []client.Item{{Name: "d/a", Dir: true}}}, nil
+				default:
+					return nil, errors.New("unexpected extra lookup request")
+				}
+			}}
+			o := mustOpenTree(t, api, "", 1, 1)
+			l := dirLister{c: o.t.client, p: o.t.p, t: o.t}
+			entry, found, err := l.Lookup(context.Background(), "d/", "a")
+			if cycle {
+				if !errors.Is(err, objhttp.ErrInvalidPage) || !slices.Equal(markers, []string{"", "marker-a", "marker-b"}) {
+					t.Fatalf("cycle: %v, markers %q", err, markers)
+				}
+				return
+			}
+			if err != nil || !found || entry.Name != "a" || !entry.Dir || !slices.Equal(markers, []string{"", "marker-a", "marker-a"}) {
+				t.Fatalf("lookup: %+v found=%v err=%v, markers %q", entry, found, err, markers)
+			}
+			stats := o.t.Stats().Counters
+			advanced, stalled := o.Frontier()
+			if stats.Value("tree.lookup_empty_pages") != 1 || stats.Value("tree.lookup_requeues") != 1 || advanced != 1 || stalled != 0 {
+				t.Fatalf("lookup accounts: %d empty, %d requeues, frontier %d/%d", stats.Value("tree.lookup_empty_pages"),
+					stats.Value("tree.lookup_requeues"), advanced, stalled)
+			}
+		})
+	}
+}
+
+type rejectedCredentialInfo struct{ API }
+
+func (rejectedCredentialInfo) AccountInfo(context.Context, string) (bool, error) {
+	return false, &client.Error{Status: 403, Code: "AuthenticationFailed"}
+}
+
+func TestTreeAdmissionDoesNotProbeRejectedCredential(t *testing.T) {
+	store := azblobtest.NewTreeStore([]string{"a/b"})
+	opt := Options{Client: rejectedCredentialInfo{store}, Flat: true, Workers: 1}
+	_, err := Open(context.Background(), "az://acct/c", opt)
+	if objhttp.Classify(err) != objhttp.ClassAuth || len(store.Log()) != 0 {
+		t.Fatalf("admission: %v, %d probe requests; want the original authentication failure", err, len(store.Log()))
 	}
 }

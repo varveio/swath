@@ -53,7 +53,8 @@ A directory fitting in its first page is emitted whole. A larger directory emits
 remaining interval through `keyrange.Engine.Within`. That interval is local to the directory, not a
 namespace-wide recovery fence. Splits can start between a directory's name and its slash-suffixed key;
 `Lookup` resolves candidate directories behind the name seek that still belong ahead of the key cursor.
-Bounded per-directory evidence saves repeated lookups. Dropping evidence changes request cost, not output.
+The cache keeps up to eight directory records, each with up to 1,024 entries of evidence. Active
+readers fall back to lookups when their record is evicted.
 
 The reader retains held rows and continuation state while retrying a later name page. Restarting the whole
 logical page would replay already-consumed adapter tokens. First-page and resolution requeues use the

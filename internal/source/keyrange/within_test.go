@@ -126,3 +126,30 @@ func TestWithinIgnoresFlatScope(t *testing.T) {
 		t.Fatal("a directory row became a flat end-check witness")
 	}
 }
+
+type withinFencer struct {
+	direct
+	spans, fences int
+}
+
+func (e *withinFencer) Span(string, string, bool) { e.spans++ }
+func (e *withinFencer) Fence(string, bool)        { e.fences++ }
+
+func TestWithinOmitsFlatCoverage(t *testing.T) {
+	covered := 0
+	e, err := newTest(newSorted([]string{"p/a", "p/b"}, false, 1),
+		Options{Workers: 1, Trace: func(string, string, bool) { covered++ }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &withinFencer{direct: direct{&collect{}}}
+	if err := e.Expand(context.Background(), e.Within("p/", "p/a"), out); err != nil {
+		t.Fatal(err)
+	}
+	if got := keysOf(out.c.rows); !slices.Equal(got, []string{"p/b"}) {
+		t.Fatalf("got %q, want only p/b", got)
+	}
+	if out.spans != 0 || out.fences != 0 || covered != 0 {
+		t.Fatalf("scoped range advertised flat coverage: %d spans, %d fences, %d covered intervals", out.spans, out.fences, covered)
+	}
+}
