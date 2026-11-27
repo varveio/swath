@@ -24,6 +24,61 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## Vercel Blob conformance (2026-11-27)
+
+Private store in iad1, Blob HTTP API version 13, Go 1.27.4 on Linux arm64.
+The implementation build on [PR #715](https://github.com/varveio/swath/pull/715)
+was stacked on the shared tree reader in #707. These are correctness checks,
+not production throughput measurements. Raw requests were paced at 10/s and CLI
+requests at 12/s. Every run used a new prefix; uploads refused overwrite and
+cleanup used the uploaded objects' ETags as deletion preconditions.
+
+| Check | Corpus | Result |
+|---|---|---|
+| Independent expanded versus recursive folded HTTP walks | 1,041 objects, 20,634 bytes | all 20 cases exact by key, size, upload time and ETag; both modes filled 1,000-entry pages |
+| Compiled CLI, one and eight workers | 29 edge-case objects, 411 bytes | all 20 cases passed: text, partial prefixes, markers, small pages, absent prefixes, live and saved `du`, Parquet, deadline and resume refusal |
+| Independent wide HTTP fake | 3,457 rows, 1,123 child folders, depth 32 | exact at one and eight workers under the race detector; dropping a terminal-page row failed both |
+
+The wide live whole-prefix listing took two expanded requests versus 22 folded
+requests over 21 prefixes. The edge cases included NFC/NFD pairs, supplementary
+Unicode characters, literal URL characters, repeated interior slashes, real
+zero-byte markers, virtual-only folders, and object/folder name collisions.
+The service rejected the setup attempts to upload nonempty trailing-slash blobs
+and a zero-byte name ending in two slashes; these are not claimed as live-listed
+shapes. The fake also exercises such names without depending on upload policy.
+
+The two 29-row Parquet files were byte-identical and passed all 28 checks of
+`verify.py` each; live and saved `du` both reported 29 objects and 411 bytes.
+A rate-limited deadline stopped after one HTTP request with exit 124 and no
+manifest; resume returned exit 2. Dataset reports recorded:
+
+| Workers | HTTP requests | Peak active HTTP | Headroom waits | Peak staged bytes |
+|---|---|---|---|---|
+| 1 | 20 | 1 | 0 | 2,655 |
+| 8 | 20 | 4 | 13 | 2,655 |
+
+The four-page response reservation engaged at eight workers. These small
+inventories do not establish memory usage or speed on large flat stores.
+
+The first wide CLI campaign reached Parquet verification after its exact text
+and live `du` checks passed, then the local Python timestamp conversion failed
+because `pytz` was absent. Its temporary dataset was removed. The verifier was
+changed to read epoch microseconds and checked offline before the smaller live
+campaign. It is the smaller campaign's two datasets that are retained.
+
+All task-owned uploaded blobs were conditionally deleted and every campaign
+prefix verified empty. Setup and cleanup encountered throttling before pacing
+was introduced. There were 6,570 recorded raw/setup/cleanup attempts plus 199
+GETs in the successful CLI campaign; the interrupted wide CLI campaign's requests
+are not included in that total. Public stores, concurrent service-side writes,
+long-lived cursors, live folders with over 1,000 child prefixes, and process-kill
+recovery remain unqualified. Tree datasets do not support resume.
+
+The owner's retained harness, receipts, binary hashes, raw comparison results and
+two final datasets are in Varve at
+`workspaces:data/swath/vercel-conformance-20261127/implementation`.
+The wide fake is `internal/source/vercel/wide_test.go`.
+
 ## macOS volume boundary checks (2026-11-23)
 
 Commit `fbfb8344`, Go 1.27.4, GitHub Actions `macos-latest` arm64, on the

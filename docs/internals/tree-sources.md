@@ -70,7 +70,8 @@ and split directories, held directories, candidate lookups, retries, and evidenc
 range-engine counters describe segment work. Azure reports requests for the whole walk and shares HTTP
 activity with the watchdog.
 
-Neither the generic walker, Azure HNS nor the token-only folder walks declares durable coverage fences or resume support. Tree resume and unordered-directory spill are not implemented here.
+Neither the generic walker, Azure HNS nor the token-only folder walks declares durable coverage fences
+or resume support. Tree resume and unordered-directory spill are not implemented here.
 
 ## Token-only delimited folders
 

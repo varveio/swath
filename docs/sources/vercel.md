@@ -74,6 +74,6 @@ remain unavailable in the saved inventory view.
 - swath publishes the complete result of the live listing it performed. It is
   not a point-in-time snapshot of a store that changes during the run.
 
-The API supports public and private stores, but the initial service evidence is a private store; public-store behavior and cursor
+The API supports public and private stores, but the [initial service evidence](../internals/measurements.md#vercel-blob-conformance-2026-11-27) is a private store; public-store behavior and cursor
 lifetime across long interruptions have not been established. The folder walker
 does not rely on Vercel's native ordering or persist cursors between runs.

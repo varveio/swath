@@ -30,6 +30,7 @@ What has also run against the service itself, as recorded in [measurements](../i
 | S3-compatible stores | MinIO only, which omits keys from some listings: swath stops such a listing with `omitted_keys`, but can miss them in a versions listing ([S3-compatible stores](s3.md#s3-compatible-stores)); Cloudflare R2 by key ranges, which can miss keys there, so it is listed folder by folder by default: exact on 21 test shapes and on 83,435 keys at 256 workers, a bucket holding both spellings of a folder name stopping with `protocol` ([Cloudflare R2](s3.md#cloudflare-r2)); Ceph and others not run | not run | fakes only | MinIO access keys |
 | Google Cloud Storage | a bucket of 5.1 million objects; public buckets | one small public bucket | yes: the datasets of the 35 S3 buckets | default credentials, anonymous |
 | Azure Blob Storage | a public container of 1.84 million blobs | fakes only | fakes only | anonymous only; SAS, Shared Key and Entra ID not run |
+| Vercel Blob | private store: 1,041 objects against independent expanded/folded walks; CLI and Parquet at one/eight workers on 29 edge-case objects | not supported | not supported | store read-write token |
 
 Runs killed and resumed against a real store are the small versioned runs above and MinIO; every other kill and
 resume is tested against fakes and replays. Credential renewal during a run has not been seen against a real
