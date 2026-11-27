@@ -25,7 +25,7 @@ const (
 	WarnCommitMarker         = "commit_marker_unwritten"       // a dataset in a bucket: the work directory's commit marker is not written
 	WarnAftermath            = "aftermath_unfinished"          // a dataset in a bucket: committed, its orphan cleanup or report not finished
 	WarnReplacedNotRemoved   = "replaced_not_removed"          // --overwrite: the replaced dataset's files were not removed
-	WarnTreeListing          = "tree_listing"                  // S3: listed folder by folder (on R2 by default); a dataset it writes cannot be resumed
+	WarnTreeListing          = "tree_listing"                  // a folder-by-folder listing; a dataset it writes cannot be resumed
 	WarnUnorderedRange       = "range_listing_unordered"       // S3: --s3-listing range on a store that does not list in byte order (R2)
 )
 

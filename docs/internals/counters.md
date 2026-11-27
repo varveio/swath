@@ -511,6 +511,8 @@ the run (`protocol`), so a report shows at most one of them; `tree.limit.*` are 
 | `tree.violations.duplicate` | count | entries |  | an entry listed twice in one folder: the run stops, protocol |
 | `tree.violations.scope_alias` | count | folders |  | a child folder of the start folder outside a source prefix not ending in '/' whose name, decomposed (NFD), begins with the prefix's remainder up to its last starter: it could hold keys of the prefix under another spelling, and the run stops before listing it, protocol |
 | `tree.violations.token` | count | pages |  | a truncated page without a continuation token, or with one the folder already returned: the run stops, protocol |
+| `tree.scope_exact_prefixes` | count | scopes |  | partial scopes filtered by raw bytes on a service that matches and folds prefixes without normalizing names |
+| `tree.scope_exact_aliases` | count | folders |  | out-of-scope folders skipped on a byte-exact service whose normalized names could overlap the partial prefix |
 <!-- s3-tree:end -->
 
 Every object-store attempt is normalized once into an error carrying transient, throttle and timeout

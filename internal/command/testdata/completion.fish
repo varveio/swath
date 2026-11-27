@@ -74,7 +74,7 @@ complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l max-s
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l modified-since -x -d 'keep objects or entries modified at or after TIME (2026-01-01, 7d)'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l modified-until -x -d 'keep objects or entries modified at or before this time'
 complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count"' -l storage-class -x -d 'keep objects in these storage classes (STANDARD,GLACIER; repeatable)'
-complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l workers -s j -x -d 'listing workers (default 64; a local tree: 4 per CPU, at most 64)'
+complete -c swath -n '__swath_cmd "list" "du" "diag list" "diag count" "resume"' -l workers -s j -x -d 'listing workers (normally 64; source-specific defaults may differ)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l encoders -x -d 'Parquet encoders, or a .zst file\'s compression jobs (default: CPUs)'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l sort-buffer -x -d 'bytes buffered for sorted output; not a total-memory limit'
 complete -c swath -n '__swath_cmd "list" "diag list" "diag count" "resume"' -l spill-budget -x -d 'fixed cap on spill (default: follows the spill disk\'s free space)'
@@ -152,13 +152,13 @@ complete -c swath -n '__swath_cmd "resume"' -l adaptive-limit -d 'undo a recorde
 complete -c swath -n '__swath_cmd "resume"' -l no-adaptive-limit-slow-start -d 'undo a recorded --adaptive-limit-slow-start'
 complete -c swath -n '__swath_cmd "show"' -l journal -d 'dump the journal\'s header and records as JSON lines'
 
-complete -c swath -n '__swath_cmd "list"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "list"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "list"' -F
-complete -c swath -n '__swath_cmd "du"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "du"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "du"' -F
-complete -c swath -n '__swath_cmd "diag list"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "diag list"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "diag list"' -F
-complete -c swath -n '__swath_cmd "diag count"' -a 'az:// gs:// s3://'
+complete -c swath -n '__swath_cmd "diag count"' -a 'az:// gs:// s3:// vercel://'
 complete -c swath -n '__swath_cmd "diag count"' -F
 complete -c swath -n '__swath_cmd "resume"' -a '(__fish_complete_directories)'
 complete -c swath -n '__swath_cmd "show"' -a '(__fish_complete_directories)'

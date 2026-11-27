@@ -24,6 +24,82 @@ replay answers instantly otherwise, so it measures coordination and concurrency,
 requests counted by the server (replay, fake or fault proxy). Java is the Java CLI at its defaults
 (concurrency 64, seed `shallow`), version 0.3.3, JDK 25.
 
+## Vercel Blob conformance (2026-11-27)
+
+Private store in iad1, Blob HTTP API version 13, Go 1.27.4 on Linux arm64.
+The implementation build on [PR #715](https://github.com/varveio/swath/pull/715)
+was stacked on the shared tree reader in #707. These are correctness checks,
+not production throughput measurements. Raw requests were paced at 10/s and CLI
+requests at 12/s. Every run used a new prefix; uploads refused overwrite and
+cleanup used the uploaded objects' ETags as deletion preconditions.
+
+| Check | Corpus | Result |
+|---|---|---|
+| Independent expanded versus recursive folded HTTP walks | 1,041 objects, 20,634 bytes | all 20 cases exact by key, size, upload time and ETag; both modes filled 1,000-entry pages |
+| Compiled CLI, one and eight workers | 29 edge-case objects, 411 bytes | all 20 cases passed: text, partial prefixes, markers, small pages, absent prefixes, live and saved `du`, Parquet, deadline and resume refusal |
+| Independent wide HTTP fake | 3,457 rows, 1,123 child folders, depth 32 | exact at one and eight workers under the race detector; dropping a terminal-page row failed both |
+
+The wide live whole-prefix listing took two expanded requests versus 22 folded
+requests over 21 prefixes. The edge cases included NFC/NFD pairs, supplementary
+Unicode characters, literal URL characters, repeated interior slashes, real
+zero-byte markers, virtual-only folders, and object/folder name collisions.
+The service rejected the setup attempts to upload nonempty trailing-slash blobs
+and a zero-byte name ending in two slashes; these are not claimed as live-listed
+shapes. The fake also exercises such names without depending on upload policy.
+
+The two live 29-row Parquet files used the draft `uploaded_at` column; they were
+byte-identical and passed all 28 checks of `verify.py` each. After normalization
+to `last_modified`, new datasets were generated offline from the recorded service
+rows: both again passed all 28 checks and were byte-identical. The historical
+live files were preserved unchanged. Live and saved `du` reported 29 objects and 411 bytes.
+The final 24-case offline replay also verified newest-time reporting and exact inclusive
+modification-time filters against the captured timestamps; the newest value was
+`2026-11-27T19:49:32Z`. This did not establish overwrite behavior on the service.
+A rate-limited deadline stopped after one HTTP request with exit 124 and no
+manifest; resume returned exit 2. Dataset reports recorded:
+
+| Workers | HTTP requests | Peak active HTTP | Headroom waits | Peak staged bytes |
+|---|---|---|---|---|
+| 1 | 20 | 1 | 0 | 2,655 |
+| 8 | 20 | 4 | 13 | 2,655 |
+
+Those initial reports used a four-page response reservation. The updated shared
+walker removed that reservation. Vercel now defaults to four workers and accepts
+higher explicit worker counts. A deterministic eight-way HTTP barrier and a
+21-case captured-service-row CLI replay both reached eight simultaneous requests
+at `-j 8`, with exact output and matching totals. An attempted live recheck could
+list the dedicated store but its first fixture upload returned HTTP 403; no
+objects were created, and the final listing verified the prefix empty. Higher
+post-update concurrency against the live service therefore remains unmeasured.
+These small inventories do not establish memory usage or speed on large flat stores.
+
+Public stores, concurrent service-side writes, long-lived cursors, live folders
+with over 1,000 child prefixes, and process-kill recovery remain unqualified.
+Tree datasets do not support resume. All test prefixes were verified empty after
+cleanup. The maintainers retain the live comparison receipts and final datasets;
+[PR #715](https://github.com/varveio/swath/pull/715) records the validation.
+The [wide fake](https://github.com/varveio/swath/blob/main/internal/source/vercel/wide_test.go) runs in the provider's test suite.
+
+### Folded page decoding cost
+
+The standard-library `json.Decoder` implementation was measured on Linux arm64
+with Go 1.27.4, `GOMAXPROCS=2`, three `-benchtime=250ms` trials. Fixture
+construction and network input were excluded. Medians on this shared host:
+
+| Synthetic page | ms/op | B/op |
+|---|---|---|
+| 1,000 representative blobs | 1.539 | 499,032 |
+| 1,000 blobs with escaped Unicode and extension fields | 1.584 | 513,712 |
+| One ignored extension near the 16 MiB response cap | 25.333 | 33,557,976 |
+
+A cap-sized escaped unknown member name incurred about 64 MiB of decoder
+allocations. B/op is cumulative allocation, not peak heap or RSS, and excludes
+the retained encoded input. There is no separate response-memory reservation.
+These synthetic extremes are not representative service responses or
+throughput measurements. The maintainers retain the benchmark fixtures and full
+measurements; [PR #715](https://github.com/varveio/swath/pull/715) records the
+comparison that informed the choice of decoder.
+
 ## macOS volume boundary checks (2026-11-23)
 
 Commit `fbfb8344`, Go 1.27.4, GitHub Actions `macos-latest` arm64, on the

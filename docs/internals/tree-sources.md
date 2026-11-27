@@ -1,8 +1,8 @@
 # Tree sources (`internal/source/tree`)
 
 The tree core shares ordered child splicing between local filesystems, Azure hierarchical namespaces
-(HNS) and S3's folder walk. Azure uses `Walker` and its seekable-directory reader, `Ordered`. S3's
-`--s3-listing tree` uses `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
+(HNS), S3's folder walk and Vercel Blob. Azure uses `Walker` and its seekable-directory reader, `Ordered`. S3's
+`--s3-listing tree` and Vercel Blob use `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
 own ranges, retaining descriptor ownership, unread-entry reporting, platform readers and count paths.
 
 ## Ordering and ownership
@@ -69,8 +69,8 @@ and split directories, held directories, candidate lookups, retries, and evidenc
 range-engine counters describe segment work. Azure reports requests for the whole walk and shares HTTP
 activity with the watchdog.
 
-Neither the generic walker, Azure HNS nor S3's folder walk declares durable coverage fences or resume
-support. Tree resume, unordered-directory spill and a Vercel Blob provider are not implemented here.
+Neither the generic walker, Azure HNS nor the token-only folder walks declares durable coverage fences
+or resume support. Tree resume and unordered-directory spill are not implemented here.
 
 ## Token-only delimited folders
 
@@ -79,7 +79,8 @@ whose pages need not be in byte order (Cloudflare R2; [S3](../sources/s3.md#clou
 supplies a `FolderLister`: one delimited list call from a prefix and a token ("" for the folder's first page)
 to the objects directly in the folder, as rows of its own payload, its child prefixes as the service spelled
 them, and the next token. S3's is `ListObjectsV2` with `Delimiter: "/"`, never `StartAfter`, its objects
-mapped by the range listing's `rows`.
+mapped by the range listing's `rows`. Vercel uses folded list responses and maps `pathname` to the
+key and `uploadedAt` to `last_modified`, the current blob's reported upload time.
 
 A range is a folder (`FolderRange`). `Read` lists it whole, follows tokens only, and checks every page before
 anything is emitted; a violation stops the run (`protocol`) rather than drop a row:
@@ -125,6 +126,14 @@ segmentable at `/` (no canonical decomposition holds `/`, and `/` composes and r
 them a scope that does not end in `/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing
 are exact in raw bytes, or the run stops.
 
+A provider whose service matches and folds prefixes without normalization sets
+`ExactPrefixes`. Vercel uses this contract: partial scopes apply the same raw-byte
+filter without the normalized-sibling refusal, counted by `tree.scope_exact_prefixes`.
+`tree.scope_exact_aliases` counts skipped folders whose normalized spelling could
+overlap the scope, showing when that provider contract decided the result.
+Raw-prefix, direct-child, duplicate and cursor validation still apply to every page.
+The default remains conservative for stores such as R2 whose folding can merge spellings.
+
 **Memory.** A folder is held whole while it is read. Each page is charged what its strings retain
 (`FolderPage.Retained`: S3's decoded page keeps one arena at its URL-encoded size, so a key of decomposed
 characters costs three times its length) or, where the provider says nothing, their lengths and its
@@ -139,7 +148,8 @@ this way.
 Responses in flight are not separately bounded, as for the range engine: a walk has at most one page in
 flight for each folder being read (the order stage's workers and its drainer, which lists a queued folder
 itself: `--workers` + 1), each body capped by the client's limit (16 MiB, `objhttp`'s guard) until it is
-decoded and charged.
+decoded and charged. Vercel defaults to four workers; an explicit worker count can raise it.
+Decoder buffers and temporary strings are additional memory, not bounded by the staging allowance.
 
 **Coverage.** A walk's report claims its scope only when every folder it handed out was read whole (the start
 folder and each child spliced in); a walk that stopped says it is not complete.
@@ -158,10 +168,9 @@ Tree datasets are not resumable yet.
 
 A token-only ordered API can reuse the walker and continuation segments without `Ordered` or
 `keyrange.Engine`.
-The Vercel investigation observed ordered folded pages with separate blobs and virtual folders; an adapter
-would have to merge them, preserve real markers and validate order across pages. One large flat directory
-would remain a serial cursor chain; tiny folders can amplify requests. Those service contracts and a full
-recursive walker need independent validation before a provider is added.
+A streaming reader would have to preserve real markers and validate byte order across pages.
+Vercel instead uses `Delimited` to sort complete folders, so its walk does not depend on native order.
+One large flat folder remains a serial cursor chain; tiny folders can amplify requests.
 
 Cloudflare R2's observed listing order differs from raw key order even within a directory, and normalization
 can change routing and subtree placement, so its pages cannot feed `Ordered`. `Delimited` sorts each whole

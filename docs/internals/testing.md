@@ -917,14 +917,14 @@ through the seekparquet Go module, so the format's own conformance suite is a ga
 dependencies):
 
 1. It checks out the seekparquet repository at the commit `go.mod` pins (a release's `go/vX.Y.Z` tag, today
-   `go/v0.2.0`; for a pseudo-version, its revision) and runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
+   `go/v0.3.0`; for a pseudo-version, its revision) and runs the suite's harness, `conformance/harness/run.py`, against that module's Go adapter
    (`internal/cmd/conformance`): every target it claims must qualify, the `reader` and the four validator
    levels (`validator-structural`, `-profile`, `-full`, `-digest`), every core and generated case passing.
 2. `inventory` `TestSeekParquetFixtures` (skipped unless `SWATH_SEEKPARQUET_FIXTURES` names a directory) writes
-   three datasets with this build's writer and publication: S3 current objects over four parts whose keys roll
-   up at several depths; S3 versions, keys repeated in groups up to 3,000 rows across pages and row groups
-   (`unique` false); filesystem keys over 1,024 bytes, half led by 1,100 `0xFF` bytes, a third of them symlinks whose link
-targets are as long.
+   four datasets with this build's writer and publication. S3 current objects span four parts with keys
+   that roll up at several depths. S3 versions have keys repeated in groups up to 3,000 rows across pages
+   and row groups (`unique` false). Filesystem keys exceed 1,024 bytes, half led by 1,100 `0xFF` bytes, with
+   symlink targets as long. Vercel objects span three parts with UTC microsecond upload times and opaque ETags.
 3. `scripts/ci/seekparquet_conformance.py` requires every part to declare `sha256` (so the digest level checks
    something), has the suite's reference adapter (a full pyarrow scan that checks every rule it can, page
    indexes and page bounds included) and the Go adapter's validator each validate each dataset at the `full`

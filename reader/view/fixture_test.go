@@ -148,6 +148,8 @@ func extension(id reader.SchemaID) map[string]any {
 	switch id {
 	case reader.GCSObjectsV1:
 		source = map[string]any{"kind": "gcs", "uri": "gs://b", "container": "b"}
+	case reader.VercelObjectsV1:
+		source = map[string]any{"kind": "vercel", "uri": "vercel://store_test", "container": "store_test"}
 	case reader.AzureObjectsV1:
 		source = map[string]any{"kind": "azure", "uri": "az://acct/b", "container": "b"}
 	case reader.LocalV1:
@@ -458,4 +460,16 @@ func sameEntry(e listing.Entry, r rec, isLocal bool) bool {
 	return ok && eq64(e.AllocatedBytes, r.alloc) && e.StorageClass == nil &&
 		deref(e.Inode) == deref(r.inode) && deref(e.Device) == deref(r.dev) && deref(e.Links) == deref(r.links) &&
 		(e.Inode == nil) == (r.inode == nil)
+}
+
+// vercelObjects carries modification times with no storage classes.
+func vercelObjects() []rec {
+	rs := objects()
+	for i := range rs {
+		rs[i].class = nil
+		if rs[i].modified == nil {
+			rs[i].modified = &base
+		}
+	}
+	return rs
 }

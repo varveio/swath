@@ -1,0 +1,24 @@
+GET https://vercel.com/api/blob
+  query limit=1000
+  query mode=folded
+  header Authorization: Bearer <store-token>
+  header User-Agent: swath/<version>
+  header X-Api-Version: 13
+  body 0 bytes
+GET https://vercel.com/api/blob
+  query limit=7
+  query mode=folded
+  query prefix=space+%2B%25%26%3F%2F%23%2F%C3%A9%2F
+  header Authorization: Bearer <store-token>
+  header User-Agent: swath/<version>
+  header X-Api-Version: 13
+  body 0 bytes
+GET https://vercel.com/api/blob
+  query cursor=1%2B%2F%2Fa%3D%3D%3D
+  query limit=7
+  query mode=folded
+  query prefix=space+%2B%25%26%3F%2F%23%2F%C3%A9%2F
+  header Authorization: Bearer <store-token>
+  header User-Agent: swath/<version>
+  header X-Api-Version: 13
+  body 0 bytes

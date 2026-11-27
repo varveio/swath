@@ -62,6 +62,10 @@ type DelimitedOptions[P any] struct {
 	// keeps from that folder only the objects and child folders whose
 	// keys start with Select; below them every key does.
 	Select string
+	// ExactPrefixes declares that the service matches and folds prefixes by
+	// raw bytes without normalizing names. Partial scopes can then skip
+	// out-of-scope folders even when their normalized names overlap.
+	ExactPrefixes bool
 	// FolderBytes bounds what one folder stages while it is read whole
 	// (0: DefaultFolderBytes); StagingBytes bounds what every folder
 	// being read stages at once (0: DefaultStagingBytes). A folder that
@@ -107,6 +111,8 @@ var DelimitedCounters = []counters.Def{
 	{Key: "tree.violations.duplicate", Kind: counters.Count, Unit: "entries", Help: "an entry listed twice in one folder: the run stops, protocol"},
 	{Key: "tree.violations.scope_alias", Kind: counters.Count, Unit: "folders", Help: "a child folder of the start folder outside a source prefix not ending in '/' whose name, decomposed (NFD), begins with the prefix's remainder up to its last starter: it could hold keys of the prefix under another spelling, and the run stops before listing it, protocol"},
 	{Key: "tree.violations.token", Kind: counters.Count, Unit: "pages", Help: "a truncated page without a continuation token, or with one the folder already returned: the run stops, protocol"},
+	{Key: "tree.scope_exact_prefixes", Kind: counters.Count, Unit: "scopes", Help: "partial scopes filtered by raw bytes on a service that matches and folds prefixes without normalizing names"},
+	{Key: "tree.scope_exact_aliases", Kind: counters.Count, Unit: "folders", Help: "out-of-scope folders skipped on a byte-exact service whose normalized names could overlap the partial prefix"},
 }
 
 const (
@@ -135,6 +141,8 @@ const (
 	cViolationDuplicate
 	cViolationScopeAlias
 	cViolationToken
+	cScopeExactPrefixes
+	cScopeExactAliases
 	numDelimitedCounters
 )
 
@@ -416,8 +424,9 @@ func (d *Delimited[P]) grow(prefix string, held *int64, n int64) error {
 }
 
 // scope keeps the entries of the start folder prefix whose raw bytes
-// start with the scope (Select). An object outside it is left out. A
-// child folder F outside it is left out unlisted unless NFD of F's
+// start with the scope (Select). An object outside it is left out. When
+// ExactPrefixes is set, out-of-scope folders are also left out. Otherwise
+// a child folder F outside it is left out unlisted unless NFD of F's
 // segment starts with stem(r), r being the scope's remainder (Select after
 // prefix): then F could hold a key of the scope under another spelling,
 // and the run stops (protocol) before any request to F, naming F and the
@@ -437,6 +446,9 @@ func (d *Delimited[P]) grow(prefix string, held *int64, n int64) error {
 func (d *Delimited[P]) scope(prefix string, entries []entry[P]) ([]entry[P], error) {
 	sel := d.opt.Select
 	r0 := stem(sel[len(prefix):])
+	if d.opt.ExactPrefixes {
+		d.inc(cScopeExactPrefixes)
+	}
 	kept := entries[:0]
 	for _, e := range entries {
 		if strings.HasPrefix(e.row.Key, sel) {
@@ -445,6 +457,10 @@ func (d *Delimited[P]) scope(prefix string, entries []entry[P]) ([]entry[P], err
 		}
 		d.inc(cOutOfScope)
 		if e.folder && strings.HasPrefix(norm.NFD.String(e.row.Key[len(prefix):]), r0) {
+			if d.opt.ExactPrefixes {
+				d.inc(cScopeExactAliases)
+				continue
+			}
 			return nil, d.violation(cViolationScopeAlias, "folder %+q, outside the scope %+q, could hold keys of the scope under another spelling (a store that matches names in Unicode NFC merges them): list a prefix that ends in '/'",
 				e.row.Key, sel)
 		}

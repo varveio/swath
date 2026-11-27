@@ -160,6 +160,9 @@ like every run with an output. `swath resume` on it is an error. S3's folder wal
 source: `s3.OpenedTree` is a view of its own, with the live interfaces (`Live`, `Advancing`, `Requested`,
 `Faulted`), `Identified`, `Capable`, `Reporter` and `Priced`, and none of the range engine's.
 
+Vercel Blob uses the shared token-only folder reader through its own native HTTP client and schema.
+Its provider declares exact prefix matching; it has no range-engine path.
+
 ## Adding a provider
 
 The runtime integration is one directory under `internal/source/` and one file in `internal/cli`.

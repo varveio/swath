@@ -260,7 +260,7 @@ sizes) with exit 2.
 ### Performance
 
 - <a id="option-workers"></a>[`-j, --workers N`](#option-workers)\
-  listing workers (default 64; a local tree: 4 per CPU, at most 64)
+  listing workers (normally 64; source-specific defaults may differ)
 
   Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default.
 

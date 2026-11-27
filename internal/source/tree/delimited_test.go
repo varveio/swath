@@ -419,6 +419,39 @@ func objects(keys ...string) []schema.Row[int64] {
 	return rows
 }
 
+func TestDelimitedExactPrefixes(t *testing.T) {
+	const decomposed, composed = "e\u0301/", "\u00e9/"
+	for _, tc := range []struct {
+		name  string
+		exact bool
+	}{
+		{"byte-exact", true},
+		{"default", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &aliasLister{folders: map[string]*FolderPage[int64]{
+				"":         {Folders: []string{decomposed, composed}},
+				decomposed: {Objects: objects(decomposed + "x")},
+				composed:   {Objects: objects(composed + "y")},
+			}}
+			got, d, _, err := walkDelimited(t, l, DelimitedOptions[int64]{Select: "e", ExactPrefixes: tc.exact})
+			stats := d.opt.Counters.Snapshot()
+			exact := stats.Value("tree.scope_exact_prefixes")
+			aliases := stats.Value("tree.violations.scope_alias")
+			skipped := stats.Value("tree.scope_exact_aliases")
+			if tc.exact {
+				if err != nil || !slices.Equal(got, []string{decomposed + "x"}) ||
+					!slices.Equal(l.prefixes, []string{"", decomposed}) || exact != 1 || aliases != 0 || skipped != 1 {
+					t.Fatalf("keys %q, requests %q, exact %d, aliases %d, skipped aliases %d, err %v", got, l.prefixes, exact, aliases, skipped, err)
+				}
+			} else if !errors.Is(err, source.ErrProtocol) || len(got) != 0 ||
+				!slices.Equal(l.prefixes, []string{""}) || exact != 0 || aliases != 1 || skipped != 0 {
+				t.Fatalf("keys %q, requests %q, exact %d, aliases %d, skipped aliases %d, err %v", got, l.prefixes, exact, aliases, skipped, err)
+			}
+		})
+	}
+}
+
 // TestDelimitedScopeAlias: a child folder of the start folder outside the
 // scope that could hold a key of the scope under another spelling (R2
 // merges e\u0301/ and \u00e9/ into one common prefix, spelled as one of

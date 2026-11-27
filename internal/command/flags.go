@@ -163,7 +163,7 @@ func registerFlags(f *pflag.FlagSet, o *options, diag bool) {
 
 	o.partSize, o.partInterval, o.stall = inventory.DefaultPartSize, inventory.DefaultPartInterval, 10*time.Minute
 	def(cli.Flag{Name: "workers", Familiar: []string{"concurrency"}, Short: "j", Value: cli.Count(&o.workers, 1), Metavar: "N", Group: cli.GroupPerformance,
-		Usage: "listing workers (default 64; a local tree: 4 per CPU, at most 64)",
+		Usage: "listing workers (normally 64; source-specific defaults may differ)",
 		Long:  "Raise it (128, 256) for a large listing the service does not throttle: listing waits on round trips, not the CPU; lower it when it throttles at the default."})
 	def(cli.Flag{Name: "encoders", Value: cli.Count(&o.encoders, 1), Metavar: "N", Group: cli.GroupPerformance, Commands: writing,
 		Usage: "Parquet encoders, or a .zst file's compression jobs (default: CPUs)",

@@ -36,6 +36,7 @@ func TestSummarizeSplitMatchesTheRecords(t *testing.T) {
 	}{
 		{reader.S3ObjectsV1, objects(), nil},
 		{reader.AzureObjectsV1, objects(), nil},
+		{reader.VercelObjectsV1, vercelObjects(), nil},
 		{reader.LocalV1, tree(), nil},
 		{reader.LocalV1, tree(), []listing.Kind{listing.KindFile, listing.KindDir}},
 		{reader.LocalV1, namesOnly(tree()), nil},

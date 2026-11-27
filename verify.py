@@ -17,7 +17,7 @@ import json
 import os
 import sys
 
-from dataset_schema import (schema_id, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
+from dataset_schema import (schema_id, VERCEL_CURRENT, S3_CURRENT, S3_VERSIONS, GCS_CURRENT,
                             GCS_VERSIONS, AZURE_CURRENT, AZURE_VERSIONS, VERSION_IDS, GCS_COLUMNS, AZURE_COLUMNS,
                             sql_string)
 
@@ -44,9 +44,17 @@ AZURE_CONTRACT = {
 }
 
 
+VERCEL_CONTRACT = {
+    "key": ("BYTE_ARRAY", "REQUIRED", "String"),
+    "size": ("INT64", "REQUIRED", "Int"),
+    "last_modified": ("INT64", "REQUIRED", "Timestamp"),
+    "etag": ("BYTE_ARRAY", "OPTIONAL", "String"),
+}
+
+
 def check_object_schema(con, path, sid, check):
     azure = sid in (AZURE_CURRENT, AZURE_VERSIONS)
-    contract = dict(AZURE_CONTRACT if azure else GCS_CONTRACT)
+    contract = dict(VERCEL_CONTRACT if sid == VERCEL_CURRENT else AZURE_CONTRACT if azure else GCS_CONTRACT)
     if sid == GCS_VERSIONS:
         contract.update({"is_latest": ("BOOLEAN", "REQUIRED", "Bool"), "deleted_at": ("INT64", "OPTIONAL", "Timestamp")})
     if sid == AZURE_VERSIONS:
@@ -78,7 +86,7 @@ def check_object_schema(con, path, sid, check):
             good = good and not logical
         elif annotation == "Int":
             good = good and ((logical.startswith("IntType(") and "isSigned=1" in logical and row[4] == "INT_64")
-                             or (azure and not logical and row[4] in (None, "INT_64")))
+                             or ((azure or sid == VERCEL_CURRENT) and not logical and row[4] in (None, "INT_64")))
         else:
             good = good and logical.startswith("Timestamp") and "isAdjustedToUTC=1" in logical and "MICROS=MicroSeconds" in logical
         check(good, f"  {name}: {row[1]} {row[2]} {row[3]}")
@@ -123,7 +131,7 @@ def main(out, reference=None):
     groups = sid in VERSION_IDS
     s3 = sid in (S3_CURRENT, S3_VERSIONS)
     check(m.get("key") == {"column": "key", "unique": not groups}, f"key declaration {m.get('key')} (unique unless the schema repeats keys)")
-    source_kinds = {S3_CURRENT: "s3", S3_VERSIONS: "s3", GCS_CURRENT: "gcs",
+    source_kinds = {VERCEL_CURRENT: "vercel", S3_CURRENT: "s3", S3_VERSIONS: "s3", GCS_CURRENT: "gcs",
                     GCS_VERSIONS: "gcs", AZURE_CURRENT: "azure", AZURE_VERSIONS: "azure"}
     check(ext.get("source", {}).get("kind") == source_kinds.get(sid, "local"),
           "source kind agrees with schema id")
@@ -137,7 +145,7 @@ def main(out, reference=None):
     con = duckdb.connect()
     con.execute("SET preserve_insertion_order = true")
     glob = os.path.join(out, "data", "*.parquet")
-    if sid in (GCS_CURRENT, GCS_VERSIONS, AZURE_CURRENT, AZURE_VERSIONS):
+    if sid in (VERCEL_CURRENT, GCS_CURRENT, GCS_VERSIONS, AZURE_CURRENT, AZURE_VERSIONS):
         schemas_valid = True
         for path in paths:
             schemas_valid = check_object_schema(con, path, sid, check) and schemas_valid

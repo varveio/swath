@@ -19,6 +19,7 @@ import (
 	"github.com/varveio/swath/internal/source/gcs"
 	"github.com/varveio/swath/internal/source/localfs"
 	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/internal/source/vercel"
 	"github.com/varveio/swath/reader"
 )
 
@@ -36,6 +37,8 @@ func TestVerifierFixtures(t *testing.T) {
 	writeVerifierFixtures(t, filepath.Join(base, "azure"), "azure", azblob.Schema, azblob.Object{Size: 7, Mtime: 10, CreationTime: 5})
 	writeVerifierFixtures(t, filepath.Join(base, "azureversions"), "azure", azblob.VersionSchema,
 		azblob.Version{Object: azblob.Object{Size: 7, Mtime: 10, CreationTime: 5}, VersionID: "2026-01-01T00:00:00.0000000Z", IsLatest: true})
+	writeVerifierFixtures(t, filepath.Join(base, "vercel"), "vercel", vercel.Schema,
+		vercel.Object{Size: 7, UploadedAt: 1767314045123456, ETag: "opaque"})
 }
 
 func writeVerifierFixtures[P any](t *testing.T, base, kind string, original schema.Schema[P], value P) {
@@ -125,8 +128,9 @@ func writeVerifierFixtures[P any](t *testing.T, base, kind string, original sche
 // SeekParquet conformance check (scripts/ci/seekparquet-conformance.sh):
 // S3 current objects over several parts and row groups, whose keys roll up
 // at several depths; S3 versions, whose keys repeat in groups that span
-// pages and row groups (unique false); and filesystem keys longer than the
-// 1,024 bytes, half of them led by 0xFF bytes, with link targets as long,
+// pages and row groups (unique false); Vercel objects with upload timestamps;
+// and filesystem keys longer than 1,024 bytes, half of them led by 0xFF
+// bytes, with link targets as long,
 // whose exact bounds parquet-go would have shortened below the value.
 func TestSeekParquetFixtures(t *testing.T) {
 	base := os.Getenv("SWATH_SEEKPARQUET_FIXTURES")
@@ -158,6 +162,13 @@ func TestSeekParquetFixtures(t *testing.T) {
 	}
 	slices.SortStableFunc(versions, func(a, b s3.VersionRow) int { return strings.Compare(a.Key, b.Key) })
 	writeSeekFixture(t, filepath.Join(base, "s3-versions"), "s3", &s3.VersionsSchema, versions, 4000)
+
+	objects := make([]schema.Row[vercel.Object], 3000)
+	for i := range objects {
+		objects[i] = schema.Row[vercel.Object]{Key: fmt.Sprintf("blobs/%02d/obj-%04d", i/100, i),
+			Data: vercel.Object{Size: int64(i), UploadedAt: 1767314045123456 + int64(i), ETag: fmt.Sprintf(`"opaque-%x"`, i)}}
+	}
+	writeSeekFixture(t, filepath.Join(base, "vercel-objects"), "vercel", &vercel.Schema, objects, 1000)
 
 	var long []localfs.Row
 	for i := range 3000 {
