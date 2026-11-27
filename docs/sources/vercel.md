@@ -50,8 +50,10 @@ bounded responses, retries, cancellation and credential redaction.
 The schema is [`swath/vercel-objects/v1`](../dataset.md#schema-registry): `key`,
 `size`, `last_modified` and `etag`. `last_modified` preserves the list API's
 `uploadedAt` value, normalized to UTC microseconds. This mapping follows Vercel's
-[SDK `get()` implementation](https://github.com/vercel/storage/blob/main/packages/blob/src/get.ts#L227-L248),
-which exposes the HTTP `Last-Modified` header as `uploadedAt`. It does not establish
+[SDK `get()` implementation](https://github.com/vercel/storage/blob/bf0c1c5446618fe86d67a9297cd21a58eb9a7274/packages/blob/src/get.ts#L242-L264),
+which exposes the HTTP `Last-Modified` header as `uploadedAt`. swath keeps the list
+value's finer precision rather than substituting the HTTP header's whole seconds.
+This does not establish
 a separate creation time, nor a guarantee that metadata-only operations advance
 this value. Overwrite behavior has not been independently qualified live.
 

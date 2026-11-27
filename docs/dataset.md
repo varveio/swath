@@ -193,7 +193,8 @@ Every column after the key is nullable unless marked required. Types: `STRING` i
 TIMESTAMP(MICROS, UTC)`; `bool` is `BOOLEAN`. Every part has every column of its schema id. One concept has one
 name in every schema that has it: `last_modified`, `created_at`, `deleted_at`, `accessed_at`,
 `metadata_changed_at` and `storage_class_changed_at` for times, `storage_class` for the storage class (Azure's
-access tier) and `md5` for the base64 MD5 a store lists.
+access tier) and `md5` for the base64 MD5 a store lists. Which operations advance
+`last_modified` is provider-specific, as described below.
 
 **`swath/vercel-objects/v1`**: `key`, `size` int64 (required), `last_modified` timestamp (required;
 Vercel's `uploadedAt`), and `etag` STRING (null if absent or empty). This is the list API's reported upload
