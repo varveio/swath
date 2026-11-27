@@ -30,118 +30,81 @@ type Blob struct {
 	ETag       string
 }
 
-// objectFields fills the versioned field names exactly. encoding/json's
-// matching of struct fields is case insensitive and duplicate members
-// overwrite earlier values, which could turn a listing into an empty page.
-// The raw values alias body, which must already be valid JSON.
-func objectFields(body []byte, fields map[string][]byte) error {
-	if len(body) == 0 || body[0] != '{' {
+// members reads exact field names and tracks only the fixed set accepted
+// by read. Unknown fields can repeat without growing the seen map.
+func members(d *json.Decoder, read func(string) (known bool, err error)) error {
+	if t, err := d.Token(); err != nil || t != json.Delim('{') {
 		return errors.New("expected a JSON object")
 	}
-	body = bytes.TrimSpace(body[1:])
-	for body[0] != '}' {
-		rawName, rest := splitJSONValue(body)
-		var name string
-		if err := json.Unmarshal(rawName, &name); err != nil {
+	seen := make(map[string]bool)
+	for d.More() {
+		t, err := d.Token()
+		if err != nil {
 			return err
 		}
-		value, rest := splitJSONValue(bytes.TrimSpace(bytes.TrimSpace(rest)[1:]))
-		if prior, known := fields[name]; known {
-			if prior != nil {
-				return errors.New("duplicate listing field")
-			}
-			fields[name] = value
+		name := t.(string) // the decoder returns a string for an object member name
+		if seen[name] {
+			return errors.New("duplicate listing field")
 		}
-		body = bytes.TrimSpace(rest)
-		if body[0] == ',' {
-			body = bytes.TrimSpace(body[1:])
+		known, err := read(name)
+		if err != nil {
+			return err
 		}
-	}
-	return nil
-}
-
-// splitJSONValue returns one raw value and the rest of the input without
-// copying or decoding extension fields. json.Valid has already checked
-// matching delimiters, escapes and whitespace.
-func splitJSONValue(body []byte) (value, rest []byte) {
-	switch body[0] {
-	case '"':
-		i := quotedEnd(body)
-		return body[:i], body[i:]
-	case '{', '[':
-		depth := 1
-		for i := 1; ; i++ {
-			switch body[i] {
-			case '"':
-				i += quotedEnd(body[i:]) - 1
-			case '{', '[':
-				depth++
-			case '}', ']':
-				depth--
-				if depth == 0 {
-					return body[:i+1], body[i+1:]
-				}
-			}
-		}
-	default:
-		i := bytes.IndexAny(body, ",]} \r\n\t")
-		if i < 0 {
-			i = len(body)
-		}
-		return body[:i], body[i:]
-	}
-}
-
-func quotedEnd(body []byte) int {
-	for i := 1; ; i++ {
-		switch body[i] {
-		case '"':
-			return i + 1
-		case '\\':
-			i++
+		if known {
+			seen[name] = true
+		} else if err := d.Decode(&ignoredValue{}); err != nil {
+			return err
 		}
 	}
+	_, err := d.Token()
+	return err
 }
 
-// entries checks the limit before growing the result, even when a bad
-// response squeezes excessive entries into an otherwise bounded body.
-func entries[T any](body []byte, limit int, decode func([]byte) (T, error)) ([]T, error) {
-	if len(body) == 0 || body[0] != '[' {
+// ignoredValue lets the decoder consume extension values without making
+// an additional RawMessage copy of its buffer.
+type ignoredValue struct{}
+
+func (*ignoredValue) UnmarshalJSON([]byte) error { return nil }
+
+// entries checks the remaining page capacity before decoding each entry.
+func entries[T any](d *json.Decoder, remaining int, decode func(*json.Decoder) (T, error)) ([]T, error) {
+	if t, err := d.Token(); err != nil || t != json.Delim('[') {
 		return nil, invalidPage("expected a folded listing array")
 	}
 	var items []T
-	body = bytes.TrimSpace(body[1:])
-	for body[0] != ']' {
-		if len(items) == limit {
+	for d.More() {
+		if len(items) == remaining {
 			return nil, invalidPage("page exceeds the requested limit")
 		}
-		raw, rest := splitJSONValue(body)
-		item, err := decode(raw)
+		item, err := decode(d)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, item)
-		body = bytes.TrimSpace(rest)
-		if body[0] == ',' {
-			body = bytes.TrimSpace(body[1:])
-		}
 	}
-	return items, nil
+	_, err := d.Token()
+	return items, err
 }
 
-func decodeBlob(raw []byte) (Blob, error) {
-	fields := map[string][]byte{"pathname": nil, "size": nil, "uploadedAt": nil, "etag": nil}
+func decodeBlob(d *json.Decoder) (Blob, error) {
 	var name, etag, uploaded wireString
 	var size *int64
-	if objectFields(raw, fields) != nil ||
-		json.Unmarshal(fields["pathname"], &name) != nil ||
-		json.Unmarshal(fields["size"], &size) != nil ||
-		json.Unmarshal(fields["uploadedAt"], &uploaded) != nil ||
-		name == "" || size == nil || *size < 0 {
+	err := members(d, func(field string) (bool, error) {
+		switch field {
+		case "pathname":
+			return true, d.Decode(&name)
+		case "size":
+			return true, d.Decode(&size)
+		case "uploadedAt":
+			return true, d.Decode(&uploaded)
+		case "etag":
+			return true, d.Decode(&etag)
+		default:
+			return false, nil
+		}
+	})
+	if err != nil || name == "" || size == nil || *size < 0 {
 		return Blob{}, invalidPage("missing or invalid blob metadata")
-	}
-	if raw := fields["etag"]; raw != nil && json.Unmarshal(raw, &etag) != nil {
-		return Blob{}, invalidPage("invalid blob ETag")
 	}
 	uploadedAt, err := time.Parse(time.RFC3339Nano, string(uploaded))
 	if err != nil {
@@ -150,9 +113,9 @@ func decodeBlob(raw []byte) (Blob, error) {
 	return Blob{Pathname: string(name), Size: *size, UploadedAt: uploadedAt, ETag: string(etag)}, nil
 }
 
-func decodeFolder(raw []byte) (string, error) {
+func decodeFolder(d *json.Decoder) (string, error) {
 	var folder wireString
-	if json.Unmarshal(raw, &folder) != nil || folder == "" {
+	if d.Decode(&folder) != nil || folder == "" {
 		return "", invalidPage("invalid folded listing folder")
 	}
 	return string(folder), nil
@@ -215,17 +178,38 @@ func decodePage(body []byte, limit int) (ListOutput, error) {
 	if !json.Valid(body) {
 		return ListOutput{}, fmt.Errorf("%w: invalid JSON", objhttp.ErrSyntax)
 	}
-	fields := map[string][]byte{"blobs": nil, "folders": nil, "hasMore": nil, "cursor": nil, "error": nil}
+	d := json.NewDecoder(bytes.NewReader(body))
+	var out ListOutput
+	var blobs, folders bool
 	var hasMore *bool
-	if objectFields(bytes.TrimSpace(body), fields) != nil || fields["error"] != nil ||
-		json.Unmarshal(fields["hasMore"], &hasMore) != nil || hasMore == nil {
+	var cursor wireString
+	err := members(d, func(field string) (bool, error) {
+		var err error
+		switch field {
+		case "blobs":
+			blobs = true
+			out.Blobs, err = entries(d, limit-len(out.Folders), decodeBlob)
+		case "folders":
+			folders = true
+			out.Folders, err = entries(d, limit-len(out.Blobs), decodeFolder)
+		case "hasMore":
+			err = d.Decode(&hasMore)
+		case "cursor":
+			err = d.Decode(&cursor)
+		case "error":
+			err = errors.New("unexpected listing error member")
+		default:
+			return false, nil
+		}
+		return true, err
+	})
+	if errors.Is(err, objhttp.ErrInvalidPage) {
+		return ListOutput{}, err
+	}
+	// Decoder errors may quote field values, including the opaque cursor.
+	if err != nil || !blobs || !folders || hasMore == nil {
 		return ListOutput{}, invalidPage("missing or invalid folded listing fields or unexpected error member")
 	}
-	var cursor wireString
-	if raw := fields["cursor"]; raw != nil && json.Unmarshal(raw, &cursor) != nil {
-		return ListOutput{}, invalidPage("invalid continuation cursor")
-	}
-	var out ListOutput
 	if *hasMore {
 		if cursor == "" {
 			return ListOutput{}, invalidPage("missing continuation cursor")
@@ -233,18 +217,6 @@ func decodePage(body []byte, limit int) (ListOutput, error) {
 		out.NextCursor = string(cursor)
 	} else if cursor != "" {
 		return ListOutput{}, invalidPage("continuation cursor on a final page")
-	}
-	if limit == 0 {
-		limit = MaxPageSize
-	}
-	var err error
-	out.Blobs, err = entries(fields["blobs"], limit, decodeBlob)
-	if err != nil {
-		return ListOutput{}, err
-	}
-	out.Folders, err = entries(fields["folders"], limit-len(out.Blobs), decodeFolder)
-	if err != nil {
-		return ListOutput{}, err
 	}
 	return out, nil
 }

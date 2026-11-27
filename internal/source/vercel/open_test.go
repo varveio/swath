@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/varveio/swath/internal/bind"
@@ -33,9 +34,12 @@ const (
 func TestOpenStoreBinding(t *testing.T) {
 	for _, tc := range []struct{ root, token string }{
 		{testRoot, ""},
+		{testRoot, "Bearer secret"},
 		{testRoot, "vercel_blob_rw_Test123"},
 		{testRoot, "vercel_blob_rw_Test123_"},
 		{testRoot, "vercel_blob_rw_Test123_bad\ntoken"},
+		{testRoot, "vercel_blob_rw_Test123_bad\x00token"},
+		{testRoot, "vercel_blob_rw_Test123_é"},
 		{testRoot, "vercel_blob_rw_Other123_fixture-secret"},
 		{"vercel://store_test123", testToken},
 	} {
@@ -47,7 +51,8 @@ func TestOpenStoreBinding(t *testing.T) {
 			})}
 			_, err := Open(t.Context(), tc.root, Options{Token: tc.token, HTTPClient: hc})
 			var cred *objhttp.CredentialError
-			if !errors.As(err, &cred) || strings.Contains(err.Error(), "fixture-secret") || requests != 0 {
+			if !errors.As(err, &cred) || cred.Source != TokenEnv || objhttp.Classify(err) != objhttp.ClassAuth ||
+				strings.Contains(err.Error(), "fixture-secret") || requests != 0 {
 				t.Fatalf("Open = %v, requests = %d, want safe credential failure before HTTP", err, requests)
 			}
 		})
@@ -61,6 +66,19 @@ func TestOpenStoreBinding(t *testing.T) {
 	r := WithPrefix(testRoot+"/old", prefix)
 	if s, p, err := ParseURL(r); err != nil || s != "store_Test123" || p != prefix {
 		t.Fatalf("ParseURL(WithPrefix(...)) = %q, %q, %v", s, p, err)
+	}
+}
+
+func TestOpenPageSize(t *testing.T) {
+	hc := &http.Client{Transport: listTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("invalid page size made a listing request")
+		return nil, nil
+	})}
+	for _, n := range []int{-1, 1001} {
+		_, err := Open(t.Context(), testRoot, Options{Token: testToken, PageSize: n, HTTPClient: hc})
+		if !errors.Is(err, source.ErrUnsupported) {
+			t.Errorf("Open with page size %d = %v, want unsupported", n, err)
+		}
 	}
 }
 
@@ -154,12 +172,36 @@ func TestFoldedWalkRetriesDefaultHTTPPolicy(t *testing.T) {
 	}
 	report := o.Report()
 	v := report.Stats.(*Stats).Counters.Value
-	if len(queries) != 2 || queries[0] != queries[1] || v("attempts") != 2 ||
+	if len(queries) != 2 || queries[0] != "limit=1000&mode=folded&prefix=scope%2F" || queries[0] != queries[1] || v("attempts") != 2 ||
 		v("retries") != 1 || v("tree.requeues") != 0 || v("tree.pages") != 1 ||
 		o.Answered() != 1 || !report.Coverage.Complete {
 		t.Fatalf("queries %q, attempts %d, retries %d, requeues %d, pages %d, answered %d, coverage %+v",
 			queries, v("attempts"), v("retries"), v("tree.requeues"), v("tree.pages"), o.Answered(), report.Coverage)
 	}
+}
+
+func TestFoldedWalkStopsAfterHTTPJSONRetries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := 0
+		hc := &http.Client{Transport: listTransport(func(*http.Request) (*http.Response, error) {
+			calls++
+			body := "{\"blobs\":["
+			// The first request after the shared client's nine attempts
+			// would succeed if the folder walker erroneously requeued.
+			if calls > 9 {
+				body = "{\"blobs\":[],\"folders\":[],\"hasMore\":false}"
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})}
+		o, rows, err := run(t, "", Options{HTTPClient: hc})
+		r := o.Report()
+		v := r.Stats.(*Stats).Counters.Value
+		if !errors.Is(err, objhttp.ErrSyntax) || len(rows) != 0 || r.Coverage.Complete ||
+			calls != 9 || v("parse_failures") != 9 || v("retries") != 8 || v("tree.requeues") != 0 {
+			t.Fatalf("rows %d, err %v, attempts %d, parse_failures %d, retries %d, requeues %d, coverage %+v",
+				len(rows), err, calls, v("parse_failures"), v("retries"), v("tree.requeues"), r.Coverage)
+		}
+	})
 }
 
 func TestFoldedWalkRejectsCursorCycle(t *testing.T) {

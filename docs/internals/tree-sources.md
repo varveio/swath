@@ -144,8 +144,9 @@ A page in flight is a second, separate bound: from its request until it is decod
 `PageHeadroom` from `HeadroomBytes`, waiting while other pages hold the rest (`tree.headroom_waits`,
 `tree.headroom_wait_ns`). S3 reserves 4 KiB an entry asked for (a URL-encoded 1,024-byte key and its
 metadata), or 4,000 KiB for a page of 1,000. Vercel reserves 64 MiB per response within the shared 256 MiB
-headroom budget, allowing four concurrent page requests. This reservation covers the encoded response,
-capped at 16 MiB, and space for the input buffer and decoding. S3's default `HeadroomBytes` is one page for
+headroom budget, allowing four concurrent page requests. The response body is capped at 16 MiB.
+The reservation is an admission allowance, not a measured heap or RSS bound: decoder buffers,
+temporary strings and garbage collection can add memory. S3's default `HeadroomBytes` is one page for
 each page the walk can have in flight (`InFlight`: the order stage's workers and its drainer, which lists a queued folder itself, each reading
 one folder a page at a time), so the bound states the memory rather than limiting the walk: at `--workers 64`,
 254 MiB; at 256, 1,004 MiB. The worst case of a walk is then the staging bound plus that: 510 MiB at 64

@@ -60,24 +60,37 @@ manifest; resume returned exit 2. Dataset reports recorded:
 The four-page response reservation engaged at eight workers. These small
 inventories do not establish memory usage or speed on large flat stores.
 
-The first wide CLI campaign reached Parquet verification after its exact text
-and live `du` checks passed, then the local Python timestamp conversion failed
-because `pytz` was absent. Its temporary dataset was removed. The verifier was
-changed to read epoch microseconds and checked offline before the smaller live
-campaign. It is the smaller campaign's two datasets that are retained.
+Public stores, concurrent service-side writes, long-lived cursors, live folders
+with over 1,000 child prefixes, and process-kill recovery remain unqualified.
+Tree datasets do not support resume. All test prefixes were verified empty after
+cleanup. The maintainers retain the live comparison receipts and final datasets;
+[PR #715](https://github.com/varveio/swath/pull/715) records the validation.
+The [wide fake](../../internal/source/vercel/wide_test.go) runs in the provider's test suite.
 
-All task-owned uploaded blobs were conditionally deleted and every campaign
-prefix verified empty. Setup and cleanup encountered throttling before pacing
-was introduced. There were 6,570 recorded raw/setup/cleanup attempts plus 199
-GETs in the successful CLI campaign; the interrupted wide CLI campaign's requests
-are not included in that total. Public stores, concurrent service-side writes,
-long-lived cursors, live folders with over 1,000 child prefixes, and process-kill
-recovery remain unqualified. Tree datasets do not support resume.
+### JSON decoder simplification
 
-The owner's retained harness, receipts, binary hashes, raw comparison results and
-two final datasets are in Varve at
-`workspaces:data/swath/vercel-conformance-20261127/implementation`.
-The wide fake is `internal/source/vercel/wide_test.go`.
+The handwritten scanner at `59c5dd13` and its standard-library `json.Decoder`
+replacement were measured on Linux arm64 with Go 1.27.4, `GOMAXPROCS=2`,
+three `-benchtime=250ms` trials. Fixture construction and network input were
+excluded. Medians on this shared host:
+
+| Synthetic page | Scanner ms/op | Decoder ms/op | Scanner B/op | Decoder B/op |
+|---|---|---|---|---|
+| 1,000 representative blobs | 1.656 | 1.539 | 434,290 | 499,032 |
+| 1,000 blobs with escaped Unicode and extension fields | 1.735 | 1.584 | 465,413 | 513,712 |
+
+Normal-page latency was similar; the decoder allocated about 15% and 10% more.
+A single ignored extension near the 16 MiB response cap took 9.550 versus
+25.333 ms and 766 versus 33,557,976 B/op. A cap-sized escaped unknown member
+name incurred about 64 MiB of decoder allocations. B/op is cumulative allocation,
+not peak heap or RSS, and excludes the retained encoded input. The per-page
+reservation therefore remains an admission estimate. These synthetic extremes
+are not representative service responses or throughput measurements.
+
+Thirteen independent exact-output/refusal cases passed for both implementations.
+The replacement also passed the existing client race tests, all 20 loopback CLI
+cases, and verification and `du` on both retained live datasets. This comparison
+made no live requests; the maintainers retain the fixture and full measurements.
 
 ## macOS volume boundary checks (2026-11-23)
 

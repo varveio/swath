@@ -1,4 +1,5 @@
 GET https://vercel.com/api/blob
+  query limit=1000
   query mode=folded
   header Authorization: Bearer <store-token>
   header User-Agent: swath/<version>

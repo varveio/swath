@@ -21,8 +21,6 @@ import (
 	"github.com/varveio/swath/internal/source/vercel"
 )
 
-const vercelTokenEnv = "BLOB_READ_WRITE_TOKEN"
-
 func init() {
 	registry.Register(registry.Factory{
 		Scheme: "vercel", Title: "Vercel Blob", Example: "vercel://store_ID", Usage: "vercel://store_ID[/prefix]",
@@ -45,12 +43,12 @@ func vercelFlags(fs *pflag.FlagSet, _ bool, shared registry.SharedValues) any {
 }
 
 func (o *vercelFlagged) options() (vercel.Options, error) {
-	opt := vercel.Options{Token: os.Getenv(vercelTokenEnv)}
+	opt := vercel.Options{Token: os.Getenv(vercel.TokenEnv)}
 	if o.store != nil {
 		opt.Timeout, opt.Trust = o.store.Timeout, o.store.Trust
 		switch {
 		case o.store.Anonymous:
-			return opt, source.Unsupported(errors.New("Vercel Blob inventory requires BLOB_READ_WRITE_TOKEN; --anonymous is unsupported"))
+			return opt, source.Unsupported(fmt.Errorf("Vercel Blob inventory requires %s; --anonymous is unsupported", vercel.TokenEnv))
 		case o.store.Endpoint != "":
 			return opt, source.Unsupported(errors.New("Vercel Blob uses its fixed service endpoint; --endpoint-url is unsupported"))
 		case o.store.Listing == source.ListingRange:

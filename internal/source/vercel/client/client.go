@@ -7,7 +7,6 @@ package client
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -37,7 +36,7 @@ const (
 
 type Config struct {
 	objhttp.Retry
-	Token          string
+	Token          string        // validated by the provider opener
 	RequestTimeout time.Duration // per attempt; default 30 s
 	Trust          source.Trust
 	Workers        int
@@ -53,15 +52,12 @@ type Client struct {
 }
 
 func New(cfg Config) (*Client, error) {
-	if cfg.Token == "" || strings.IndexFunc(cfg.Token, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0 {
-		return nil, &objhttp.CredentialError{Source: "BLOB_READ_WRITE_TOKEN", Err: errors.New("expected a Vercel Blob read-write token")}
-	}
 	trust, err := cfg.Trust.Config()
 	if err != nil {
 		return nil, err
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 30 * time.Second
+		cfg.RequestTimeout = source.DefaultRequestTimeout
 	}
 	c := &Client{Meter: objhttp.NewMeter(cfg.Retry), token: cfg.Token, timeout: cfg.RequestTimeout}
 	c.http = objhttp.Pool(cfg.Workers, cfg.HTTPClient, trust, func(rt http.RoundTripper) http.RoundTripper {
@@ -151,24 +147,18 @@ func (c *Client) CloseIdleConnections() {
 type ListInput struct {
 	Prefix string
 	Cursor string
-	Limit  int // 0 uses the service default (1,000)
+	Limit  int // validated by the provider opener
 }
 
 // List fetches one folded listing page, retrying the same request when
 // necessary. Its cursor is opaque and belongs to this prefix.
 func (c *Client) List(ctx context.Context, in ListInput) (ListOutput, error) {
-	if in.Limit < 0 || in.Limit > MaxPageSize {
-		return ListOutput{}, source.Unsupported(fmt.Errorf("Vercel Blob list limit must be between 0 and %d", MaxPageSize))
-	}
-	q := url.Values{"mode": {"folded"}}
+	q := url.Values{"mode": {"folded"}, "limit": {strconv.Itoa(in.Limit)}}
 	if in.Prefix != "" {
 		q.Set("prefix", in.Prefix)
 	}
 	if in.Cursor != "" {
 		q.Set("cursor", in.Cursor)
-	}
-	if in.Limit > 0 {
-		q.Set("limit", strconv.Itoa(in.Limit))
 	}
 	target := Endpoint + "?" + q.Encode()
 	return objhttp.Do(ctx, c.Retry, &c.Tally, func(ctx context.Context) (ListOutput, error) {

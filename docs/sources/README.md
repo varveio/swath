@@ -14,7 +14,8 @@ working command, authentication and permissions, its own options, writing a data
 A dataset of any source can be written to a local directory (`-o DIR`) or to any of the three object stores
 (`-o` a bucket prefix with `--work-dir DIR`).
 
-swath reads listings only: it never reads or writes object contents. Vercel Blob requires a read-write token even for listing; other providers can use listing permissions alone. Each object-store
+swath reads listings only: it never reads or writes object contents. Vercel Blob requires a read-write token
+even for listing; other providers can use listing permissions alone. Each object-store
 listing sends requests the provider may charge for; the run report estimates their cost on AWS S3 and GCS
 ([Cost](../size-a-run.md#cost)).
 
@@ -38,13 +39,12 @@ service. Each source's other limits are under "Limits and known differences" on 
 store other than AWS, compare one prefix's object count with an independent listing
 ([S3-compatible stores](s3.md#s3-compatible-stores)).
 
-Vercel Blob requires store-token authentication and refuses endpoint overrides; see [its source page](vercel.md).
-
 ## Credentials on every object store
 
 Without `--anonymous`, swath uses the provider's credentials and stops before listing (exit 1, cause `auth`)
-when there are none or they do not load. It never falls back to unsigned requests: a public bucket or
-container needs `--anonymous`, which sends no credentials whatever the environment holds. The error is one
+when there are none or they do not load. It never falls back to unsigned requests. Where a provider supports
+anonymous listing, a public bucket or container needs `--anonymous`, which sends no credentials whatever
+the environment holds. The error is one
 line naming the credential source and the cause's first line; `-v` shows the whole cause
 ([troubleshooting](../troubleshooting.md#credentials-could-not-be-loaded)).
 
@@ -65,7 +65,7 @@ The report's `diagnostics.source.stats` says where the credentials came from (`c
 
 ## Endpoints and TLS
 
-`--endpoint-url URL` sends requests to another service than the provider's own: an S3-compatible store, an
+For S3, GCS and Azure Blob, `--endpoint-url URL` sends requests to another service than the provider's own: an S3-compatible store, an
 emulator (MinIO, fake-gcs-server, Azurite). It must be `http` or `https` with a host; user information
 (`user:password@`), a query and a fragment are refused. The endpoint is part of the run's identity: a resume
 uses the same one. There is no cost estimate for a custom endpoint. An endpoint that has never answered and

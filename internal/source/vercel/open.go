@@ -22,6 +22,9 @@ import (
 	"github.com/varveio/swath/internal/source/vercel/client"
 )
 
+// TokenEnv names the environment variable for the store read-write token.
+const TokenEnv = "BLOB_READ_WRITE_TOKEN"
+
 const rootScheme = "vercel://"
 
 // ParseURL splits vercel://store_ID[/prefix]. The store ID is case-sensitive
@@ -101,9 +104,9 @@ var (
 
 var reportCounters = append(objhttp.CounterDefs("429 or rate_limited"), tree.DelimitedCounters...)
 
-// Budget for encoded bodies, decoded JSON values and page rows before the
-// retained strings transfer to the folder staging account. Use a shared
-// limit because a large response cap multiplied by workers can be expensive.
+// Admission reservation per response, before retained strings transfer to
+// folder staging. This limits concurrent page work, not exact heap or RSS:
+// decoder buffers, temporary strings and garbage collection can add memory.
 const pageHeadroom = 4 * client.MaxBodyBytes
 
 // Open validates the root and binds its store's current objects to Schema.
@@ -118,7 +121,7 @@ func Open(_ context.Context, root string, opt Options) (*Opened, error) {
 		return nil, err
 	}
 	if opt.PageSize < 0 || opt.PageSize > client.MaxPageSize {
-		return nil, fmt.Errorf("Vercel Blob page size must be between 0 and %d", client.MaxPageSize)
+		return nil, source.Unsupported(fmt.Errorf("Vercel Blob page size must be between 0 and %d", client.MaxPageSize))
 	}
 	if opt.PageSize == 0 {
 		opt.PageSize = client.MaxPageSize
@@ -134,6 +137,8 @@ func Open(_ context.Context, root string, opt Options) (*Opened, error) {
 	folders := tree.NewDelimited(folderLister{c, opt.PageSize}, tree.DelimitedOptions[Object]{
 		Select: prefix, Bytes: objectHeap, FolderBytes: opt.FolderBytes, StagingBytes: opt.StagingBytes,
 		PageHeadroom: pageHeadroom,
+		// HTTP retries cover cut or malformed JSON; do not replay a persistently
+		// bad body again at the folder level after those retries are exhausted.
 		Requeue: func(err error) bool {
 			return !errors.Is(err, objhttp.ErrSyntax) && objhttp.Requeue(err)
 		},
@@ -149,22 +154,21 @@ func Open(_ context.Context, root string, opt Options) (*Opened, error) {
 }
 
 func matchToken(token, store string) error {
-	const env = "BLOB_READ_WRITE_TOKEN"
 	var err error
 	switch {
 	case token == "":
-		err = errors.New("set BLOB_READ_WRITE_TOKEN for this Vercel Blob store")
+		err = fmt.Errorf("set %s for this Vercel Blob store", TokenEnv)
 	default:
 		rest, ok := strings.CutPrefix(token, "vercel_blob_rw_")
 		id, secret, split := strings.Cut(rest, "_")
 		if !ok || !split || !validStoreID(id) || secret == "" || strings.ContainsFunc(secret, func(r rune) bool { return r <= ' ' || r >= '\x7f' }) {
-			err = errors.New("BLOB_READ_WRITE_TOKEN is not a Vercel Blob read-write token")
+			err = errors.New("expected a Vercel Blob read-write token")
 		} else if "store_"+id != store {
-			err = errors.New("BLOB_READ_WRITE_TOKEN belongs to a different Vercel Blob store")
+			err = errors.New("the token belongs to a different Vercel Blob store")
 		}
 	}
 	if err != nil {
-		return &objhttp.CredentialError{Source: env, Err: err}
+		return &objhttp.CredentialError{Source: TokenEnv, Err: err}
 	}
 	return nil
 }

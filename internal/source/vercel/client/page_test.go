@@ -101,8 +101,19 @@ func withBlob(blob string) string {
 }
 
 func TestPageLimitBeforeDecodingExtraEntry(t *testing.T) {
-	_, err := decodePage([]byte(`{"blobs":[],"folders":["a/",{}],"hasMore":false}`), 1)
-	if !errors.Is(err, objhttp.ErrInvalidPage) || !strings.Contains(err.Error(), "page exceeds the requested limit") {
-		t.Fatalf("decodePage error = %v, want a page limit error before decoding the extra entry", err)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"same array", `{"blobs":[],"folders":["a/",{}],"hasMore":false}`},
+		{"folders first", `{"folders":["a/"],"blobs":[null],"hasMore":false}`},
+		{"blobs first", `{"blobs":[{"pathname":"a","size":0,"uploadedAt":"2026-11-27T12:35:00Z"}],"folders":[null],"hasMore":false}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodePage([]byte(tc.body), 1)
+			if !errors.Is(err, objhttp.ErrInvalidPage) || !strings.Contains(err.Error(), "page exceeds the requested limit") {
+				t.Fatalf("decodePage error = %v, want a page limit error before decoding the extra entry", err)
+			}
+		})
 	}
 }

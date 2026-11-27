@@ -51,7 +51,7 @@ func TestWireSnapshot(t *testing.T) {
 	var got strings.Builder
 	index := 0
 	inputs := []ListInput{
-		{},
+		{Limit: MaxPageSize},
 		{Prefix: "space +%&?/#/é/", Limit: 7},
 		{Prefix: "space +%&?/#/é/", Limit: 7, Cursor: "1+//a==="},
 	}
@@ -125,7 +125,7 @@ func TestInvalidPageStops(t *testing.T) {
 	c := newClient(t, func(*http.Request) (*http.Response, error) {
 		return response(200, `{"blobs":[],"folders":[],"hasMore":true}`), nil
 	}, 2)
-	_, err := c.List(t.Context(), ListInput{})
+	_, err := c.List(t.Context(), ListInput{Limit: MaxPageSize})
 	if !errors.Is(err, objhttp.ErrInvalidPage) || !errors.Is(err, source.ErrProtocol) || objhttp.Requeue(err) || c.Counters().Attempts != 1 {
 		t.Fatalf("missing cursor: err = %v, counters = %+v", err, c.Counters())
 	}
@@ -143,7 +143,7 @@ func TestSameHostRedirectStops(t *testing.T) {
 		redirect.Header.Set("Location", Endpoint+"/other")
 		return redirect, nil
 	}, 2)
-	_, err := c.List(t.Context(), ListInput{})
+	_, err := c.List(t.Context(), ListInput{Limit: MaxPageSize})
 	failure := objhttp.Normalize(err)
 	if failure == nil || failure.Status != http.StatusFound || calls != 1 || forwarded {
 		t.Fatalf("redirect: err = %v, requests = %d, forwarded = %v", err, calls, forwarded)
@@ -192,7 +192,7 @@ func TestSecretSafeFailures(t *testing.T) {
 				calls++
 				return test.reply(r)
 			}, 1)
-			_, err := c.List(t.Context(), ListInput{Cursor: cursor})
+			_, err := c.List(t.Context(), ListInput{Cursor: cursor, Limit: MaxPageSize})
 			if err == nil || objhttp.Classify(err) != test.class || calls != 1 {
 				t.Fatalf("error = %v, class = %s, calls = %d", err, objhttp.Classify(err), calls)
 			}
@@ -217,32 +217,13 @@ func TestCallerCancellation(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.List(ctx, ListInput{})
+		_, err := c.List(ctx, ListInput{Limit: MaxPageSize})
 		done <- err
 	}()
 	<-entered
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) || c.Counters().Attempts != 1 || c.Live().Inflight != 0 {
 		t.Fatalf("canceled list: err = %v, counters = %+v", err, c.Counters())
-	}
-}
-
-func TestInvalidCredentialAndLimit(t *testing.T) {
-	rt := transportFunc(func(*http.Request) (*http.Response, error) {
-		t.Fatal("called transport with invalid configuration")
-		return nil, nil
-	})
-	for _, token := range []string{"", "Bearer secret", "abc\n", "abc\x00", "é"} {
-		_, err := New(Config{Token: token, HTTPClient: &http.Client{Transport: rt}})
-		if objhttp.Classify(err) != objhttp.ClassAuth {
-			t.Fatalf("invalid token class = %v, want auth", err)
-		}
-	}
-	c := newClient(t, rt, 1)
-	for _, limit := range []int{-1, MaxPageSize + 1} {
-		if _, err := c.List(t.Context(), ListInput{Limit: limit}); !errors.Is(err, source.ErrUnsupported) {
-			t.Fatalf("invalid limit error = %v, want unsupported", err)
-		}
 	}
 }
 

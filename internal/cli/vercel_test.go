@@ -25,7 +25,7 @@ import (
 )
 
 func TestVercelFlags(t *testing.T) {
-	t.Setenv(vercelTokenEnv, "vercel_blob_rw_test_secret")
+	t.Setenv(vercel.TokenEnv, "vercel_blob_rw_test_secret")
 	for _, args := range [][]string{
 		{"--anonymous"}, {"--endpoint-url=http://example.com"}, {"--listing=range"}, {"--all-versions"},
 		{"--sequential"}, {"--no-seed"}, {"--structure=off"}, {"--slow-split"}, {"--max-keys=1"},
@@ -47,22 +47,11 @@ func TestVercelFlags(t *testing.T) {
 		if loc := src.Locator(); loc.Kind != "vercel" || loc.Container != "store_test" {
 			t.Fatalf("locator %+v", loc)
 		}
-		for name, ok := range map[string]bool{
-			"reporter": implements[source.Reporter](src), "live": implements[source.Live](src),
-			"advancing": implements[source.Advancing](src), "requests": implements[source.Requested](src),
-			"faults": implements[source.Faulted](src), "identity": implements[source.Identified](src),
-		} {
-			if !ok {
-				t.Errorf("missing %s", name)
-			}
-		}
 		if _, ok := src.(source.Resumable); ok {
 			t.Fatal("token-only provider advertised restart")
 		}
 	}
 }
-
-func implements[T any](v any) bool { _, ok := v.(T); return ok }
 
 type vercelTransport func(*http.Request) (*http.Response, error)
 
@@ -137,7 +126,7 @@ func TestVercelFilterAndTLS(t *testing.T) {
 	if err := f.CheckFilter(nil, &filter.Spec{MinSize: "1", Include: []string{"a*"}}); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(vercelTokenEnv, "vercel_blob_rw_test_secret")
+	t.Setenv(vercel.TokenEnv, "vercel_blob_rw_test_secret")
 	var codes []string
 	src, err := openArgs(t, "vercel://store_test", false, func(code, msg string) { codes = append(codes, code) }, "--no-verify-ssl")
 	if err != nil {

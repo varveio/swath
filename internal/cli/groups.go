@@ -196,5 +196,5 @@ func (s *structureFlag) Set(v string) error {
 // errTreeUnsupported refuses --listing tree for a provider that has no
 // folder walk yet (exit 2).
 func errTreeUnsupported(title string) error {
-	return source.Unsupported(fmt.Errorf("--listing tree is not supported for %s sources yet (only S3); give --listing auto or range", title))
+	return source.Unsupported(fmt.Errorf("--listing tree is not supported for %s sources yet; give --listing auto or range", title))
 }

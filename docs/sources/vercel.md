@@ -66,7 +66,7 @@ remain unavailable in the saved inventory view.
   folder and 256 MiB across active folders. Crossing a limit fails with
   `folder_limit`; it never reports a truncated inventory as complete. The limit
   counts retained entries and names, not object content bytes.
-- Response decoding has a separate shared memory reservation. The run report's
+- Response decoding has a separate shared admission reservation, not a heap or RSS limit. The run report's
   `tree.*` counters show pages, folders, staging, waits and validation failures.
 - Prefixes without a trailing slash are preserved exactly. The walk begins at
   the containing folder and selects entries by raw prefix; it may read siblings
