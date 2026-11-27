@@ -218,6 +218,9 @@ func (p *Engine[P]) observe(in *Query, out *Page[P]) error {
 			}
 			g.ordinal = ordinal
 		}
+		if p.d.GroupHead != nil && g.seen && r.Key == g.last && p.d.GroupHead(&r.Data) {
+			return fmt.Errorf("%w: an entry of %q after its first is marked latest", p.d.invalid(), r.Key)
+		}
 		g.last, g.seen = r.Key, true
 	}
 	fresh := len(out.Rows) > 0 && g.last > top

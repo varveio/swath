@@ -82,3 +82,47 @@ func TestPageDirectoriesAndByteKeys(t *testing.T) {
 		t.Errorf("a directory below a child: %v, want ErrInvalidPage", err)
 	}
 }
+
+// TestPagePrefixesInAnyOrder: a store need not list common prefixes in
+// byte order (Backblaze B2 sorts a page's by their URL-encoded text, so
+// "é/" comes before "-/"); the page merges them with the keys in byte
+// order. Keys out of order and a repeated prefix are still refused.
+func TestPagePrefixesInAnyOrder(t *testing.T) {
+	ctx := context.Background()
+	size := int64(1)
+	object := func(key string) listing.Entry {
+		return listing.Entry{Key: []byte(key), Kind: listing.KindObject, Size: &size}
+	}
+	req := listing.PageRequest{Prefix: []byte("p/"), Limit: 10}
+	lvl := Level{Objects: []listing.Entry{object("p/-x"), object("p/e")},
+		Prefixes: [][]byte{[]byte("p/\xc3\xa9/"), []byte("p/-/"), []byte("p/e\xcc\x81/"), []byte("p/e/")}}
+	page, err := NewSource(answering{lvl}, false).Page(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range page.Entries {
+		got = append(got, string(e.Key))
+	}
+	want := []string{"p/-/", "p/-x", "p/e", "p/e/", "p/e\xcc\x81/", "p/\xc3\xa9/"}
+	if len(got) != len(want) {
+		t.Fatalf("%q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%q, want %q", got, want)
+		}
+	}
+	if string(lvl.Prefixes[0]) != "p/\xc3\xa9/" {
+		t.Error("the store's slice was reordered in place")
+	}
+
+	repeated := Level{Prefixes: [][]byte{[]byte("p/b/"), []byte("p/a/"), []byte("p/b/")}}
+	if _, err := NewSource(answering{repeated}, false).Page(ctx, req); !errors.Is(err, listing.ErrInvalidPage) {
+		t.Errorf("a repeated prefix: %v, want ErrInvalidPage", err)
+	}
+	keys := Level{Objects: []listing.Entry{object("p/b"), object("p/a")}}
+	if _, err := NewSource(answering{keys}, false).Page(ctx, req); !errors.Is(err, listing.ErrInvalidPage) {
+		t.Errorf("keys out of order: %v, want ErrInvalidPage", err)
+	}
+}

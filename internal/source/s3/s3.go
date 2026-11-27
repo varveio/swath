@@ -188,8 +188,13 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 		InvalidPage: objhttp.ErrInvalidPage,
 		Groups:      VersionsSchema.Groups,
 		Detach:      VersionsSchema.Detach,
-		Size:        func(v *Version) int64 { return v.Size },
-		Counters:    clientCounters,
+		// S3 lists a key's entries newest first, so only the first can be
+		// the latest. Not LastModified order: a multipart upload's
+		// LastModified is its initiation, so a newer version may carry an
+		// older time.
+		GroupHead: func(v *Version) bool { return v.IsLatest },
+		Size:      func(v *Version) int64 { return v.Size },
+		Counters:  clientCounters,
 	}, func(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Version], error) {
 		return p.fetchVersions(ctx, api, q)
 	})
