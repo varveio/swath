@@ -17,7 +17,6 @@ import (
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/shapes"
-	"github.com/varveio/swath/internal/source"
 	"github.com/varveio/swath/internal/source/s3"
 	"github.com/varveio/swath/internal/source/s3/s3test"
 )
@@ -51,7 +50,7 @@ func TestTreeShapesOnR2(t *testing.T) {
 				continue // small10k: 10,000 keys a page at a time adds nothing but time
 			}
 			for _, workers := range []int{1, 8} {
-				opt := s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: source.ListingTree, Workers: workers}
+				opt := s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: s3.ListingTree, Workers: workers}
 				opt.Policy.PageSize = page
 				inv, err := s3.Open(context.Background(), "s3://"+s3test.Name, opt)
 				if err != nil {

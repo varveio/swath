@@ -156,15 +156,9 @@ both had would be dropped. `internal/cli` `TestRegisteredSources` opens each pro
 and checks the interfaces and capabilities.
 
 A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
-like every run with an output. `swath resume` on it is an error. S3's folder walk (`--listing tree`) is such a
+like every run with an output. `swath resume` on it is an error. S3's folder walk (`--s3-listing tree`) is such a
 source: `s3.OpenedTree` is a view of its own, with the live interfaces (`Live`, `Advancing`, `Requested`,
 `Faulted`), `Identified`, `Capable`, `Reporter` and `Priced`, and none of the range engine's.
-
-A store that lists folders with a delimiter and continuation tokens, but not in byte order, can reuse the tree
-core's `Delimited` reader: the provider writes one `FolderLister` call over its client and its own row
-mapping; validation, sorting, splicing, the memory bound and the counters are the reader's
-([tree sources](tree-sources.md#token-only-delimited-folders)). The shared `--listing` flag (`source.Store.Listing`)
-selects it; a provider without one refuses `tree` (exit 2).
 
 ## Adding a provider
 

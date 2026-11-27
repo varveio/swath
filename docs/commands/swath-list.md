@@ -162,11 +162,6 @@ so in its manifest.
 
   For a test endpoint only. A resume replays it, and warns again.
 
-- <a id="option-listing"></a>[`--listing auto|range|tree`](#option-listing)\
-  list by key ranges (range) or folder by folder (tree) (default `auto`)
-
-  auto: key ranges, except on Cloudflare R2 (S3), which does not list keys in byte order: folder by folder there. tree is S3's only: each folder listed by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.
-
 - <a id="option-all-versions"></a>[`--all-versions`](#option-all-versions)\
   list every version of every key, not only the current objects
 
@@ -210,6 +205,11 @@ so in its manifest.
   use the dual-stack (IPv6) endpoint
 
   Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing.
+
+- <a id="option-s3-listing"></a>[`--s3-listing auto|range|tree`](#option-s3-listing)\
+  list by key ranges (range) or folder by folder (tree) (default `auto`)
+
+  auto: key ranges, except on Cloudflare R2, which does not list keys in byte order: folder by folder there. tree lists each folder by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.
 
 - <a id="option-s3-fetch-owner"></a>[`--s3-fetch-owner`](#option-s3-fetch-owner)\
   fill owner_id and owner_display_name

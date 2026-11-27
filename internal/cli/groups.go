@@ -23,7 +23,6 @@ const (
 	anonymousFlag      = "anonymous"
 	caBundleFlag       = "ca-bundle"
 	noVerifyFlag       = "no-verify-ssl"
-	listingFlag        = "listing"
 )
 
 // StoreGroup is the flag group every object store provider names: one
@@ -44,14 +43,6 @@ var StoreGroup = &registry.FlagGroup{
 			Long: "For a service behind a private certificate authority. S3: default AWS_CA_BUNDLE."})
 		Define(fs, Flag{Name: noVerifyFlag, Value: Switch(&s.Trust.NoVerify), Usage: "do not verify the service's TLS certificate (warns)",
 			Long: "For a test endpoint only. A resume replays it, and warns again."})
-		Define(fs, Flag{Name: listingFlag, Metavar: "auto|range|tree", Default: string(source.ListingAuto),
-			Usage: "list by key ranges (range) or folder by folder (tree)",
-			Long:  "auto: key ranges, except on Cloudflare R2 (S3), which does not list keys in byte order: folder by folder there. tree is S3's only: each folder listed by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.",
-			Value: Func(func(v string) error {
-				l, err := source.ParseListing(v)
-				s.Listing = l
-				return err
-			})})
 		Define(fs, Flag{Name: requestTimeoutFlag, Value: Duration(&s.Timeout), Metavar: "DURATION", Usage: "per-request timeout; a request over it is retried",
 			Default: source.FormatDuration(source.DefaultRequestTimeout), Group: GroupLimits,
 			Long: "Raise it for a slow endpoint or emulator whose pages take longer to answer."})
@@ -191,10 +182,4 @@ func (s *structureFlag) Set(v string) error {
 		return fmt.Errorf("want auto, on or off")
 	}
 	return nil
-}
-
-// errTreeUnsupported refuses --listing tree for a provider that has no
-// folder walk yet (exit 2).
-func errTreeUnsupported(title string) error {
-	return source.Unsupported(fmt.Errorf("--listing tree is not supported for %s sources yet (only S3); give --listing auto or range", title))
 }

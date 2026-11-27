@@ -15,7 +15,7 @@ import (
 	"github.com/varveio/swath/internal/source/tree"
 )
 
-// Tree lists a bucket folder by folder (--listing tree): the tree core's
+// Tree lists a bucket folder by folder (--s3-listing tree): the tree core's
 // delimited reader (tree.Delimited) over ListObjectsV2 with delimiter '/',
 // each folder from its first page by continuation tokens only, never a
 // start-after, read whole, checked and sorted by raw bytes, each common
@@ -52,33 +52,13 @@ func newTree(p *Provider, own bool, reason string) (*Tree, error) {
 		Select:       p.opt.Prefix,
 		FolderBytes:  p.opt.TreeFolderBytes,
 		StagingBytes: p.opt.TreeStagingBytes,
-		// A page in flight reserves what its decoded strings can hold at
-		// most: its entries' URL-encoded keys (3 bytes a key byte, up to
-		// S3's 1,024) and metadata.
-		PageHeadroom:  int64(pageKeys(p.opt.Policy.PageSize)) * pageEntryHeadroom,
-		HeadroomBytes: p.opt.TreeHeadroomBytes,
-		// The order stage's workers and its drainer, which lists a queued
-		// folder itself: a page each at most.
-		InFlight: p.opt.Workers + 1,
-		Bytes:    objectBytes,
-		Requeue:  objhttp.Requeue,
-		Counters: t.set,
-		Base:     counters.ID(len(clientCounters)),
+		Bytes:        objectBytes,
+		Requeue:      objhttp.Requeue,
+		Counters:     t.set,
+		Base:         counters.ID(len(clientCounters)),
 	})
 	t.Walker = tree.NewWalker[struct{}, struct{}, Object](t.d.Root(), t.d, tree.Options[Object]{Size: func(o *Object) int64 { return o.Size }})
 	return t, nil
-}
-
-// pageEntryHeadroom is what one entry of a page in flight is reserved:
-// a URL-encoded 1,024-byte key and its metadata, rounded up.
-const pageEntryHeadroom = 4 << 10
-
-// pageKeys is the entries a page asks for: the page size, or S3's 1,000.
-func pageKeys(size int) int {
-	if size > 0 {
-		return min(size, maxListKeys)
-	}
-	return maxListKeys
 }
 
 // objectBytes is what a row's payload holds beyond the row: its strings.
@@ -112,7 +92,7 @@ func (t *Tree) Stats() Stats {
 	}
 	p := t.p
 	return Stats{Anonymous: p.anonymous, Credentials: p.creds, Region: p.region, NoVerifySSL: p.opt.Client == nil && p.opt.Trust.NoVerify,
-		Listing: "tree", ListingReason: t.reason, R2Endpoint: R2Endpoint(p.opt.endpoint()),
+		Listing: "tree", ListingReason: t.reason, R2Endpoint: r2Endpoint(p.opt.endpoint()),
 		Counters: t.set.Snapshot(p.opt.Admission.Off(t.own)...)}
 }
 
@@ -142,9 +122,6 @@ func (o *OpenedTree) Options() Options { return o.t.p.opt }
 
 // Listed is the rows emitted so far.
 func (o *OpenedTree) Listed() int64 { return o.t.Walker.Stats().Files }
-
-// Staged is what the folders being read hold now (tests).
-func (o *OpenedTree) Staged() int64 { return o.t.d.Staged() }
 
 // Frontier is the walk's progress for the watchdog (source.Advancing):
 // pages that held an entry or ended a folder; an empty continuing page

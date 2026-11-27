@@ -26,7 +26,7 @@ const (
 	WarnAftermath            = "aftermath_unfinished"          // a dataset in a bucket: committed, its orphan cleanup or report not finished
 	WarnReplacedNotRemoved   = "replaced_not_removed"          // --overwrite: the replaced dataset's files were not removed
 	WarnTreeListing          = "tree_listing"                  // S3: listed folder by folder (on R2 by default); a dataset it writes cannot be resumed
-	WarnUnorderedRange       = "range_listing_unordered"       // S3: --listing range on a store that does not list in byte order (R2)
+	WarnUnorderedRange       = "range_listing_unordered"       // S3: --s3-listing range on a store that does not list in byte order (R2)
 )
 
 // WarningCodes are the codes above, for the documentation's check.

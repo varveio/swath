@@ -2,7 +2,7 @@
 
 The tree core shares ordered child splicing between local filesystems, Azure hierarchical namespaces
 (HNS) and S3's folder walk. Azure uses `Walker` and its seekable-directory reader, `Ordered`. S3's
-`--listing tree` uses `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
+`--s3-listing tree` uses `Walker` and the token-only reader, `Delimited`. localfs uses `EmitRows` with its
 own ranges, retaining descriptor ownership, unread-entry reporting, platform readers and count paths.
 
 ## Ordering and ownership
@@ -79,8 +79,7 @@ whose pages need not be in byte order (Cloudflare R2; [S3](../sources/s3.md#clou
 supplies a `FolderLister`: one delimited list call from a prefix and a token ("" for the folder's first page)
 to the objects directly in the folder, as rows of its own payload, its child prefixes as the service spelled
 them, and the next token. S3's is `ListObjectsV2` with `Delimiter: "/"`, never `StartAfter`, its objects
-mapped by the range listing's `rows`. A GCS adapter (`delimiter` and `pageToken`) or an Azure flat one
-(`delimiter` and `marker`) would be the same few lines; neither is wired.
+mapped by the range listing's `rows`.
 
 A range is a folder (`FolderRange`). `Read` lists it whole, follows tokens only, and checks every page before
 anything is emitted; a violation stops the run (`protocol`) rather than drop a row:
@@ -109,23 +108,22 @@ elsewhere is caught only when they arrive, under the folder that does not hold t
 duplicate check included, covers every returned entry before the scope is applied. Leaving a child prefix out
 is not safe by its spelling alone on a store that groups names in Unicode NFC: R2 merges `e\u0301/` and
 `\u00e9/` into one common prefix spelled as one of them, so `\u00e9/` can hold `e\u0301/x`, a key of the scope
-`e`. So a child `F` outside the scope is probed (`tree.probes`) only when the NFD form of `F`'s segment begins
+`e`. A child `F` outside the scope is left out without a request unless the NFD form of its segment begins
 with the stem of the scope's remainder `r` (`Select` after the start folder's prefix): `NFD(r)` up to and
-including its last starter (canonical combining class 0), or "" when `r` has none. Any other `F` is left out
-without a request. A key `m` of the scope placed under `F` has a segment `s` that starts with `r` and is
-canonically equivalent to `F`'s (`NFC(s) == NFC(seg F)`, so `NFD(s) == NFD(seg F)`); `NFD(s)` is the canonical
-reordering of `NFD(r) + NFD(rest)`, and reordering only permutes runs of non-starters, so the stem is a prefix
-of `NFD(s)`, hence of `NFD(seg F)`. So scope `a` never lists `\u00e9/` (`e\u0301`), scope `e` does, scope
-`\u00e9` lists `\u1eb9\u0301/` (NFD e, dot below, acute: where `\u00e9\u0323` belongs), scope `K` lists
-`\u212a/` (NFD `K`), and a remainder of combining marks alone lists every folder outside it. A probe lists the
-subtree folder by folder, checked as any folder is, emitting nothing, and holds no more than each folder's
-listing and its children's prefixes. A key of the scope hidden in it reaches, at some depth, a listing whose
-raw prefix it does not start with, and stops the run (`protocol`); listing only `F`'s own folder would not do,
-since a deeper common prefix can be spelled as the other spelling's key. The argument needs two things this
-reader has: every folder prefix ends in `/`, and NFC and NFD are segmentable at `/` (no canonical
-decomposition holds `/`, and `/` composes and reorders with nothing). With them a scope that does not end in
-`/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing are exact in raw bytes, or the run
-stops. A probe costs a request per folder of the probed subtree.
+including its last starter (canonical combining class 0), or "" when `r` has none. Then `F` could hold keys of
+the scope, and the run stops (`protocol`, `tree.violations.scope_alias`) before any request to `F`, naming `F`
+and the scope; the user lists a prefix that ends in `/` instead (the folder above, or each folder wanted),
+which has no such sibling. Why the rule is enough: a key `m` of the scope placed under `F` has a segment `s`
+that starts with `r` and is canonically equivalent to `F`'s (`NFC(s) == NFC(seg F)`, so
+`NFD(s) == NFD(seg F)`); `NFD(s)` is the canonical reordering of `NFD(r) + NFD(rest)`, and reordering only
+permutes runs of non-starters, so the stem is a prefix of `NFD(s)`, hence of `NFD(seg F)`. So scope `a` is never
+stopped by `\u00e9/` (`e\u0301`), scope `e` is, scope `\u00e9` is stopped by `\u1eb9\u0301/` (NFD e, dot
+below, acute: where `\u00e9\u0323` belongs), scope `K` by `\u212a/` (NFD `K`), and a remainder of combining
+marks alone by every folder outside it. The refusal is conservative: `F` may hold no key of the scope at all.
+The argument needs two things this reader has: every folder prefix ends in `/`, and NFC and NFD are
+segmentable at `/` (no canonical decomposition holds `/`, and `/` composes and reorders with nothing). With
+them a scope that does not end in `/` (`logs`, covering `logs/` and `logs-old/`) and an `--include` narrowing
+are exact in raw bytes, or the run stops.
 
 **Memory.** A folder is held whole while it is read. Each page is charged what its strings retain
 (`FolderPage.Retained`: S3's decoded page keeps one arena at its URL-encoded size, so a key of decomposed
@@ -138,18 +136,10 @@ never waits, and is released on every return, cancellation included. Once a fold
 the order stage's, under its own budget. A folder is not spilled: one larger than the bound cannot be listed
 this way.
 
-A page in flight is a second, separate bound: from its request until it is decoded and charged it reserves
-`PageHeadroom` from `HeadroomBytes`, waiting while other pages hold the rest (`tree.headroom_waits`,
-`tree.headroom_wait_ns`). S3 reserves 4 KiB an entry asked for (a URL-encoded 1,024-byte key and its
-metadata): 4,000 KiB a page of 1,000. By default `HeadroomBytes` is one page for each page the walk can have in
-flight (`InFlight`: the order stage's workers and its drainer, which lists a queued folder itself, each reading
-one folder a page at a time), so the bound states the memory rather than limiting the walk: at `--workers 64`,
-254 MiB; at 256, 1,004 MiB. The worst case of a walk is then the staging bound plus that: 510 MiB at 64
-workers, 1.23 GiB at 256, beside the order stage's own budgets. The range engine holds the same response memory, a body of up to 16 MiB for each request in flight
-(`--workers`, plus seed listings and probes beside them), under no bound. It cannot deadlock: the headroom is
-the only thing anyone waits for; a holder takes one reservation at a time and releases it once its page is
-charged or has failed, waiting on nothing but its own request; and staging, which a waiter may hold, is never
-waited for. One reservation never exceeds the bound, and a cancelled wait returns.
+Responses in flight are not separately bounded, as for the range engine: a walk has at most one page in
+flight for each folder being read (the order stage's workers and its drainer, which lists a queued folder
+itself: `--workers` + 1), each body capped by the client's limit (16 MiB, `objhttp`'s guard) until it is
+decoded and charged.
 
 **Coverage.** A walk's report claims its scope only when every folder it handed out was read whole (the start
 folder and each child spliced in); a walk that stopped says it is not complete.
@@ -160,18 +150,14 @@ pages within `keyrange.EmptyChainLive` of each other, for the watchdog. A page w
 the reader's counters (folders started and completed, pages, empty pages, requeues, objects, prefixes, markers,
 empty segments, non-NFC names, out-of-scope entries, the largest folder's entries and bytes, peak staging,
 the bounds, budget refusals, sort time and each kind of violation), placed in the provider's table
-([Counters](counters.md#the-s3-folder-walk---listing-tree)).
+([Counters](counters.md#the-s3-folder-walk---s3-listing-tree)).
 
-**Resume, not yet.** No delimited listing declares resume. The intended shape, once a published key `K` is
-journaled: skip the objects at or below `K`, and the folders whose whole subtree sorts at or below `K`,
-without listing them; re-list only the folders on `K`'s path (each of `K`'s ancestors), keeping their entries
-above `K`. Since a folder is emitted whole and in order, a sorted folder is the unit a resume re-reads; nothing
-here keeps state that would block it.
+Tree datasets are not resumable yet.
 
 ## Other directory APIs
 
 A token-only ordered API can reuse the walker and continuation segments without `Ordered` or
-`keyrange.Engine`, or `Delimited` and its `Folder` operation, at the cost of sorting what is already in order.
+`keyrange.Engine`.
 The Vercel investigation observed ordered folded pages with separate blobs and virtual folders; an adapter
 would have to merge them, preserve real markers and validate order across pages. One large flat directory
 would remain a serial cursor chain; tiny folders can amplify requests. Those service contracts and a full

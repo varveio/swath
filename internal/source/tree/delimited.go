@@ -13,7 +13,6 @@ import (
 	"time"
 	"unsafe"
 
-	"golang.org/x/sync/semaphore"
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/varveio/swath/internal/counters"
@@ -50,12 +49,10 @@ type FolderLister[P any] interface {
 	ListFolder(ctx context.Context, prefix, token string) (*FolderPage[P], error)
 }
 
-// Default staging and headroom bounds of a delimited listing
-// (DelimitedOptions).
+// Default staging bounds of a delimited listing (DelimitedOptions).
 const (
-	DefaultFolderBytes   int64 = 64 << 20
-	DefaultStagingBytes  int64 = 256 << 20
-	DefaultHeadroomBytes int64 = 256 << 20
+	DefaultFolderBytes  int64 = 64 << 20
+	DefaultStagingBytes int64 = 256 << 20
 )
 
 // DelimitedOptions configure a Delimited reader.
@@ -70,17 +67,6 @@ type DelimitedOptions[P any] struct {
 	// being read stages at once (0: DefaultStagingBytes). A folder that
 	// would pass either stops the listing (FolderLimitError).
 	FolderBytes, StagingBytes int64
-	// PageHeadroom is reserved for each page in flight, from its request
-	// until it is decoded and charged to staging (the response body and
-	// its decoding); every page in flight at once reserves at most
-	// HeadroomBytes, and a page waits for its reservation. PageHeadroom 0
-	// reserves nothing. HeadroomBytes 0 is InFlight pages' headroom, where
-	// InFlight is the most pages the walk can have in flight (the order
-	// stage's expanding goroutines: each reads one folder, a page at a
-	// time), so that the bound is never what limits it; with neither,
-	// DefaultHeadroomBytes.
-	PageHeadroom, HeadroomBytes int64
-	InFlight                    int
 	// Bytes is a row's payload bytes held beyond its key and the row
 	// itself (its strings), for the staging account of a page that does
 	// not say what it retains (FolderPage.Retained); nil counts none.
@@ -107,16 +93,11 @@ var DelimitedCounters = []counters.Def{
 	{Key: "tree.empty_segments", Kind: counters.Count, Unit: "folders", Help: "child folders whose last segment is empty (a//), walked as any other"},
 	{Key: "tree.non_nfc_names", Kind: counters.Count, Unit: "entries", Help: "entries whose name below the folder is not in Unicode NFC: where a store that matches names in NFC can merge two spellings of one folder"},
 	{Key: "tree.out_of_scope", Kind: counters.Count, Unit: "entries", Help: "entries of the start folder whose keys do not start with the source prefix: left out, not walked"},
-	{Key: "tree.probes", Kind: counters.Count, Unit: "folders", Help: "folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: an out-of-scope child of the start folder whose name, decomposed (NFD), begins with the scope's remainder up to its last starter (a store that groups names in NFC can merge spellings there), and each folder below it"},
-	{Key: "tree.headroom_waits", Kind: counters.Count, Unit: "pages", Help: "pages that waited for their response headroom (every page in flight at once reserves at most tree.limit.headroom_bytes)"},
-	{Key: "tree.headroom_wait_ns", Kind: counters.Count, Unit: "ns", Help: "time those pages waited, summed"},
 	{Key: "tree.max_folder_entries", Kind: counters.Max, Unit: "entries", Help: "the most entries (objects and child folders) of one folder"},
 	{Key: "tree.max_folder_bytes", Kind: counters.Max, Unit: "bytes", Help: "the most one folder staged (what its pages' strings retain, or their lengths; entries; tokens: an estimate)"},
 	{Key: "tree.peak_staged_bytes", Kind: counters.Max, Unit: "bytes", Help: "the most every folder being read staged at once"},
 	{Key: "tree.limit.folder_bytes", Kind: counters.Max, Unit: "bytes", Help: "the bound on one folder's staging: a folder past it stops the run (folder_limit)"},
 	{Key: "tree.limit.staging_bytes", Kind: counters.Max, Unit: "bytes", Help: "the bound on every folder's staging at once: a folder that would pass it stops the run (folder_limit)"},
-	{Key: "tree.limit.page_headroom_bytes", Kind: counters.Max, Unit: "bytes", Help: "what each page in flight reserves until it is decoded and charged (0: no reservation)"},
-	{Key: "tree.limit.headroom_bytes", Kind: counters.Max, Unit: "bytes", Help: "the bound on what every page in flight reserves at once: a page past it waits"},
 	{Key: "tree.budget_refusals", Kind: counters.Count, Unit: "folders", Help: "folders stopped at a staging bound"},
 	{Key: "tree.sort_ns", Kind: counters.Count, Unit: "ns", Help: "time spent sorting folders' entries by raw bytes, summed"},
 	{Key: "tree.violations.raw_prefix", Kind: counters.Count, Unit: "entries", Help: "an object or child folder whose raw bytes do not start with its folder's (a store that matched the prefix another way): the run stops, protocol"},
@@ -124,6 +105,7 @@ var DelimitedCounters = []counters.Def{
 	{Key: "tree.violations.self_reference", Kind: counters.Count, Unit: "entries", Help: "a child folder equal to its own folder: the run stops, protocol"},
 	{Key: "tree.violations.empty_key", Kind: counters.Count, Unit: "entries", Help: "an object with an empty key: the run stops, protocol"},
 	{Key: "tree.violations.duplicate", Kind: counters.Count, Unit: "entries", Help: "an entry listed twice in one folder: the run stops, protocol"},
+	{Key: "tree.violations.scope_alias", Kind: counters.Count, Unit: "folders", Help: "a child folder of the start folder outside a source prefix not ending in '/' whose name, decomposed (NFD), begins with the prefix's remainder up to its last starter: it could hold keys of the prefix under another spelling, and the run stops before listing it, protocol"},
 	{Key: "tree.violations.token", Kind: counters.Count, Unit: "pages", Help: "a truncated page without a continuation token, or with one the folder already returned: the run stops, protocol"},
 }
 
@@ -139,16 +121,11 @@ const (
 	cEmptySegments
 	cNonNFC
 	cOutOfScope
-	cProbes
-	cHeadroomWaits
-	cHeadroomWaitNs
 	cMaxFolderEntries
 	cMaxFolderBytes
 	cPeakStaged
 	cLimitFolder
 	cLimitStaging
-	cLimitPageHeadroom
-	cLimitHeadroom
 	cBudgetRefusals
 	cSortNs
 	cViolationPrefix
@@ -156,6 +133,7 @@ const (
 	cViolationSelf
 	cViolationEmptyKey
 	cViolationDuplicate
+	cViolationScopeAlias
 	cViolationToken
 	numDelimitedCounters
 )
@@ -191,10 +169,8 @@ type Delimited[P any] struct {
 	l   FolderLister[P]
 	opt DelimitedOptions[P]
 
-	staged                atomic.Int64        // what the folders being read hold now
-	headroom              *semaphore.Weighted // what pages in flight reserve (nil: none)
-	advanced, emptyChains atomic.Int64        // Frontier
-	waiting               func()              // test hook: a page is about to wait for headroom
+	staged                atomic.Int64 // what the folders being read hold now
+	advanced, emptyChains atomic.Int64 // Frontier
 }
 
 var _ Reader[struct{}, struct{}, int] = (*Delimited[int])(nil)
@@ -211,24 +187,9 @@ func NewDelimited[P any](l FolderLister[P], opt DelimitedOptions[P]) *Delimited[
 		opt.Counters = counters.New(DelimitedCounters)
 		opt.Base = 0
 	}
-	switch {
-	case opt.HeadroomBytes > 0:
-	case opt.InFlight > 0 && opt.PageHeadroom > 0:
-		opt.HeadroomBytes = int64(opt.InFlight) * opt.PageHeadroom
-	default:
-		opt.HeadroomBytes = DefaultHeadroomBytes
-	}
-	// One page's reservation never exceeds the bound, so it is granted
-	// whenever no other page holds any.
-	opt.PageHeadroom = min(max(opt.PageHeadroom, 0), opt.HeadroomBytes)
 	d := &Delimited[P]{l: l, opt: opt}
-	if opt.PageHeadroom > 0 {
-		d.headroom = semaphore.NewWeighted(opt.HeadroomBytes)
-	}
 	d.set(cLimitFolder, opt.FolderBytes)
 	d.set(cLimitStaging, opt.StagingBytes)
-	d.set(cLimitPageHeadroom, opt.PageHeadroom)
-	d.set(cLimitHeadroom, opt.HeadroomBytes)
 	return d
 }
 
@@ -280,7 +241,7 @@ func (d *Delimited[P]) Read(ctx context.Context, r FolderRange, out *Out[struct{
 		return err
 	}
 	if len(d.opt.Select) > len(r.Prefix) {
-		if entries, err = d.scope(ctx, r.Prefix, entries); err != nil {
+		if entries, err = d.scope(r.Prefix, entries); err != nil {
 			return err
 		}
 	}
@@ -317,13 +278,8 @@ func (d *Delimited[P]) list(ctx context.Context, prefix string, held *int64) ([]
 	token, empty := "", 0
 	var wait time.Duration
 	for {
-		release, err := d.reserve(ctx)
-		if err != nil {
-			return nil, err
-		}
 		pg, err := d.l.ListFolder(ctx, prefix, token)
 		if d.opt.Requeue != nil && err != nil && ctx.Err() == nil && d.opt.Requeue(err) {
-			release()
 			d.inc(cRequeues)
 			if err := keyrange.RequeueBackoff(ctx, &wait); err != nil {
 				return nil, err
@@ -333,7 +289,6 @@ func (d *Delimited[P]) list(ctx context.Context, prefix string, held *int64) ([]
 		if err == nil {
 			err = d.page(prefix, pg, held, len(seen))
 		}
-		release() // decoded and charged (or failed): its headroom is free
 		if err != nil {
 			return nil, err
 		}
@@ -460,42 +415,16 @@ func (d *Delimited[P]) grow(prefix string, held *int64, n int64) error {
 	return nil
 }
 
-// reserve takes one page's headroom, waiting while pages in flight hold
-// the bound, and returns its release. It cannot deadlock: the headroom is
-// the only thing anyone waits for, a holder takes one reservation at a
-// time and releases it once its page is decoded and charged (or failed),
-// without waiting on anything but its own request, and staging, which a
-// waiter may hold, is never waited for (grow refuses instead). A
-// reservation never exceeds the bound, and a cancelled wait returns.
-func (d *Delimited[P]) reserve(ctx context.Context) (release func(), err error) {
-	if d.headroom == nil {
-		return func() {}, nil
-	}
-	n := d.opt.PageHeadroom
-	if !d.headroom.TryAcquire(n) {
-		d.inc(cHeadroomWaits)
-		if d.waiting != nil {
-			d.waiting()
-		}
-		start := time.Now()
-		err := d.headroom.Acquire(ctx, n)
-		d.add(cHeadroomWaitNs, int64(time.Since(start)))
-		if err != nil {
-			return nil, err
-		}
-	}
-	return func() { d.headroom.Release(n) }, nil
-}
-
 // scope keeps the entries of the start folder prefix whose raw bytes
 // start with the scope (Select). An object outside it is left out. A
-// child folder F outside it is probed (its subtree listed and checked,
-// emitting nothing) only when NFD of F's segment starts with stem(r), r
-// being the scope's remainder (Select after prefix); any other F is left
-// out unlisted.
+// child folder F outside it is left out unlisted unless NFD of F's
+// segment starts with stem(r), r being the scope's remainder (Select after
+// prefix): then F could hold a key of the scope under another spelling,
+// and the run stops (protocol) before any request to F, naming F and the
+// scope; a scope that ends in '/' has no such folder.
 //
-// Why that is enough: a store that groups names by their NFC form (R2)
-// places a key m under F when m's segment s and F's segment are
+// Why the rule is enough: a store that groups names by their NFC form
+// (R2) places a key m under F when m's segment s and F's segment are
 // canonically equivalent: NFC(s) == NFC(seg F), so NFD(s) == NFD(seg F).
 // If m is in the scope, s starts with r (r holds no '/'). NFD(s) is the
 // canonical reordering of NFD(r)+NFD(rest), and reordering only permutes
@@ -504,11 +433,8 @@ func (d *Delimited[P]) reserve(ctx context.Context) (release func(), err error) 
 // NFD segment does not start with stem(r) holds no key of the scope under
 // any spelling. This needs folder prefixes ending in '/' (true of every
 // folder here) and NFC and NFD segmentable at '/' (no canonical
-// decomposition holds '/', and '/' composes and reorders with nothing). A
-// probed folder that hides a key of the scope stops the run (protocol):
-// the key reaches, at some depth, a listing whose raw prefix it does not
-// start with.
-func (d *Delimited[P]) scope(ctx context.Context, prefix string, entries []entry[P]) ([]entry[P], error) {
+// decomposition holds '/', and '/' composes and reorders with nothing).
+func (d *Delimited[P]) scope(prefix string, entries []entry[P]) ([]entry[P], error) {
 	sel := d.opt.Select
 	r0 := stem(sel[len(prefix):])
 	kept := entries[:0]
@@ -519,9 +445,8 @@ func (d *Delimited[P]) scope(ctx context.Context, prefix string, entries []entry
 		}
 		d.inc(cOutOfScope)
 		if e.folder && strings.HasPrefix(norm.NFD.String(e.row.Key[len(prefix):]), r0) {
-			if err := d.probe(ctx, strings.Clone(e.row.Key)); err != nil {
-				return nil, err
-			}
+			return nil, d.violation(cViolationScopeAlias, "folder %+q, outside the scope %+q, could hold keys of the scope under another spelling (a store that matches names in Unicode NFC merges them): list a prefix that ends in '/'",
+				e.row.Key, sel)
 		}
 	}
 	clear(entries[len(kept):]) // dropped rows release their strings
@@ -543,40 +468,6 @@ func stem(r string) string {
 		i += size
 	}
 	return n[:end]
-}
-
-// probe lists folder f and every folder below it, checked as list checks
-// any folder, emitting nothing. A folder's listing is released before its
-// children are probed; their prefixes are charged while they wait.
-func (d *Delimited[P]) probe(ctx context.Context, f string) error {
-	d.inc(cProbes)
-	var held int64
-	entries, err := d.list(ctx, f, &held)
-	var children []string
-	for i := range entries {
-		if entries[i].folder {
-			children = append(children, strings.Clone(entries[i].row.Key))
-		}
-	}
-	d.staged.Add(-held)
-	held = 0
-	if err != nil {
-		return err
-	}
-	var kept int64
-	for _, c := range children {
-		kept += int64(len(c)) + int64(unsafe.Sizeof(""))
-	}
-	defer func() { d.staged.Add(-held) }()
-	if err := d.grow(f, &held, kept); err != nil {
-		return err
-	}
-	for _, c := range children {
-		if err := d.probe(ctx, c); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // emit hands a sorted folder on: runs of objects as Leaf rows, each child

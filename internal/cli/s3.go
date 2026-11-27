@@ -126,6 +126,14 @@ func s3Flags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any {
 		Long: "Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
 	Define(f, Flag{Name: "s3-dualstack", Familiar: []string{"dualstack"}, Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
 		Long: "Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
+	Define(f, Flag{Name: "s3-listing", Metavar: "auto|range|tree", Default: string(s3.ListingAuto),
+		Usage: "list by key ranges (range) or folder by folder (tree)",
+		Long:  "auto: key ranges, except on Cloudflare R2, which does not list keys in byte order: folder by folder there. tree lists each folder by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.",
+		Value: Func(func(v string) error {
+			l, err := s3.ParseListing(v)
+			o.Listing = l
+			return err
+		})})
 	Define(f, Flag{Name: "s3-fetch-owner", Familiar: []string{"fetch-owner"}, Value: Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
 	return o
 }
@@ -172,7 +180,7 @@ func openS3(ctx context.Context, req registry.Request) (registry.Source, error) 
 }
 
 // treeDatasetNotice: a dataset run of the folder walk keeps no journal.
-const treeDatasetNotice = "a folder-by-folder listing (--listing tree) keeps no journal: if this dataset run is interrupted, swath resume cannot continue it; run the command again"
+const treeDatasetNotice = "a folder-by-folder listing (--s3-listing tree) keeps no journal: if this dataset run is interrupted, swath resume cannot continue it; run the command again"
 
 // s3TreeSource is the folder walk as a run takes it; a dataset run is told
 // that it cannot be resumed.
@@ -209,7 +217,7 @@ var (
 func (o *s3Flagged) options() (s3.Options, error) {
 	opt := o.Options
 	if o.store != nil {
-		opt.Endpoint, opt.Timeout, opt.Anonymous, opt.Trust, opt.Listing = o.store.Endpoint, o.store.Timeout, o.store.Anonymous, o.store.Trust, o.store.Listing
+		opt.Endpoint, opt.Timeout, opt.Anonymous, opt.Trust = o.store.Endpoint, o.store.Timeout, o.store.Anonymous, o.store.Trust
 	}
 	if o.common != nil {
 		opt.Policy, opt.Admission, opt.AllVersions = o.common.Policy, o.common.Admission, o.common.AllVersions

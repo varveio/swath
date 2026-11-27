@@ -24,9 +24,9 @@ import (
 	"github.com/varveio/swath/reader"
 )
 
-// TestListingFlag: --listing chooses S3's listing; the default on an R2
+// TestListingFlag: --s3-listing chooses S3's listing; the default on an R2
 // endpoint, given by flag or by AWS_ENDPOINT_URL or AWS_ENDPOINT_URL_S3,
-// is the folder walk, told once; --listing range there warns; another
+// is the folder walk, told once; --s3-listing range there warns; another
 // endpoint lists by key ranges unless asked.
 func TestListingFlag(t *testing.T) {
 	s3test.NoCredentials(t)
@@ -39,12 +39,12 @@ func TestListingFlag(t *testing.T) {
 		warn string
 	}{
 		{"default", nil, []string{"--endpoint-url", "http://127.0.0.1:1"}, false, ""},
-		{"range", nil, []string{"--endpoint-url", "http://127.0.0.1:1", "--listing", "range"}, false, ""},
-		{"tree", nil, []string{"--endpoint-url", "http://127.0.0.1:1", "--listing=tree"}, true, source.WarnTreeListing},
+		{"range", nil, []string{"--endpoint-url", "http://127.0.0.1:1", "--s3-listing", "range"}, false, ""},
+		{"tree", nil, []string{"--endpoint-url", "http://127.0.0.1:1", "--s3-listing=tree"}, true, source.WarnTreeListing},
 		{"r2 flag", nil, []string{"--endpoint-url", r2}, true, source.WarnTreeListing},
 		{"r2 env", map[string]string{"AWS_ENDPOINT_URL": r2}, nil, true, source.WarnTreeListing},
 		{"r2 env s3", map[string]string{"AWS_ENDPOINT_URL_S3": r2, "AWS_ENDPOINT_URL": "http://127.0.0.1:1"}, nil, true, source.WarnTreeListing},
-		{"r2 range", map[string]string{"AWS_ENDPOINT_URL": r2}, []string{"--listing", "range"}, false, source.WarnUnorderedRange},
+		{"r2 range", map[string]string{"AWS_ENDPOINT_URL": r2}, []string{"--s3-listing", "range"}, false, source.WarnUnorderedRange},
 		{"other env", map[string]string{"AWS_ENDPOINT_URL": "https://storage.example.com"}, nil, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,20 +76,12 @@ func TestListingFlag(t *testing.T) {
 	}
 }
 
-// TestListingTreeRefusedElsewhere: GCS and Azure Blob have no folder walk
-// yet: --listing tree is refused before any request (exit 2), and an
-// unknown listing does not parse.
-func TestListingTreeRefusedElsewhere(t *testing.T) {
-	for _, root := range []string{"gs://bkt", "az://acct/c"} {
-		_, err := openArgs(t, root, false, nil, "--listing", "tree", "--anonymous", "--endpoint-url", "http://127.0.0.1:1")
-		if !errors.Is(err, source.ErrUnsupported) || !strings.Contains(err.Error(), "not supported") {
-			t.Fatalf("%s: %v", root, err)
-		}
-	}
+// TestListingParse: an unknown listing does not parse.
+func TestListingParse(t *testing.T) {
 	f := factory(t, "s3://bkt")
 	fs := pflag.NewFlagSet("t", pflag.ContinueOnError)
 	f.RegisterFlags(fs, false)
-	if err := fs.Parse([]string{"--listing", "sideways"}); err == nil || !strings.Contains(err.Error(), "auto, range or tree") {
+	if err := fs.Parse([]string{"--s3-listing", "sideways"}); err == nil || !strings.Contains(err.Error(), "auto, range or tree") {
 		t.Fatalf("parse: %v", err)
 	}
 }
@@ -102,7 +94,7 @@ var treeKeys = []string{"a", "a.jpg", "a.jpg.orig", "a/", "a/0", "a/1/x", "b/", 
 func TestTreeCountMatchesList(t *testing.T) {
 	s3test.NoCredentials(t)
 	u := s3test.Serve(t, s3test.NewR2(treeKeys))
-	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: source.ListingTree}
+	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: s3.ListingTree}
 	r, err := inventory.Run(context.Background(), inventory.Config{Source: inventory.SourceConfig{URI: "s3://bkt", Options: opt}})
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +123,7 @@ func TestTreeCountMatchesList(t *testing.T) {
 func TestTreeDatasetNotResumable(t *testing.T) {
 	s3test.NoCredentials(t)
 	u := s3test.Serve(t, s3test.NewR2(treeKeys))
-	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: source.ListingTree}
+	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: s3.ListingTree}
 	dir := filepath.Join(t.TempDir(), "ds")
 	var warned []string
 	warn := func(code, msg string) { warned = append(warned, code+": "+msg) }
@@ -163,7 +155,7 @@ func TestTreeDatasetNotResumable(t *testing.T) {
 func TestTreeSourceInterfaces(t *testing.T) {
 	s3test.NoCredentials(t)
 	src, err := openS3(context.Background(), registry.Request{Root: "s3://bkt", Workers: 2, Warn: func(string, string) {},
-		Options: &s3.Options{Endpoint: "http://127.0.0.1:1", Anonymous: true, Region: "us-east-1", Listing: source.ListingTree}})
+		Options: &s3.Options{Endpoint: "http://127.0.0.1:1", Anonymous: true, Region: "us-east-1", Listing: s3.ListingTree}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,9 +181,10 @@ func TestTreeSourceInterfaces(t *testing.T) {
 func is[I any](v any) bool { _, ok := v.(I); return ok }
 
 // TestTreeIncludeNarrowingAlias: an --include narrowing is the folder
-// walk's scope, kept by raw bytes; a common prefix outside it whose name is
-// not ASCII (R2's merge of é/ into é/) is probed, and the key of
-// the include it hides stops the run (protocol) instead of being left out.
+// walk's scope, kept by raw bytes; a common prefix outside it that could
+// hold keys of the include under another spelling (R2's merge of the
+// decomposed and composed e-acute folders) stops the run (protocol)
+// before it is listed, instead of being left out.
 func TestTreeIncludeNarrowingAlias(t *testing.T) {
 	s3test.NoCredentials(t)
 	f := s3test.NewR2([]string{"é/x", "é/!", "f"})
@@ -201,12 +194,17 @@ func TestTreeIncludeNarrowingAlias(t *testing.T) {
 	if inferred != "e" || why != filter.Narrowed {
 		t.Fatalf("the include narrowed to %q (%s)", inferred, why)
 	}
-	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: source.ListingTree}
+	opt := &s3.Options{Endpoint: u, PathStyle: true, Anonymous: true, Region: "us-east-1", Listing: s3.ListingTree}
 	_, err := inventory.Run(context.Background(), inventory.Config{
 		Source: inventory.SourceConfig{URI: "s3://bkt/" + inferred, OriginalURI: "s3://bkt", Narrowing: why, Options: opt},
 		Filter: spec,
 	})
-	if !errors.Is(err, source.ErrProtocol) {
+	if !errors.Is(err, source.ErrProtocol) || !strings.Contains(err.Error(), "ends in '/'") {
 		t.Fatalf("err %v", err)
+	}
+	for _, q := range f.Log() {
+		if p := q.Get("prefix"); p != "" {
+			t.Fatalf("listed %+q: only the start folder is listed before the refusal", p)
+		}
 	}
 }

@@ -440,7 +440,7 @@ Discarded speculative work is `overfetch_keys` and `child_empty.*` below.
 | `credentials.expired_refreshes` | count | refreshes |  | renewals fetched after an expired-token answer (ExpiredToken, ExpiredTokenException, TokenRefreshRequired) to credentials that can expire, its request retried once: one per generation of credentials, however many requests it refused |
 <!-- s3:end -->
 
-### The S3 folder walk (`--listing tree`)
+### The S3 folder walk (`--s3-listing tree`)
 
 A listing folder by folder (the default on Cloudflare R2: [S3](../sources/s3.md#cloudflare-r2)) has its own
 table: the HTTP client's counters above, then the delimited reader's (`tree.DelimitedCounters`, package
@@ -497,16 +497,11 @@ the run (`protocol`), so a report shows at most one of them; `tree.limit.*` are 
 | `tree.empty_segments` | count | folders |  | child folders whose last segment is empty (a//), walked as any other |
 | `tree.non_nfc_names` | count | entries |  | entries whose name below the folder is not in Unicode NFC: where a store that matches names in NFC can merge two spellings of one folder |
 | `tree.out_of_scope` | count | entries |  | entries of the start folder whose keys do not start with the source prefix: left out, not walked |
-| `tree.probes` | count | folders |  | folders listed, emitting nothing, to prove that none holds a key of the scope under another spelling: an out-of-scope child of the start folder whose name, decomposed (NFD), begins with the scope's remainder up to its last starter (a store that groups names in NFC can merge spellings there), and each folder below it |
-| `tree.headroom_waits` | count | pages |  | pages that waited for their response headroom (every page in flight at once reserves at most tree.limit.headroom_bytes) |
-| `tree.headroom_wait_ns` | count | ns |  | time those pages waited, summed |
 | `tree.max_folder_entries` | max | entries |  | the most entries (objects and child folders) of one folder |
 | `tree.max_folder_bytes` | max | bytes |  | the most one folder staged (what its pages' strings retain, or their lengths; entries; tokens: an estimate) |
 | `tree.peak_staged_bytes` | max | bytes |  | the most every folder being read staged at once |
 | `tree.limit.folder_bytes` | max | bytes |  | the bound on one folder's staging: a folder past it stops the run (folder_limit) |
 | `tree.limit.staging_bytes` | max | bytes |  | the bound on every folder's staging at once: a folder that would pass it stops the run (folder_limit) |
-| `tree.limit.page_headroom_bytes` | max | bytes |  | what each page in flight reserves until it is decoded and charged (0: no reservation) |
-| `tree.limit.headroom_bytes` | max | bytes |  | the bound on what every page in flight reserves at once: a page past it waits |
 | `tree.budget_refusals` | count | folders |  | folders stopped at a staging bound |
 | `tree.sort_ns` | count | ns |  | time spent sorting folders' entries by raw bytes, summed |
 | `tree.violations.raw_prefix` | count | entries |  | an object or child folder whose raw bytes do not start with its folder's (a store that matched the prefix another way): the run stops, protocol |
@@ -514,6 +509,7 @@ the run (`protocol`), so a report shows at most one of them; `tree.limit.*` are 
 | `tree.violations.self_reference` | count | entries |  | a child folder equal to its own folder: the run stops, protocol |
 | `tree.violations.empty_key` | count | entries |  | an object with an empty key: the run stops, protocol |
 | `tree.violations.duplicate` | count | entries |  | an entry listed twice in one folder: the run stops, protocol |
+| `tree.violations.scope_alias` | count | folders |  | a child folder of the start folder outside a source prefix not ending in '/' whose name, decomposed (NFD), begins with the prefix's remainder up to its last starter: it could hold keys of the prefix under another spelling, and the run stops before listing it, protocol |
 | `tree.violations.token` | count | pages |  | a truncated page without a continuation token, or with one the folder already returned: the run stops, protocol |
 <!-- s3-tree:end -->
 
