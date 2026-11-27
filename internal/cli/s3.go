@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/parquetout"
 	"github.com/varveio/swath/internal/registry"
 	"github.com/varveio/swath/internal/schema"
@@ -125,6 +126,14 @@ func s3Flags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any {
 		Long: "Default: AWS_USE_FIPS_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
 	Define(f, Flag{Name: "s3-dualstack", Familiar: []string{"dualstack"}, Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
 		Long: "Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
+	Define(f, Flag{Name: "s3-listing", Metavar: "auto|range|tree", Default: string(s3.ListingAuto),
+		Usage: "list by key ranges (range) or folder by folder (tree)",
+		Long:  "auto: key ranges, except on Cloudflare R2, which does not list keys in byte order: folder by folder there. tree lists each folder by continuation tokens, read whole and sorted in memory; no --all-versions, and a dataset run cannot be resumed. Part of the resume identity.",
+		Value: Func(func(v string) error {
+			l, err := s3.ParseListing(v)
+			o.Listing = l
+			return err
+		})})
 	Define(f, Flag{Name: "s3-fetch-owner", Familiar: []string{"fetch-owner"}, Value: Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
 	return o
 }
@@ -160,8 +169,45 @@ func openS3(ctx context.Context, req registry.Request) (registry.Source, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &s3Source[s3.Object]{registry.From(o.Bound()), o}, nil
+	switch o := o.(type) {
+	case *s3.Opened[s3.Object]:
+		return &s3Source[s3.Object]{registry.From(o.Bound()), o}, nil
+	case *s3.OpenedTree:
+		return &s3TreeSource{registry.From(o.Bound()), o, req.Warn}, nil
+	default:
+		return nil, fmt.Errorf("S3: unexpected inventory type %T", o)
+	}
 }
+
+// treeDatasetNotice: a dataset run of the folder walk keeps no journal.
+const treeDatasetNotice = "a folder-by-folder listing (--s3-listing tree) keeps no journal: if this dataset run is interrupted, swath resume cannot continue it; run the command again"
+
+// s3TreeSource is the folder walk as a run takes it; a dataset run is told
+// that it cannot be resumed.
+type s3TreeSource struct {
+	registry.Bound[s3.Object]
+	*s3.OpenedTree
+	warn func(code, msg string)
+}
+
+func (o *s3TreeSource) Run(ctx context.Context, env registry.Env) (order.Stats, parquetout.Encoder, error) {
+	if env.Router != nil && o.warn != nil {
+		o.warn(source.WarnTreeListing, treeDatasetNotice)
+	}
+	return o.Bound.Run(ctx, env)
+}
+
+var (
+	_ registry.Source   = (*s3TreeSource)(nil)
+	_ source.Identified = (*s3TreeSource)(nil)
+	_ source.Capable    = (*s3TreeSource)(nil)
+	_ source.Reporter   = (*s3TreeSource)(nil)
+	_ source.Priced     = (*s3TreeSource)(nil)
+	_ source.Live       = (*s3TreeSource)(nil)
+	_ source.Faulted    = (*s3TreeSource)(nil)
+	_ source.Advancing  = (*s3TreeSource)(nil)
+	_ source.Requested  = (*s3TreeSource)(nil)
+)
 
 // options are the S3 options the command line gives: the S3 flags, the
 // shared groups' values, the AWS CLI's endpoint variables where no flag

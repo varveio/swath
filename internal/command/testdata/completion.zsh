@@ -76,6 +76,7 @@ _swath_list() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -144,6 +145,7 @@ _swath_du() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -235,6 +237,7 @@ _swath_diag_list() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
@@ -321,6 +324,7 @@ _swath_diag_count() {
         '--s3-bearer-token-refresh-interval=[run --s3-bearer-token-command again after this long]:DURATION: ' \
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
+        '--s3-listing=[list by key ranges (range) or folder by folder (tree)]:value:(auto range tree)' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'

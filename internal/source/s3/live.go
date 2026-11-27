@@ -30,6 +30,7 @@ type Live struct {
 	bucket   string
 	client   *client.Client
 	location string
+	r2       bool // a Cloudflare R2 endpoint (r2Endpoint): Walk is refused
 }
 
 var _ live.Store = (*Live)(nil)
@@ -44,7 +45,7 @@ func OpenLive(ctx context.Context, opt Options) (*Live, error) {
 	if err != nil {
 		return nil, failure(ctx, err)
 	}
-	return &Live{bucket: opt.Bucket, client: p.client.(*client.Client), location: location(opt, p.region)}, nil
+	return &Live{bucket: opt.Bucket, client: p.client.(*client.Client), location: location(opt, p.region), r2: r2Endpoint(opt.Endpoint)}, nil
 }
 
 // location names the bucket the client reaches by what decides which

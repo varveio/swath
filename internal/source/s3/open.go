@@ -30,18 +30,53 @@ type Opened[P any] struct {
 	root  string
 }
 
+// Inventory is an opened listing of current S3 objects: the range
+// engine's (*Opened[Object]) or the folder walk's (*OpenedTree). The
+// concrete source exposes the capabilities of its listing.
+type Inventory interface {
+	Bound() bind.Bound[Object]
+	Options() Options
+	Locator() source.Locator
+	source.Identified
+	source.Capable
+	source.Reporter
+	source.Priced
+}
+
 // Open opens root, s3://bucket[/prefix], for its current objects: opt with
-// the bucket and prefix root names (ParseURL). opt.AllVersions is refused
-// (New): OpenVersions lists versions.
-func Open(ctx context.Context, root string, opt Options) (*Opened[Object], error) {
+// the bucket and prefix root names (ParseURL), listed as opt.Listing says:
+// by key ranges (*Opened[Object]), or folder by folder (*OpenedTree),
+// which the default chooses for a Cloudflare R2 endpoint, telling
+// opt.Warn. opt.AllVersions is refused (New): OpenVersions lists versions.
+func Open(ctx context.Context, root string, opt Options) (Inventory, error) {
 	if err := opt.setRoot(root); err != nil {
 		return nil, err
 	}
-	p, err := New(ctx, opt)
+	walk, reason, err := opt.listing()
 	if err != nil {
 		return nil, err
 	}
-	return opened(p, &Schema, root)
+	if !walk {
+		p, err := New(ctx, opt)
+		if err != nil {
+			return nil, err
+		}
+		opt.warnListing(walk, reason)
+		return opened(p, &Schema, root)
+	}
+	if err := treeRefusal(&opt, reason); err != nil {
+		return nil, err
+	}
+	p, own, err := connect[Object](ctx, opt)
+	if err != nil {
+		return nil, err
+	}
+	o, err := openTree(p, own, reason, root)
+	if err != nil {
+		return nil, err
+	}
+	opt.warnListing(walk, reason)
+	return o, nil
 }
 
 // OpenVersions is Open for every version and delete marker of each key
@@ -54,6 +89,8 @@ func OpenVersions(ctx context.Context, root string, opt Options) (*Opened[Versio
 	if err != nil {
 		return nil, err
 	}
+	walk, reason, _ := opt.listing()
+	opt.warnListing(walk, reason)
 	return opened(p, &VersionsSchema, root)
 }
 

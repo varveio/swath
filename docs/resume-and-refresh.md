@@ -37,7 +37,8 @@ same way; its `error.json` is missing then, or an earlier attempt's.
 
 Only a dataset run of an object store (S3, GCS or flat-namespace Azure Blob with `-o DIR`) can be resumed: it keeps a journal
 of what it saved in `DIR/.swath/`. Leave that directory in place and do not edit its files: without it there
-is nothing to resume. A run of a local or mounted filesystem or Azure hierarchical namespace, a text output (`-o rows.tsv`) and `swath du` keep no
+is nothing to resume. A run of a local or mounted filesystem, an Azure hierarchical namespace or an S3 bucket listed folder by folder
+(`--s3-listing tree`, the default on [Cloudflare R2](sources/s3.md#cloudflare-r2)), a text output (`-o rows.tsv`) and `swath du` keep no
 journal and are run again: a filesystem dataset with `--overwrite`, or into a new directory.
 
 ### Resume it

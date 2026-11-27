@@ -17,25 +17,32 @@ import (
 // Counters is the S3 tally in report order, assembled for documentation and ID checks.
 var Counters = append(append([]counters.Def(nil), keyrange.Counters...), clientCounters...)
 
-// TestDocsCounters keeps the S3 table in docs/internals/counters.md generated
-// from Counters: run with UPDATE=1 to rewrite it.
+// TestDocsCounters keeps the S3 tables in docs/internals/counters.md
+// generated from Counters (the range engine's listing) and treeCounters
+// (the folder walk's): run with UPDATE=1 to rewrite them.
 func TestDocsCounters(t *testing.T) {
-	path, begin, end := docs.Path(t, "internals/counters.md"), "<!-- s3:begin -->\n", "<!-- s3:end -->"
+	path := docs.Path(t, "internals/counters.md")
 	doc, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(doc)
-	i, j := strings.Index(s, begin), strings.Index(s, end)
-	if i < 0 || j < i {
-		t.Fatal("counters.md lacks the s3 markers")
+	for _, table := range []struct {
+		name string
+		defs []counters.Def
+	}{{"s3", Counters}, {"s3-tree", treeCounters}} {
+		begin, end := "<!-- "+table.name+":begin -->\n", "<!-- "+table.name+":end -->"
+		i, j := strings.Index(s, begin), strings.Index(s, end)
+		if i < 0 || j < i {
+			t.Fatalf("counters.md lacks the %s markers", table.name)
+		}
+		s = s[:i+len(begin)] + counters.Markdown(table.defs) + s[j:]
 	}
-	want := s[:i+len(begin)] + counters.Markdown(Counters) + s[j:]
-	if want == s {
+	if s == string(doc) {
 		return
 	}
 	if os.Getenv("UPDATE") != "" {
-		if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(s), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -49,12 +56,14 @@ func TestCountersMatchIDs(t *testing.T) {
 	if len(clientCounters) != cCredentialExpired+1 {
 		t.Fatalf("%d client definitions for %d IDs", len(clientCounters), cCredentialExpired+1)
 	}
-	seen := map[string]bool{}
-	for _, d := range Counters {
-		if seen[d.Key] {
-			t.Fatalf("duplicate key %s", d.Key)
+	for _, defs := range [][]counters.Def{Counters, treeCounters} {
+		seen := map[string]bool{}
+		for _, d := range defs {
+			if seen[d.Key] {
+				t.Fatalf("duplicate key %s", d.Key)
+			}
+			seen[d.Key] = true
 		}
-		seen[d.Key] = true
 	}
 }
 

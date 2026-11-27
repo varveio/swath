@@ -115,3 +115,15 @@ func stockUnescape(enc, s string) (string, error) {
 	}
 	return v, nil
 }
+
+// unretained is p without its arena's size (Page.Retained), which the
+// oracles (encoding/xml, the SDK, the old scanner) do not report;
+// TestPageRetained checks it.
+func unretained(p *Page) *Page {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	c.Retained = 0
+	return &c
+}

@@ -156,7 +156,9 @@ both had would be dropped. `internal/cli` `TestRegisteredSources` opens each pro
 and checks the interfaces and capabilities.
 
 A source that is not resumable (or declines `Resume`) runs without a journal; it still takes the output lock
-like every run with an output. `swath resume` on it is an error.
+like every run with an output. `swath resume` on it is an error. S3's folder walk (`--s3-listing tree`) is such a
+source: `s3.OpenedTree` is a view of its own, with the live interfaces (`Live`, `Advancing`, `Requested`,
+`Faulted`), `Identified`, `Capable`, `Reporter` and `Priced`, and none of the range engine's.
 
 ## Adding a provider
 
@@ -221,7 +223,9 @@ What a provider must state about itself (built: `source.Capable` with `Resume`, 
 - **Bounds:** explicit bound inclusivity, as S3's `(lo, hi]`.
 - **Bounded batches:** stream rows in batches; the order stage splits large `Rows` calls into publish
   batches. Provider staging sits outside that budget: object-store clients cap response bodies, while the
-  filesystem reads and sorts a directory's names before handing out chunks ([local.md](providers/local.md)).
+  filesystem reads and sorts a directory's names before handing out chunks ([local.md](providers/local.md)),
+  and a delimited folder walk holds each folder whole within its own bounds
+  ([tree sources](tree-sources.md#token-only-delimited-folders)).
 - **Restart:** start after a key; the journal stores no provider state. A provider that can only replay
   tokens must re-list to the key or declare `Capabilities.Resume` false.
 - **Disposal:** a canceled run releases every queued range's resources: the order stage disposes ranges it

@@ -23,6 +23,7 @@ package tree
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -86,6 +87,7 @@ type Stats struct {
 	Excluded int64 // directories stopped by the recursive-exclude predicate
 	Omitted  int64 // entries neither listed nor walked (Walk Omit)
 	Segments int64 // segments readers handed out
+	Folders  int64 // virtual folders descended (Out.Folder): no row of their own
 }
 
 func (s *Stats) add(o *Stats) {
@@ -96,6 +98,7 @@ func (s *Stats) add(o *Stats) {
 	s.Excluded += o.Excluded
 	s.Omitted += o.Omitted
 	s.Segments += o.Segments
+	s.Folders += o.Folders
 }
 
 // Walker lists a tree through a Reader. It implements
@@ -247,6 +250,26 @@ func EmitRows[R, P any](e source.Emitter[R, P], rows []schema.Row[P], noDirs boo
 		}
 	}
 	return e.Rows(rows[start:])
+}
+
+// Folder descends into a virtual folder at this position: a child range
+// keyed prefix that has no row of its own, as an object store's common
+// prefix is no object. A real object whose key is prefix (a folder
+// marker) belongs to the child's own listing, where it is a Leaf, emitted
+// once. prefix must extend this range's prefix by one segment and a
+// trailing '/': the segment holds no '/' and may be empty ("a//" below
+// "a/"), and no path cleaning applies. Anything else is a protocol
+// violation, and nothing is emitted. The recursive-exclude predicate does
+// not apply: it proves a directory's descendants excluded, not its own
+// key, which a marker can hold, so a virtual folder is always walked.
+// Rows before the folder must have been handed to Rows first.
+func (o *Out[D, S, P]) Folder(dir D, prefix string) error {
+	seg, ok := strings.CutPrefix(prefix, o.r.Prefix)
+	if !ok || seg == "" || strings.IndexByte(seg, '/') != len(seg)-1 {
+		return source.Violation(fmt.Errorf("tree: folder %+q is not one segment and a slash below %+q", prefix, o.r.Prefix))
+	}
+	o.st.Folders++
+	return o.e.Child(Range[D, S]{Dir: dir, Prefix: strings.Clone(prefix)})
 }
 
 // Seg emits a segment of this range's directory at this position. Its

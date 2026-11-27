@@ -493,7 +493,7 @@ func (p *parser) finish() (*Page, error) {
 		return nil, err
 	}
 	defer p.own()()
-	pg := &Page{IsTruncated: p.truncated, NextContinuationToken: p.text(p.token)}
+	pg := &Page{IsTruncated: p.truncated, NextContinuationToken: p.text(p.token), Retained: len(p.arena)}
 	pg.Contents = make([]Object, len(p.objs))
 	for i := range p.objs {
 		pg.Contents[i] = p.object(&p.objs[i])

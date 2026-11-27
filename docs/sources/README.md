@@ -26,7 +26,7 @@ What has also run against the service itself, as recorded in [measurements](../i
 |---|---|---|---|---|
 | Local and mounted filesystems | real filesystems; benchmarks on synthetic trees | – | yes | – |
 | Amazon S3 | one bucket of 1.09 billion objects; 35 public buckets of 50.6 billion in all | seven small public buckets | fakes only | anonymous only |
-| S3-compatible stores | MinIO only, which omits keys from some listings: swath stops such a listing with `omitted_keys`, but can miss them in a versions listing ([S3-compatible stores](s3.md#s3-compatible-stores)); R2, Ceph and others not run | not run | fakes only | MinIO access keys |
+| S3-compatible stores | MinIO only, which omits keys from some listings: swath stops such a listing with `omitted_keys`, but can miss them in a versions listing ([S3-compatible stores](s3.md#s3-compatible-stores)); Cloudflare R2 by key ranges, which can miss keys there, so it is listed folder by folder by default: exact on 21 test shapes and on 83,435 keys at 256 workers, a bucket holding both spellings of a folder name stopping with `protocol` ([Cloudflare R2](s3.md#cloudflare-r2)); Ceph and others not run | not run | fakes only | MinIO access keys |
 | Google Cloud Storage | a bucket of 5.1 million objects; public buckets | one small public bucket | yes: the datasets of the 35 S3 buckets | default credentials, anonymous |
 | Azure Blob Storage | a public container of 1.84 million blobs | fakes only | fakes only | anonymous only; SAS, Shared Key and Entra ID not run |
 
