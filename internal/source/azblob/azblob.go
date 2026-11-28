@@ -368,12 +368,14 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 // service is no answer: a call whose retries were spent on transient
 // failures (5xx, throttling, timeouts) is asked again after the listing's
 // requeue backoff, for as long as the run lives, as a listing page is; the
-// command's watchdog stops a run that never gets an answer as stuck. An
-// endpoint nothing ever answered at is unreachable, not refused.
+// command's watchdog stops a run that never gets an answer as stuck. With
+// Policy.FailExhausted (a live walk) that call's failure is admission's
+// instead. An endpoint nothing ever answered at is unreachable, not
+// refused.
 func (p *provider[P]) admit(ctx context.Context) error {
 	var wait time.Duration
 	hns, how, busy, err := p.namespaceOf(ctx)
-	for busy && ctx.Err() == nil {
+	for busy && ctx.Err() == nil && !p.opt.FailExhausted {
 		if werr := keyrange.RequeueBackoff(ctx, &wait); werr != nil {
 			return werr
 		}
@@ -385,6 +387,9 @@ func (p *provider[P]) admit(ctx context.Context) error {
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return context.Cause(ctx)
+	case busy:
+		// FailExhausted: no answer, and not to be asked again.
+		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	case err == nil && hns:
 		return source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
 	case err == nil:
@@ -426,8 +431,12 @@ func (p *provider[P]) namespaceOf(ctx context.Context) (hns bool, how string, bu
 				// credentials, so a signed caller's rejected credential
 				// (Get Account Information's auth failure) stays that failure.
 				return false, "filesystem endpoint blocked", false, nil
+			} else if objhttp.Requeue(nerr) {
+				// The busy call decides: its failure alone is wrapped, so
+				// the refusal it fell back from does not class it (auth).
+				return hns, how, true, fmt.Errorf("%v; filesystem properties: %w", err, nerr)
 			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
-				return hns, how, objhttp.Requeue(nerr), fmt.Errorf("%w; filesystem properties: %w", err, nerr)
+				return hns, how, false, fmt.Errorf("%w; filesystem properties: %w", err, nerr)
 			}
 		}
 	}

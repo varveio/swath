@@ -25,7 +25,9 @@ const walkWorkers = 64
 // one continuation chain (Sequential). GCS lists names in byte order, so
 // each range's keys are checked strictly ascending and apart from every
 // other range's (live.Count). Its errors are classed as the source's
-// other calls' are.
+// other calls' are. A page whose client retries are exhausted fails the
+// walk (FailExhausted): ErrUnavailable, not asked again for as long as
+// ctx lives.
 func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	workers := w.Workers
 	if workers == 0 {
@@ -33,7 +35,7 @@ func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	}
 
 	p, err := New(ctx, Options{Bucket: l.bucket, Prefix: string(w.Prefix), Workers: workers, Client: l.client,
-		Policy: keyrange.Policy{Sequential: workers == 1}})
+		Policy: keyrange.Policy{Sequential: workers == 1, FailExhausted: true}})
 	if err != nil {
 		return failure(ctx, err)
 	}

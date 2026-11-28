@@ -30,7 +30,8 @@ key (`Capabilities.RangeEngine()`). `Engine[P]` implements `source.Provider[Rang
     introduces a `%` its inputs do not hold at that position (`FuzzPropose` checks it). The
     predicate guards every bound the engine sends: pivots (guard clause `unsafe_pivot`), cursors
     (`unsafe_cursor`), seed and structure boundaries and a resume's start (K's longest accepted prefix);
-  - `Requeue` (which failures are asked again after a backoff instead of failing the run), `InvalidPage`
+  - `Requeue` (which failures are asked again after a backoff instead of failing the run, for as long as
+    the run lives; a library walk, which has no watchdog, sets `Policy.FailExhausted` and fails instead), `InvalidPage`
     (the error contract breaks wrap), `Size` (a row's bytes) and the provider's own `Counters`, reported
     after the engine's.
 

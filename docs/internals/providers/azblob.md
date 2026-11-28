@@ -130,7 +130,8 @@ hierarchical account can answer it that way is unverified. A 403 `AuthorizationP
 nothing: a container SAS met it on a flat account and on a hierarchical one alike. A call whose retries were spent
 on transient failures (5xx, throttling, timeouts: `objhttp.Requeue`) decides nothing: the round is asked again
 after the engine's requeue backoff (`keyrange.RequeueBackoff`), as a listing page is, for as long as the run
-lives, so a service that never answers stops as stuck (exit 75), never refused; an endpoint nothing ever
+lives, so a service that never answers stops as stuck (exit 75), never refused (a library walk, `Policy.FailExhausted`,
+fails with that call's error instead, class unavailable); an endpoint nothing ever
 answered at (objhttp's fail-fast) stops as unreachable (exit 75); with `--azure-assume-flat` the listing reaches
 the same stop. (3) Anything else (a refusal, another code or a missing header
 there too, another failure, no Data Lake host) is unknown and refuses,

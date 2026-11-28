@@ -153,7 +153,9 @@ the context's error. A walk that returns no error finished.
 A walk that cannot read a place goes on past it and hands the function an `Unread` for it as it meets it, in a
 batch of its own: the place's key and a `Reason` that `errors.Is` matches to one of the error classes. Only a local
 walk has them (a directory it cannot open or read, an entry it cannot stat, a directory on another device): on an
-object store a listing error ends the walk. The walk keeps none of them once the function has taken it, however
+object store a listing error ends the walk, a page whose client retries are spent included (`ErrUnavailable`):
+where swath's command asks such a page again, a walk does not, so a store that stops answering ends the walk
+without a deadline of yours. The walk keeps none of them once the function has taken it, however
 many there are; `WalkSummary.Unread` counts them. `WalkSummary.Complete` says the walk read everything under its
 prefix: it finished and handed on no `Unread`, and, over an inventory, the inventory's coverage is complete.
 

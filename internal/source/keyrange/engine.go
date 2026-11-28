@@ -211,6 +211,10 @@ type Options struct {
 	// off (objhttp.Admission.Off): the engine reports them, it does not
 	// own the client's configuration.
 	ClientOff []string
+	// FailExhausted: a failed request that Description.Requeue would ask
+	// again fails the listing instead, for a caller that has no watchdog
+	// to stop a listing that never gets an answer (a live walk).
+	FailExhausted bool
 
 	// Test hooks: SplitCoin replaces the demand gate; Trace receives every
 	// interval an Expand covered, (lo, hi] or (lo, ⊤].
@@ -475,11 +479,12 @@ func (p *Engine[P]) listFollowing(ctx context.Context, in *Query, follow func() 
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, ctx.Err()
 		}
-		if p.d.Requeue != nil && p.d.Requeue(err) && ctx.Err() == nil {
+		if p.d.Requeue != nil && p.d.Requeue(err) && ctx.Err() == nil && !p.opt.FailExhausted {
 			// Never fail the run on retry exhaustion: the page is asked
 			// again after a backoff, for as long as the run lives. Whether
 			// the run still makes progress is the command's watchdog's
-			// decision, not this one's.
+			// decision, not this one's. A caller without one sets
+			// FailExhausted, and the exhausted error fails the listing.
 			p.c.Inc(cRequeues)
 			if err := RequeueBackoff(ctx, &wait); err != nil {
 				return nil, err
