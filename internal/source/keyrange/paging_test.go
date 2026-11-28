@@ -470,3 +470,38 @@ func TestCancelDuringRequeueBackoff(t *testing.T) {
 		})
 	}
 }
+
+// TestFailExhausted (#716): with FailExhausted a request Requeue would ask
+// again fails the listing at once with that error, in a range and in the
+// sequential chain, and is not counted as requeued. The backoff is an
+// hour, so an engine that requeued instead would wait it out; the test's
+// own deadline catches it.
+func TestFailExhausted(t *testing.T) {
+	defer SetRequeueBackoff(time.Hour, time.Hour)()
+	exhausted := errors.New("503 SlowDown: the client's retries exhausted")
+	for _, mode := range []string{"range", "sequential"} {
+		t.Run(mode, func(t *testing.T) {
+			var fetches atomic.Int64
+			fetch := func(context.Context, *Query) (*Page[Object], error) {
+				fetches.Add(1)
+				return nil, exhausted
+			}
+			p, err := New(Options{Workers: 1, Sequential: mode == "sequential", FailExhausted: true},
+				Description[Object]{Target: "test", Listing: Listing, Requeue: func(err error) bool { return errors.Is(err, exhausted) }}, fetch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := Range{open: true, id: 1}
+			if mode == "sequential" {
+				r = p.Root()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err = p.Expand(ctx, r, &direct{&collect{}})
+			if ctx.Err() != nil || !errors.Is(err, exhausted) || fetches.Load() != 1 || p.Set().Load(cRequeues) != 0 {
+				t.Fatalf("Expand: %v after %d requests, %d requeues (context %v), want the exhausted error after one",
+					err, fetches.Load(), p.Set().Load(cRequeues), ctx.Err())
+			}
+		})
+	}
+}

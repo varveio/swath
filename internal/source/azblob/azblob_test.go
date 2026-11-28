@@ -27,6 +27,7 @@ import (
 	"github.com/varveio/swath/internal/source/keyrange"
 	"github.com/varveio/swath/internal/source/objhttp"
 	"github.com/varveio/swath/internal/source/s3"
+	"github.com/varveio/swath/reader/listing"
 )
 
 // highByte reports whether s holds a byte in EE..F4: a lead byte of a
@@ -461,6 +462,23 @@ func TestAdmissionWaitsOutABusyService(t *testing.T) {
 		cancel()
 		if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, source.ErrUnsupported) || b.calls.Load() < 2 {
 			t.Fatalf("dfs %v, never answered: %v after %d calls, want the context's end", dfs, err, b.calls.Load())
+		}
+	}
+}
+
+// TestAdmissionFailsExhaustedWhenAsked (#716): with FailExhausted (a live
+// walk's policy) a busy admission call is admission's failure on either
+// host, after one round and before its context ends: unavailable, never
+// refused as unsupported, never asked again.
+func TestAdmissionFailsExhaustedWhenAsked(t *testing.T) {
+	for _, dfs := range []bool{false, true} {
+		b := &busyAPI{dfs: dfs}
+		b.busy.Store(math.MaxInt64)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // bounds an admission that does not end
+		_, err := New(ctx, Options{Account: "acct", Container: "c", Client: b, Policy: keyrange.Policy{FailExhausted: true}})
+		cancel()
+		if !errors.Is(err, errBusy) || errors.Is(err, source.ErrUnsupported) || !errors.Is(objhttp.Classed(err), listing.ErrUnavailable) || b.calls.Load() != 1 {
+			t.Fatalf("dfs %v: %v after %d calls, want the busy call's failure, unavailable, after one", dfs, err, b.calls.Load())
 		}
 	}
 }

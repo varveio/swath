@@ -24,7 +24,10 @@ const walkWorkers = 64
 // adapter serves each range in byte order, so each range's keys are
 // checked strictly ascending and apart from every other range's
 // (live.Count). One worker lists one continuation chain (Sequential). Its
-// errors are classed as the source's other calls' are.
+// errors are classed as the source's other calls' are. A page or an
+// admission call whose client retries are exhausted fails the walk
+// (FailExhausted): ErrUnavailable, not asked again for as long as ctx
+// lives.
 func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	workers := w.Workers
 	if workers == 0 {
@@ -32,7 +35,7 @@ func (l *Live) Walk(ctx context.Context, w live.Walk, sink live.Sink) error {
 	}
 
 	p, err := New(ctx, Options{Account: l.account, Container: l.container, Prefix: string(w.Prefix), Workers: workers, Client: l.client,
-		Policy: keyrange.Policy{Sequential: workers == 1}})
+		Policy: keyrange.Policy{Sequential: workers == 1, FailExhausted: true}})
 	if err != nil {
 		return failure(ctx, err)
 	}

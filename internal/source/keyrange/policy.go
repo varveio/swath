@@ -17,6 +17,10 @@ type Policy struct {
 	PageSize   int       // the page size asked of the service (0: PageKeys); diagnostic
 	TilePages  int       // the pages of a counted prior's tile (0: TilePages); diagnostic
 	WindowRows int64     // the frontier window's rows in a planned run (0: the default rule); diagnostic
+	// FailExhausted fails the listing once a page's client retries are
+	// exhausted, instead of asking it again (Options.FailExhausted): a live
+	// walk's, which no watchdog stops. No flag sets it.
+	FailExhausted bool
 }
 
 // Common is what every provider on the engine shares, the value of the
@@ -38,7 +42,7 @@ type Common struct {
 // Options are the engine options this policy sets.
 func (p Policy) Options() Options {
 	return Options{Sequential: p.Sequential, Seed: p.Seed, SeedFirstPage: p.Seed, Structure: p.Structure,
-		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, TilePages: p.TilePages, WindowRows: p.WindowRows}
+		MaxKeys: p.MaxKeys, SlowSplit: p.SlowSplit, PageSize: p.PageSize, TilePages: p.TilePages, WindowRows: p.WindowRows, FailExhausted: p.FailExhausted}
 }
 
 // MaxTilePages is the most pages Policy.TilePages may ask of a counted

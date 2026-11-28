@@ -30,7 +30,7 @@ clients are described in [providers.md](providers.md) and the page of each provi
   full-jitter backoff, honors a provider-supplied `Retry-After`, admits each attempt through the limiter and
   the request rate, counts attempts, retries, throttles, timeouts and parse failures, and hands an exhausted
   engine listing failure to the engine, whose `Description.Requeue` is `objhttp.Requeue`: only an exhausted
-  call with a stored transient signal is requeued. Provider admission runs before the engine exists and
+  call with a stored transient signal is requeued, and a library walk (`Policy.FailExhausted`) fails with it instead. Provider admission runs before the engine exists and
   can refuse instead; see [Azure admission](providers/azblob.md#provider-implementation). A nil
   requeue predicate does not authorize requeue. The counted unit is an application attempt: `net/http` may replay an idempotent GET on a reused connection below it.
 - **A run in which nothing answers stops early.** The command arms one fail-fast for the run

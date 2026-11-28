@@ -368,12 +368,14 @@ func (p *provider[P]) Expand(ctx context.Context, r Range, e source.Emitter[Rang
 // service is no answer: a call whose retries were spent on transient
 // failures (5xx, throttling, timeouts) is asked again after the listing's
 // requeue backoff, for as long as the run lives, as a listing page is; the
-// command's watchdog stops a run that never gets an answer as stuck. An
-// endpoint nothing ever answered at is unreachable, not refused.
+// command's watchdog stops a run that never gets an answer as stuck. With
+// Policy.FailExhausted (a live walk) that call's failure is admission's
+// instead. An endpoint nothing ever answered at is unreachable, not
+// refused.
 func (p *provider[P]) admit(ctx context.Context) error {
 	var wait time.Duration
 	hns, how, busy, err := p.namespaceOf(ctx)
-	for busy && ctx.Err() == nil {
+	for busy && ctx.Err() == nil && !p.opt.FailExhausted {
 		if werr := keyrange.RequeueBackoff(ctx, &wait); werr != nil {
 			return werr
 		}
@@ -385,6 +387,9 @@ func (p *provider[P]) admit(ctx context.Context) error {
 	switch {
 	case err != nil && ctx.Err() != nil:
 		return context.Cause(ctx)
+	case busy:
+		// FailExhausted: no answer, and not to be asked again.
+		return fmt.Errorf("Azure Blob: account %s: %w", p.opt.Account, err)
 	case err == nil && hns:
 		return source.Unsupported(fmt.Errorf("Azure Blob: account %s has a hierarchical namespace (%s); only flat accounts are listed", p.opt.Account, how))
 	case err == nil:
