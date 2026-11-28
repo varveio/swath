@@ -133,6 +133,7 @@ type ListOptions struct {
 	S3FIPS                       *bool         `flag:"s3-fips"`
 	S3DualStack                  *bool         `flag:"s3-dualstack"`
 	S3FetchOwner                 bool          `flag:"s3-fetch-owner"`
+	S3Compat                     string        `flag:"s3-compat"` // auto (""), s3 or b2: which store's differences to allow for
 }
 
 // ListProgress is a run's progress, as its progress file
