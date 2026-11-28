@@ -431,8 +431,12 @@ func (p *provider[P]) namespaceOf(ctx context.Context) (hns bool, how string, bu
 				// credentials, so a signed caller's rejected credential
 				// (Get Account Information's auth failure) stays that failure.
 				return false, "filesystem endpoint blocked", false, nil
+			} else if objhttp.Requeue(nerr) {
+				// The busy call decides: its failure alone is wrapped, so
+				// the refusal it fell back from does not class it (auth).
+				return hns, how, true, fmt.Errorf("%v; filesystem properties: %w", err, nerr)
 			} else if !errors.Is(nerr, client.ErrNoDFSEndpoint) {
-				return hns, how, objhttp.Requeue(nerr), fmt.Errorf("%w; filesystem properties: %w", err, nerr)
+				return hns, how, false, fmt.Errorf("%w; filesystem properties: %w", err, nerr)
 			}
 		}
 	}

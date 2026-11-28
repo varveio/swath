@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/varveio/swath/internal/live"
 	"github.com/varveio/swath/internal/order"
 	"github.com/varveio/swath/internal/schema"
 	"github.com/varveio/swath/internal/source"
@@ -482,6 +483,42 @@ func TestAdmissionFailsExhaustedWhenAsked(t *testing.T) {
 		}
 	}
 }
+
+// TestWalkFailsBusyFallbackUnavailable (#716): a signed caller's Get
+// Account Information refused (403), then the Data Lake host busy (503)
+// until the client's retries are spent. The busy call decides, so the walk
+// fails unavailable after one round, not auth by the refusal it fell back
+// from.
+func TestWalkFailsBusyFallbackUnavailable(t *testing.T) {
+	var blob, dfs atomic.Int64
+	answer := func(n *atomic.Int64, status int, code string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			n.Add(1)
+			w.Header().Set("x-ms-error-code", code)
+			w.WriteHeader(status)
+		}
+	}
+	hc := &http.Client{Transport: hostFake{"acct.blob.core.windows.net": answer(&blob, 403, "AuthenticationFailed"),
+		"acct.dfs.core.windows.net": answer(&dfs, 503, "ServerBusy")}}
+	cl, err := client.New(context.Background(), client.Config{Account: "acct", SAS: "sv=1&sig=secret", HTTPClient: hc,
+		Retry: objhttp.Retry{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // bounds a walk that does not end
+	defer cancel()
+	err = (&Live{account: "acct", container: "c", client: cl}).Walk(ctx, live.Walk{Workers: 1}, noSink{})
+	if !errors.Is(err, listing.ErrUnavailable) || errors.Is(err, listing.ErrAuth) || blob.Load() != 1 || dfs.Load() != 2 {
+		t.Fatalf("%v after %d account information and %d filesystem properties requests, want unavailable after one round (1 and 2)",
+			err, blob.Load(), dfs.Load())
+	}
+}
+
+// noSink is a walk's sink that takes nothing.
+type noSink struct{}
+
+func (noSink) Entries(context.Context, []listing.Entry) error { return nil }
+func (noSink) Unread(listing.Unread)                          {}
 
 // hostFake answers each host the client addresses with its own handler:
 // the account's blob and Data Lake hosts on the default endpoint.
