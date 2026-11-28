@@ -94,6 +94,13 @@ type Description[P any] struct {
 	// GroupOrdinal, when set, must strictly ascend within an equal-key
 	// group, including native page seams and rows suppressed at a bound.
 	GroupOrdinal func(*P) int64
+	// GroupHead, when set, marks the rows that may only be the first of
+	// their group (S3 versions: IsLatest, the newest entry of a key, which
+	// S3 lists first). A marked row after its group's first row in the raw
+	// chain, native page seams included, is an invalid page: a store that
+	// flags a second latest, or lists the latest after an older entry,
+	// stops the run rather than writing a wrong is_latest or order.
+	GroupHead func(*P) bool
 	// Detach copies rows out of their page so they share no memory with
 	// it (the bound schema's Detach); group mode needs it, to emit or hold
 	// a few rows of a page without pinning the rest (groups.go).

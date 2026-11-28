@@ -126,6 +126,16 @@ func s3Flags(f *pflag.FlagSet, diag bool, shared registry.SharedValues) any {
 	Define(f, Flag{Name: "s3-dualstack", Familiar: []string{"dualstack"}, Value: tracked(&o.DualStack, true, &o.dualStackSet), Usage: "use the dual-stack (IPv6) endpoint",
 		Long: "Default: AWS_USE_DUALSTACK_ENDPOINT. Refused with --endpoint-url, where it would select nothing."})
 	Define(f, Flag{Name: "s3-fetch-owner", Familiar: []string{"fetch-owner"}, Value: Switch(&o.FetchOwner), Usage: "fill owner_id and owner_display_name"})
+	Define(f, Flag{Name: "s3-compat", Metavar: "auto|s3|b2", Default: string(s3.CompatAuto), Usage: "allow for a store's differences from S3",
+		Long: "auto: by the endpoint's host name; Backblaze B2's (*.backblazeb2.com) is b2. b2 for B2 behind another host name, s3 to allow for none.",
+		Value: Func(func(v string) error {
+			c, err := s3.ParseCompat(v)
+			if err != nil {
+				return err
+			}
+			o.Compat = c
+			return nil
+		})})
 	return o
 }
 

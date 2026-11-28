@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -68,6 +69,13 @@ func (s *Source) checkPage(req listing.PageRequest) error {
 func (s *Source) level(prefix, last []byte, lvl *Level, limit int) (listing.Page, []byte, error) {
 	page := listing.Page{}
 	objects, prefixes := lvl.Objects, lvl.Prefixes
+	// Keys must come in byte order; common prefixes need not. S3 promises
+	// no order for them, and Backblaze B2 sorts a page's by their
+	// URL-encoded text under encoding-type=url. A repeated prefix is still
+	// refused below.
+	if !slices.IsSortedFunc(prefixes, bytes.Compare) {
+		prefixes = slices.SortedFunc(slices.Values(prefixes), bytes.Compare)
+	}
 	page.Entries = make([]listing.Entry, 0, len(objects)+len(prefixes))
 	for len(objects) > 0 || len(prefixes) > 0 {
 		var e listing.Entry

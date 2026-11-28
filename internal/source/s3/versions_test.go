@@ -542,3 +542,98 @@ func TestVersionsConstructorRefusals(t *testing.T) {
 		t.Fatalf("client without VersionsAPI: %v", err)
 	}
 }
+
+// pagedVersions serves fixed ListObjectVersions pages in turn, as a
+// store shaped like Backblaze B2 answers them.
+type pagedVersions struct {
+	t     *testing.T
+	pages []client.VersionPage
+	calls int
+}
+
+func (f *pagedVersions) ListObjectsV2(context.Context, *client.ListInput) (*client.Page, error) {
+	f.t.Fatal("current listing called")
+	return nil, nil
+}
+func (f *pagedVersions) ListObjectVersions(_ context.Context, in *client.VersionsInput) (*client.VersionPage, error) {
+	if f.calls >= len(f.pages) {
+		f.t.Fatalf("extra call %d: %+v", f.calls, in)
+	}
+	pg := f.pages[f.calls]
+	f.calls++
+	return &pg, nil
+}
+
+func ver(key, id string, latest, marker bool) client.Version {
+	return client.Version{Object: client.Object{Key: key, Size: 1}, VersionID: id, IsLatest: latest, DeleteMarker: marker}
+}
+
+// listVersions runs a sequential versions listing of the fake's pages.
+func listVersions(t *testing.T, f *pagedVersions) ([]VersionRow, error) {
+	t.Helper()
+	p, err := NewVersions(context.Background(), Options{Bucket: "b", Workers: 1, Client: f, Policy: keyrange.Policy{PageSize: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runVersions(t, p)
+}
+
+// runVersions runs p to a collector.
+func runVersions(t *testing.T, p *VersionsProvider) ([]VersionRow, error) {
+	t.Helper()
+	sink := &versionCollector{}
+	_, err := order.Run(context.Background(), p, sink, &VersionsSchema, order.Options{Workers: 1, Budget: 1 << 20, Groups: true})
+	return sink.rows, err
+}
+
+// TestVersionsSecondLatestAcrossPages: B2 flags the first entry of a key
+// on every continuation page IsLatest. Only a key's first entry can be the
+// latest, so the run stops rather than writing two is_latest rows.
+func TestVersionsSecondLatestAcrossPages(t *testing.T) {
+	f := &pagedVersions{t: t, pages: []client.VersionPage{
+		{Versions: []client.Version{ver("m", "v3", true, false), ver("m", "v2", false, false)},
+			IsTruncated: true, NextKeyMarker: "m", NextVersionIDMarker: "v2"},
+		{Versions: []client.Version{ver("m", "v1", true, false)}},
+	}}
+	rows, err := listVersions(t, f)
+	if !errors.Is(err, objhttp.ErrInvalidPage) || !strings.Contains(err.Error(), `an entry of "m" after its first is marked latest`) {
+		t.Fatalf("err=%v rows=%+v", err, rows)
+	}
+}
+
+// TestVersionsLatestAfterOlderEntry: B2 lists a page's delete markers
+// before its versions, so an older delete marker can come before the
+// key's latest version. The latest listed second stops the run.
+func TestVersionsLatestAfterOlderEntry(t *testing.T) {
+	f := &pagedVersions{t: t, pages: []client.VersionPage{
+		{Versions: []client.Version{ver("d", "dm", false, true), ver("d", "v2", true, false), ver("d", "v1", false, false)}},
+	}}
+	rows, err := listVersions(t, f)
+	if !errors.Is(err, objhttp.ErrInvalidPage) || !strings.Contains(err.Error(), `an entry of "d" after its first is marked latest`) {
+		t.Fatalf("err=%v rows=%+v", err, rows)
+	}
+}
+
+// TestVersionsOneLatestPerKeyAccepted: the check refuses nothing S3 sends:
+// each key's first entry latest (a delete marker included), a key with no
+// latest entry, and a key continuing over a page seam.
+func TestVersionsOneLatestPerKeyAccepted(t *testing.T) {
+	f := &pagedVersions{t: t, pages: []client.VersionPage{
+		{Versions: []client.Version{ver("a", "dm", true, true), ver("a", "v1", false, false), ver("b", "v2", true, false)},
+			IsTruncated: true, NextKeyMarker: "b", NextVersionIDMarker: "v2"},
+		{Versions: []client.Version{ver("b", "v1", false, false), ver("c", "v1", false, false)}},
+	}}
+	rows, err := listVersions(t, f)
+	if err != nil || len(rows) != 5 {
+		t.Fatalf("err=%v rows=%+v", err, rows)
+	}
+	var latest []string
+	for _, r := range rows {
+		if r.Data.IsLatest {
+			latest = append(latest, r.Key+"/"+r.Data.VersionID)
+		}
+	}
+	if !reflect.DeepEqual(latest, []string{"a/dm", "b/v2"}) {
+		t.Fatal(latest)
+	}
+}

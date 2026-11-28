@@ -201,6 +201,11 @@ sizes) with exit 2.
 - <a id="option-s3-fetch-owner"></a>[`--s3-fetch-owner`](#option-s3-fetch-owner)\
   fill owner_id and owner_display_name
 
+- <a id="option-s3-compat"></a>[`--s3-compat auto|s3|b2`](#option-s3-compat)\
+  allow for a store's differences from S3 (default `auto`)
+
+  auto: by the endpoint's host name; Backblaze B2's (\*.backblazeb2.com) is b2. b2 for B2 behind another host name, s3 to allow for none.
+
 ### GCS
 
 - <a id="option-gcs-credentials-file"></a>[`--gcs-credentials-file FILE`](#option-gcs-credentials-file)\

@@ -44,6 +44,7 @@ type Options struct {
 	Bucket    string
 	Prefix    string
 	Endpoint  string // custom endpoint URL (S3-compatible stores, tests)
+	Compat    Compat // which store's differences to allow for (b2.go); "" is CompatAuto
 	Region    string // else AWS_REGION, AWS_DEFAULT_REGION, the profile's, us-east-1
 	PathStyle bool
 	FIPS      bool   // FIPS endpoint
@@ -124,6 +125,7 @@ type provider[P any] struct {
 	creds            string
 	region           string // the resolved signing region ("" with a supplied Client)
 	route            string // a supplied Routed client's Route ("" otherwise)
+	b2               bool   // the endpoint is Backblaze B2's (b2.go)
 }
 
 // Range is the engine's unit of listing work.
@@ -152,7 +154,7 @@ func New(ctx context.Context, opt Options) (*Provider, error) {
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Object]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
-		AcceptBound: AcceptBound,
+		AcceptBound: acceptBound(p.b2),
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Size:        func(o *Object) int64 { return o.Size },
@@ -183,13 +185,18 @@ func NewVersions(ctx context.Context, opt Options) (*VersionsProvider, error) {
 	e, err := keyrange.New(p.engineOptions(own), keyrange.Description[Version]{
 		Target:      "s3://" + opt.Bucket + "/" + opt.Prefix,
 		Listing:     keyrange.Listing,
-		AcceptBound: AcceptBound,
+		AcceptBound: acceptBound(p.b2),
 		Requeue:     objhttp.Requeue,
 		InvalidPage: objhttp.ErrInvalidPage,
 		Groups:      VersionsSchema.Groups,
 		Detach:      VersionsSchema.Detach,
-		Size:        func(v *Version) int64 { return v.Size },
-		Counters:    clientCounters,
+		// S3 lists a key's entries newest first, so only the first can be
+		// the latest. Not LastModified order: a multipart upload's
+		// LastModified is its initiation, so a newer version may carry an
+		// older time.
+		GroupHead: func(v *Version) bool { return v.IsLatest },
+		Size:      func(v *Version) int64 { return v.Size },
+		Counters:  versionsCounters,
 	}, func(ctx context.Context, q *keyrange.Query) (*keyrange.Page[Version], error) {
 		return p.fetchVersions(ctx, api, q)
 	})
@@ -211,7 +218,11 @@ func connect[P any](ctx context.Context, opt Options) (*provider[P], bool, error
 		return nil, false, source.Unsupported(fmt.Errorf("S3 directory bucket %q (Express One Zone) is not supported: swath requires the "+
 			"lexicographic listing order of a general-purpose S3 bucket; use a general-purpose bucket", opt.Bucket))
 	}
-	p := &provider[P]{opt: opt, client: opt.Client}
+	b2, err := opt.b2()
+	if err != nil {
+		return nil, false, err
+	}
+	p := &provider[P]{opt: opt, client: opt.Client, b2: b2}
 	own := p.client == nil
 	if own {
 		lim, rate := opt.Admission.New(opt.Workers)
@@ -284,15 +295,30 @@ func (p *provider[P]) fetch(ctx context.Context, q *keyrange.Query) (*keyrange.P
 	if q.Token == "" {
 		in.StartAfter = q.After
 	}
+	var restart string // a B2 restart's point (b2.go)
+	if p.b2 && strings.HasPrefix(q.Token, b2Restart) {
+		restart = q.Token[len(b2Restart):]
+		in.ContinuationToken, in.StartAfter = "", b2Start(restart)
+	}
 	out, err := p.client.ListObjectsV2(ctx, in)
 	if err != nil {
 		return nil, err
+	}
+	token := out.NextContinuationToken
+	if p.b2 {
+		var restarted bool
+		if token, restarted, err = b2Continue(restart, out); err != nil {
+			return nil, err
+		}
+		if restarted {
+			p.Set().Inc(p.ID(cB2LongKeyRestarts))
+		}
 	}
 	if p.opt.NeedSize && slices.ContainsFunc(out.Contents, func(o client.Object) bool { return o.NoSize }) {
 		return nil, source.Violation(errors.New("s3: a listed object has no size"))
 	}
 	return &keyrange.Page[Object]{Rows: p.rows(out), Prefixes: out.CommonPrefixes, Truncated: out.IsTruncated,
-		Token: out.NextContinuationToken}, nil
+		Token: token}, nil
 }
 
 // rows converts a page's objects to rows (Swath's mapping). Rows share

@@ -77,6 +77,7 @@ _swath_list() {
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
+        '--s3-compat=[allow for a store'\''s differences from S3]:value:(auto s3 b2)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
 }
@@ -145,6 +146,7 @@ _swath_du() {
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
+        '--s3-compat=[allow for a store'\''s differences from S3]:value:(auto s3 b2)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
 }
@@ -236,6 +238,7 @@ _swath_diag_list() {
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
+        '--s3-compat=[allow for a store'\''s differences from S3]:value:(auto s3 b2)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
 }
@@ -322,6 +325,7 @@ _swath_diag_count() {
         '--s3-fips[use the FIPS endpoint (s3-fips.REGION.amazonaws.com)]' \
         '--s3-dualstack[use the dual-stack (IPv6) endpoint]' \
         '--s3-fetch-owner[fill owner_id and owner_display_name]' \
+        '--s3-compat=[allow for a store'\''s differences from S3]:value:(auto s3 b2)' \
         '(-h --help)'{-h,--help}'[print help]' \
         '1:source:_swath_source'
 }

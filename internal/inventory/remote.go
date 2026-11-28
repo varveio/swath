@@ -168,6 +168,11 @@ func (r *RemoteOutput) Check() error {
 		return errors.New("a profile and a region (--output-s3-profile, --output-s3-region) are for an S3 destination")
 	case l.Scheme != "az" && r.SAS != "":
 		return errors.New("a shared access signature (--output-azure-sas-token) is for an Azure destination")
+	case l.Scheme == "s3" && source.Backblaze(r.Endpoint):
+		// PutObject's If-None-Match and If-Match answer 501 NotImplemented
+		// there, and parts and the manifest are created only if absent.
+		return errors.New("Backblaze B2 (--output-endpoint-url) has no conditional writes, which a dataset in a bucket needs; " +
+			"write the dataset to a local directory, or to another store")
 	}
 	return nil
 }

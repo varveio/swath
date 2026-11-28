@@ -61,6 +61,7 @@ func TestRemoteOutputRefusals(t *testing.T) {
 		{[]string{"-o", filepath.Join(t.TempDir(), "ds"), "--output-gcs-credentials-file", "x.json"}, "apply to a dataset in a bucket"},
 		{[]string{"--output-endpoint-url", "http://x/"}, "apply to a dataset in a bucket"},
 		{[]string{"-o", "gs://b/p", "--work-dir", work, "--report", filepath.Join(work, dataset.RemoteCommitName)}, "commit.json"},
+		{[]string{"-o", "s3://b/p", "--work-dir", work, "--output-endpoint-url", "https://s3.us-east-005.backblazeb2.com"}, "Backblaze B2"},
 	} {
 		_, _, err := parseList(append([]string{"s3://src"}, c.args...), io.Discard, command{})
 		var u usageError
@@ -75,6 +76,11 @@ func TestRemoteOutputRefusals(t *testing.T) {
 	o, _, err = parseList([]string{"s3://src", "-o", "s3://b/p", "--work-dir", work, "--output-s3-region", "eu-west-1", "--output-s3-profile", "w"}, io.Discard, command{})
 	if err != nil || o.remote == nil || o.remote.String() != "s3://b/p/" || o.outputRegion != "eu-west-1" || o.outputProfile != "w" {
 		t.Fatalf("an s3:// -o: %v, %+v", err, o.remote)
+	}
+	// A B2 source with a dataset written elsewhere is fine.
+	o, _, err = parseList([]string{"s3://src", "--endpoint-url", "https://s3.us-east-005.backblazeb2.com", "-o", "s3://b/p", "--work-dir", work}, io.Discard, command{})
+	if err != nil || o.remote == nil {
+		t.Fatalf("a B2 source, an s3:// -o: %v", err)
 	}
 	o, _, err = parseList([]string{"s3://src", "-o", "az://acct/c/p", "--work-dir", work, "--output-azure-sas-token", "sig=x"}, io.Discard, command{})
 	if err != nil || o.remote == nil || o.remote.String() != "az://acct/c/p/" || o.outputSAS != "sig=x" {
