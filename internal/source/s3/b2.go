@@ -171,13 +171,15 @@ func b2Continue(restart string, out *client.Page) (token string, restarted bool,
 }
 
 // lastEntry is the greatest key or common prefix of a page ("" for none).
+// Keys come in byte order; B2's common prefixes need not (it sorts them by
+// their URL-encoded text), so all of them are compared.
 func lastEntry(out *client.Page) string {
 	var last string
 	if n := len(out.Contents); n > 0 {
 		last = out.Contents[n-1].Key
 	}
-	if n := len(out.CommonPrefixes); n > 0 && out.CommonPrefixes[n-1] > last {
-		last = out.CommonPrefixes[n-1]
+	if len(out.CommonPrefixes) > 0 {
+		last = max(last, slices.Max(out.CommonPrefixes))
 	}
 	return last
 }

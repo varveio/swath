@@ -222,6 +222,13 @@ func TestB2ContinueDrops(t *testing.T) {
 	if got := b2Start(strings.Repeat("x", 1022) + "é"); got != strings.Repeat("x", 1022) {
 		t.Fatalf("b2Start cut a character: %q", got[1015:])
 	}
+	// B2 sends a page's common prefixes sorted by their URL-encoded text, so
+	// the greatest need not be the last: here a 1,024-byte one comes first.
+	longCP := "é" + strings.Repeat("x", 1021) + "/"
+	out = &client.Page{CommonPrefixes: []string{longCP, "a/"}, IsTruncated: true, NextContinuationToken: "T"}
+	if tok, restarted, err := b2Continue("", out); err != nil || !restarted || tok != b2Restart+longCP {
+		t.Fatalf("prefixes out of byte order: tok=%.12q restarted=%v err=%v", tok, restarted, err)
+	}
 	// A restart that cannot pass its point (a page of keys at or below it) stops.
 	out = &client.Page{Contents: []client.Object{{Key: long}}, IsTruncated: true, NextContinuationToken: "T"}
 	if _, _, err := b2Continue(long, out); !errors.Is(err, objhttp.ErrInvalidPage) {
